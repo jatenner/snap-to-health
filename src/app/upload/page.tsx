@@ -288,7 +288,51 @@ export default function UploadPage() {
       
       // Check if response is successful and contains valid data
       if (!response.data || response.data.success === false) {
-        // Handle unsuccessful response but with valid error data
+        // Check if this is a fallback response for unclear images
+        if (response.data?.fallback) {
+          console.log('Received fallback response:', response.data.reason);
+          
+          // Show helpful message to the user
+          const fallbackMessage = response.data.fallbackMessage || 
+            "We couldn't clearly identify your meal. Try a photo with better lighting, or describe your meal in the notes section.";
+          
+          toast.error(fallbackMessage, { id: analyzeToast, duration: 8000 });
+          
+          // Store minimal fallback info in session storage for display
+          const fallbackResult = response.data.analysisResults || {
+            fallback: true,
+            fallbackMessage,
+            description: "Unidentified meal",
+            ingredientList: [],
+            feedback: [
+              fallbackMessage,
+              "Try taking a photo with better lighting and ensure all food items are clearly visible.",
+              "Photos taken in natural daylight work best."
+            ],
+            suggestions: [
+              "Take photos from directly above the plate",
+              "Ensure there's adequate lighting",
+              "Make sure your camera lens is clean",
+              "Avoid shadows and glare on the food"
+            ]
+          };
+          
+          sessionStorage.setItem('analysisResult', JSON.stringify(fallbackResult));
+          sessionStorage.setItem('previewUrl', previewUrl || '');
+          sessionStorage.setItem('mealSaved', 'false'); // Don't save fallback results
+          
+          setAnalysisStage('completed');
+          
+          // Small delay to allow user to read the error message
+          setTimeout(() => {
+            // Redirect to meal analysis page to show fallback content
+            router.push('/meal-analysis');
+          }, 2000);
+          
+          return;
+        }
+        
+        // Handle other unsuccessful response with valid error data
         const errorMsg = response.data?.error || 'Failed to analyze meal. Please try again.';
         throw new Error(errorMsg);
       }
@@ -299,14 +343,40 @@ export default function UploadPage() {
       
       const analysisResult = response.data;
       
-      // Check for partial results
-      if (analysisResult.partial) {
-        console.log(`Received partial results. Missing: ${analysisResult.missing}`);
+      // Check if this is a fallback response (just in case it comes with success: true)
+      if (analysisResult.fallback) {
+        console.log('Received fallback response with success flag:', analysisResult.reason);
         
-        if (analysisResult.missing === 'nutrition') {
+        // Show helpful message to the user
+        const fallbackMessage = analysisResult.fallbackMessage || 
+          "We couldn't clearly identify your meal. Try a photo with better lighting, or describe your meal in the notes section.";
+        
+        toast.error(fallbackMessage, { id: analyzeToast, duration: 8000 });
+        
+        // Store minimal fallback info for display
+        sessionStorage.setItem('analysisResult', JSON.stringify(analysisResult.analysisResults || analysisResult));
+        sessionStorage.setItem('previewUrl', previewUrl || '');
+        sessionStorage.setItem('mealSaved', 'false'); // Don't save fallback results
+        
+        setAnalysisStage('completed');
+        
+        // Small delay to allow user to read the error message
+        setTimeout(() => {
+          // Redirect to meal analysis page to show fallback content
+          router.push('/meal-analysis');
+        }, 2000);
+        
+        return;
+      }
+      
+      // Check for partial results
+      if (analysisResult.isPartialResult) {
+        console.log(`Received partial results. Reason: ${analysisResult.reason || 'unknown'}`);
+        
+        if (analysisResult.reason === 'nutrition') {
           toast.loading('Limited nutrition data available...', { id: analyzeToast });
           setError('We were able to analyze your meal but couldn\'t fetch complete nutrition data. Results may be limited.');
-        } else if (analysisResult.missing === 'gpt') {
+        } else if (analysisResult.reason === 'gpt') {
           toast.loading('Basic analysis only...', { id: analyzeToast });
           setError('We identified ingredients but couldn\'t complete full analysis. Results may be limited.');
         }
@@ -317,7 +387,8 @@ export default function UploadPage() {
       let savedMealId = '';
       let isSaved = false;
       
-      if (saveToAccount && currentUser && file) {
+      // Only save to account if it's not a fallback response
+      if (saveToAccount && currentUser && file && !analysisResult.fallback) {
         try {
           setAnalysisStage('saving');
           toast.loading('Saving to your account...', { id: analyzeToast });
