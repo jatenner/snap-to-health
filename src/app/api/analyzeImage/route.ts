@@ -7,6 +7,52 @@ let activeRequests = 0;
 const requestStartTimes = new Map<string, number>();
 const MAX_CONCURRENT_REQUESTS = 10; // Limit concurrent requests for stability
 
+// Image quality assessment utilities
+interface ImageQualityResult {
+  isValid: boolean;
+  warning?: string;
+  reason?: string;
+}
+
+// Function to check if an image is likely to be too low quality for good analysis
+function assessImageQuality(base64Image: string, requestId: string): ImageQualityResult {
+  console.log(`[${requestId}] Assessing image quality...`);
+  
+  // Check for extremely small images (likely to be problematic)
+  if (base64Image.length < 1000) {
+    return {
+      isValid: false,
+      warning: "Image appears to be extremely small or corrupt",
+      reason: "too_small"
+    };
+  }
+  
+  // More sophisticated image quality checks could be added here using libraries
+  // like sharp or canvas, but these would require additional dependencies
+  
+  // For now, we'll do a basic size check and return valid for most images
+  console.log(`[${requestId}] Image quality check passed`);
+  return { isValid: true };
+}
+
+// Function to determine if an analysis result has low confidence
+function isLowConfidenceAnalysis(analysisResult: any): boolean {
+  // Check for explicit confidence score
+  if (typeof analysisResult.confidence === 'number') {
+    return analysisResult.confidence < 4; // Threshold for low confidence
+  }
+  
+  // Alternative checks if confidence score isn't available
+  const hasMinimalIngredients = !analysisResult.ingredientList || 
+                               analysisResult.ingredientList.length < 2;
+                               
+  const hasLowConfidenceIndicators = analysisResult.description && 
+    (analysisResult.description.toLowerCase().includes('unclear') ||
+     analysisResult.description.toLowerCase().includes('difficult to identify'));
+     
+  return hasMinimalIngredients || hasLowConfidenceIndicators;
+}
+
 // Function to extract base64 from FormData image
 async function extractBase64Image(formData: FormData): Promise<string> {
   console.time('extractBase64Image');
@@ -123,7 +169,7 @@ async function analyzeWithGPT4Vision(base64Image: string, healthGoal: string, re
       const goalPrompt = getGoalSpecificPrompt(healthGoal);
       
       // Use more resilient prompt for low-quality images
-      const primarySystemPrompt = `You are a world-class nutritionist looking at a food photo. Even if the photo is blurry, dim, or low quality, try your best to identify the meal. 
+      const primarySystemPrompt = `You are a food image analyst. The image may be low-quality, blurry, or partially obscured. Do your best to identify the meal's components. If anything is unclear, include your best guess. List all recognizable ingredients and possible food categories (e.g., grains, protein, vegetables), even if confidence is low. Never return 'unclear image' unless absolutely no food is visible at all.
 
 The user's specific health goal is: "${healthGoal}"
 
@@ -131,7 +177,7 @@ ${goalPrompt}`;
 
       // Simpler fallback prompt for retry attempts
       const fallbackSystemPrompt = attempt === 1 ? primarySystemPrompt 
-        : `You are a world-class nutritionist analyzing a food photo. The image may be unclear, but make your best estimation of what food is shown. 
+        : `You are a food image analyst. The image may be low-quality, blurry, or partially obscured. Do your best to identify the meal's components. If anything is unclear, include your best guess. List all recognizable ingredients and possible food categories (e.g., grains, protein, vegetables), even if confidence is low. Never return 'unclear image' unless absolutely no food is visible at all.
         
 If you can see any food at all, please identify it. If the image is completely unidentifiable, describe it as "a meal" and estimate basic nutrition values.
 
@@ -163,6 +209,7 @@ Return ONLY valid JSON that can be parsed with JSON.parse(). Use this exact form
 {
   "description": "A concise description of the meal focusing on key components",
   "ingredientList": ["ingredient1", "ingredient2", ...],
+  "confidence": 7.5,
   "basicNutrition": {
     "calories": "estimated calories",
     "protein": "estimated protein in grams",
@@ -192,14 +239,17 @@ Return ONLY valid JSON that can be parsed with JSON.parse(). Use this exact form
 
 IMPORTANT GUIDELINES:
 1. Score must be between 1-10 (10 being the most beneficial for the goal)
-2. Be specific and quantitative in your analysis - mention actual nutrients and compounds when relevant
-3. Do not repeat the same information across different sections
-4. Every single insight must directly relate to the user's goal of "${healthGoal}"
-5. Use plain language to explain complex nutrition concepts
-6. Explain WHY each factor helps or hinders the goal (e.g., "High magnesium content aids recovery by relaxing muscles and reducing inflammation")
-7. Suggestions should be specific and actionable, not general tips
-8. Avoid redundancy between positiveFoodFactors, negativeFoodFactors, feedback, and suggestions
-9. Focus on the user's specific goal, not general healthy eating advice
+2. Confidence score must be between 0-10 (10 being extremely confident in your analysis, 0 being no confidence)
+3. For low-quality images, confidence should reflect your certainty about the ingredients (e.g., 2-4 for very blurry, 5-7 for partially visible food, 8-10 for clear images)
+4. Be specific and quantitative in your analysis - mention actual nutrients and compounds when relevant
+5. Do not repeat the same information across different sections
+6. Every single insight must directly relate to the user's goal of "${healthGoal}"
+7. Use plain language to explain complex nutrition concepts
+8. Explain WHY each factor helps or hinders the goal (e.g., "High magnesium content aids recovery by relaxing muscles and reducing inflammation")
+9. Suggestions should be specific and actionable, not general tips
+10. Avoid redundancy between positiveFoodFactors, negativeFoodFactors, feedback, and suggestions
+11. Focus on the user's specific goal, not general healthy eating advice
+12. If image quality is poor, DO NOT refuse to analyze - provide your best guess and set confidence level appropriately
 
 Do not return any explanation or text outside the JSON block. Your entire response must be valid JSON only.`
               },
@@ -677,6 +727,7 @@ function formatResponse(
   positiveFoodFactors?: string[];
   negativeFoodFactors?: string[];
   rawGoal: string;
+  confidence?: number;
   // Add new properties to match what we're setting in the POST handler
   status?: string;
   success?: boolean;
@@ -936,6 +987,7 @@ function formatResponse(
     positiveFoodFactors,
     negativeFoodFactors,
     rawGoal: healthGoal,
+    confidence: gptAnalysis.confidence || 5, // Extract confidence score with fallback to medium confidence
     status: 'success',
     success: true,
     fallback: false,
@@ -1381,6 +1433,27 @@ export async function POST(request: NextRequest) {
     try {
       base64Image = await extractBase64Image(formData);
       console.log(`[${requestId}] Successfully extracted base64 image (${base64Image.length} chars)`);
+      
+      // Check image quality before proceeding
+      const qualityCheck = assessImageQuality(base64Image, requestId);
+      if (!qualityCheck.isValid) {
+        console.warn(`⚠️ [${requestId}] Image quality check failed: ${qualityCheck.reason}`);
+        return NextResponse.json({
+          status: 'warning',
+          success: true,
+          fallback: true,
+          message: qualityCheck.warning || 'The image quality appears to be too low for analysis. Please try a clearer image.',
+          ingredients: [],
+          description: 'Low quality image',
+          nutrition: null,
+          confidence: 1,
+          _meta: { 
+            requestId,
+            qualityIssue: qualityCheck.reason
+          }
+        }, { status: 200 });
+      }
+      
     } catch (imageError: any) {
       console.error(`❌ [${requestId}] Image Error:`, imageError.message);
       return NextResponse.json({
@@ -1504,6 +1577,20 @@ export async function POST(request: NextRequest) {
       analysisFailed = true;
       failureReason = 'missing_analysis';
     }
+    
+    // Check if this is a low confidence analysis
+    const hasLowConfidence = isLowConfidenceAnalysis(gptAnalysis);
+    
+    // If we have a valid analysis but with low confidence, mark it specifically
+    if (!analysisFailed && hasLowConfidence) {
+      console.warn(`⚠️ [${requestId}] Analysis has low confidence: ${gptAnalysis.confidence || 'unknown'}`);
+      gptAnalysis.lowConfidence = true;
+      gptAnalysis.fallbackMessage = gptAnalysis.fallbackMessage || 
+        "We did our best! This photo may be unclear, but here's what we could infer. Results might be limited.";
+        
+      // We don't mark as failed, but we do set a warning flag
+      failureReason = 'low_confidence';
+    }
 
     // Format the response, with fallback handling for formatting errors
     let response;
@@ -1515,15 +1602,17 @@ export async function POST(request: NextRequest) {
         requestId,
         analysisFailed,
         failureReason,
+        lowConfidence: hasLowConfidence,
+        confidence: gptAnalysis.confidence || 0,
         processingTimeMs: Date.now() - (requestStartTimes.get(requestId) || Date.now())
       };
       
       // Add success/fallback flags for frontend consistency
       response.success = !analysisFailed;
       response.fallback = analysisFailed;
-      response.status = analysisFailed ? 'fallback' : 'success';
+      response.status = analysisFailed ? 'fallback' : (hasLowConfidence ? 'low_confidence' : 'success');
       
-      if (analysisFailed) {
+      if (analysisFailed || hasLowConfidence) {
         response.message = gptAnalysis.fallbackMessage || 'Analysis could not be completed. Please try again with a clearer image.';
       }
       

@@ -28,6 +28,7 @@ export default function UploadPage() {
   const [showOptions, setShowOptions] = useState(false);
   const [imagePreview, setImagePreview] = useState<string | null>(null);
   const [imageValidated, setImageValidated] = useState(true);
+  const [analysisResult, setAnalysisResult] = useState<any>(null);
 
   // Redirect unauthenticated users
   useEffect(() => {
@@ -284,7 +285,60 @@ export default function UploadPage() {
         },
         cancelToken: cancelTokenRef.current?.token,
         timeout: 60000 // 1 minute timeout
+      }).catch((error) => {
+        console.error('API request failed:', error);
+        
+        // Handle specific error scenarios
+        if (error.response) {
+          // The request was made and the server responded with a status code
+          // that falls out of the range of 2xx
+          const status = error.response.status;
+          const errorData = error.response.data;
+          
+          console.log(`API error with status ${status}:`, errorData);
+          
+          if (status === 504) {
+            toast.error('Analysis timed out. The server took too long to respond. Please try again with a clearer image.', { id: analyzeToast });
+            setError('Server timeout - analysis took too long. Try a clearer image or simpler meal.');
+          } else if (status === 429) {
+            toast.error('Too many requests. Please try again in a few minutes.', { id: analyzeToast });
+            setError('Server is busy processing requests. Please try again in a few minutes.');
+          } else if (status === 413) {
+            toast.error('Image too large. Please use a smaller image under 5MB.', { id: analyzeToast });
+            setError('Image size exceeds server limits. Please compress your image before uploading.');
+          } else if (errorData?.error) {
+            toast.error(errorData.error, { id: analyzeToast });
+            setError(errorData.error);
+          } else {
+            toast.error(`Analysis failed (Error ${status})`, { id: analyzeToast });
+            setError(`Analysis failed with error code ${status}. Please try again later.`);
+          }
+        } else if (error.request) {
+          // The request was made but no response was received
+          console.log('No response received:', error.request);
+          toast.error('No response from server. Check your internet connection.', { id: analyzeToast });
+          setError('Network error - no response from server. Check your internet connection and try again.');
+        } else if (error.code === 'ECONNABORTED') {
+          // Timeout error
+          console.log('Request timed out on client side');
+          toast.error('Request timed out. The server is currently busy.', { id: analyzeToast });
+          setError('Request timed out. The server might be experiencing heavy load. Please try again later.');
+        } else {
+          // Something happened in setting up the request that triggered an Error
+          console.log('Error setting up request:', error.message);
+          toast.error('Failed to send request', { id: analyzeToast });
+          setError(`Failed to send request: ${error.message}`);
+        }
+        
+        setIsAnalyzing(false);
+        setAnalysisStage('error');
+        return null;
       });
+      
+      // If the response is null (caught by error handler), return early
+      if (!response) {
+        return;
+      }
       
       // Check if response is successful and contains valid data
       if (!response.data || response.data.success === false) {
@@ -297,155 +351,76 @@ export default function UploadPage() {
             "We couldn't clearly identify your meal. Try a photo with better lighting, or describe your meal in the notes section.";
           
           toast.error(fallbackMessage, { id: analyzeToast, duration: 8000 });
-          
-          // We don't want to proceed with saving or processing fallback results
+          setError(fallbackMessage);
           setIsAnalyzing(false);
+          setAnalysisStage('error');
           return;
         }
         
-        // Handle other unsuccessful response with valid error data
-        const errorMsg = response.data?.error || 'Failed to analyze meal. Please try again.';
-        throw new Error(errorMsg);
-      }
-      
-      // The analysis result from the API
-      setAnalysisStage('processing');
-      toast.loading('Processing nutritional data...', { id: analyzeToast });
-      
-      const analysisResult = response.data;
-      
-      // Check if this is a fallback response (just in case it comes with success: true)
-      if (analysisResult.fallback === true) {
-        console.log('Received fallback response with success flag:', analysisResult.reason || 'unknown reason');
-        
-        // Show helpful message to the user
-        const fallbackMessage = analysisResult.fallbackMessage || analysisResult.message || 
-          "We couldn't clearly identify your meal. Try a photo with better lighting, or describe your meal in the notes section.";
-        
-        toast.error(fallbackMessage, { id: analyzeToast, duration: 8000 });
-        
-        // Do not proceed with saving or processing fallback results
-        setIsAnalyzing(false);
-        return;
-      }
-      
-      // Add safeguard check for invalid result structure
-      if (!analysisResult || !analysisResult.analysis || typeof analysisResult.analysis !== "object") {
-        console.warn('Invalid analysis result structure:', analysisResult);
-        toast.error('Invalid analysis result. Please try again with a clearer image.', { id: analyzeToast });
-        setIsAnalyzing(false);
-        return;
-      }
-      
-      // Check for partial results
-      if (analysisResult.isPartialResult) {
-        console.log(`Received partial results. Reason: ${analysisResult.reason || 'unknown'}`);
-        
-        if (analysisResult.reason === 'nutrition') {
-          toast.loading('Limited nutrition data available...', { id: analyzeToast });
-          setError('We were able to analyze your meal but couldn\'t fetch complete nutrition data. Results may be limited.');
-        } else if (analysisResult.reason === 'gpt') {
-          toast.loading('Basic analysis only...', { id: analyzeToast });
-          setError('We identified ingredients but couldn\'t complete full analysis. Results may be limited.');
-        }
-      }
-      
-      // If user is signed in and wants to save the meal
-      let imageUrl = '';
-      let savedMealId = '';
-      let isSaved = false;
-      
-      // Only save to account if we have a valid, non-fallback analysis
-      if (saveToAccount && currentUser && file && 
-          !analysisResult.fallback && 
-          analysisResult.analysis && 
-          typeof analysisResult.analysis === 'object') {
-        try {
-          setAnalysisStage('saving');
-          toast.loading('Saving to your account...', { id: analyzeToast });
+        // Handle low confidence results differently from errors
+        if (response.data?.lowConfidence) {
+          console.log('Low confidence result:', response.data);
           
-          console.log('Starting Firebase Storage upload...');
-          // Upload the image to Firebase Storage - ensure this function accepts File
-          imageUrl = await uploadMealImage(file, currentUser.uid, (progress) => {
-            // Display upload progress to the user
-            console.log(`Firebase Storage upload progress: ${progress}%`);
-            
-            // If progress is -1, it means the upload failed
-            if (progress === -1) {
-              toast.error('Image upload failed. Please try again.', { id: analyzeToast });
-              return;
-            }
-            
-            // Update the save toast with progress
-            if (progress < 100) {
-              toast.loading(`Saving image: ${Math.round(progress)}%`, { id: analyzeToast });
-            }
-          });
-          
-          console.log('Firebase Storage upload complete, saving to Firestore...');
-          
-          // Final validation before saving to Firestore
-          if (!analysisResult || !analysisResult.analysis) {
-            throw new Error('Invalid analysis result, cannot save to Firestore');
-          }
-          
-          // Save the meal to Firestore with the provided meal name
-          savedMealId = await saveMealToFirestore(
-            currentUser.uid, 
-            imageUrl, 
-            analysisResult,
-            mealName.trim() // Include the meal name
+          toast.custom(
+            <div className="px-4 py-3 bg-amber-50 border border-amber-200 rounded-lg shadow-md">
+              <div className="flex">
+                <div className="flex-shrink-0">
+                  <svg className="h-5 w-5 text-amber-400" viewBox="0 0 20 20" fill="currentColor">
+                    <path fillRule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
+                  </svg>
+                </div>
+                <div className="ml-3">
+                  <p className="text-sm text-amber-700">We analyzed your meal but with low confidence. Results may not be accurate.</p>
+                </div>
+              </div>
+            </div>,
+            { id: analyzeToast, duration: 6000 }
           );
           
-          console.log('Firestore save complete with ID:', savedMealId);
+          // Continue with the low confidence result, but mark it as such
+          setAnalysisResult({
+            ...response.data,
+            lowConfidence: true
+          });
+        } else {
+          // General error handling
+          const errorMessage = response.data?.message || response.data?.error || 'Analysis failed. Please try again.';
+          console.error('Analysis failed:', errorMessage, response.data);
           
-          // Mark as saved successfully
-          isSaved = true;
-          
-          toast.success('Meal saved to your account!', { id: analyzeToast });
-        } catch (saveError: any) {
-          console.error('Error saving meal:', saveError);
-          
-          // Look for CORS-specific errors
-          if (saveError.message && (
-              saveError.message.includes('CORS') || 
-              saveError.message.includes('access-control-allow-origin') ||
-              saveError.message.includes('cross-origin')
-          )) {
-            console.error('⚠️ DETECTED CORS ERROR ⚠️');
-            setError('Network error detected. Your analysis is available but could not be saved to your account.');
-            toast.error('Network error. Analysis available but not saved.', { id: analyzeToast });
-          } else {
-            setError('Failed to save to account, but analysis is available.');
-            toast.error('Failed to save to account. Analysis still available.', { id: analyzeToast });
-          }
-          // Continue with analysis even if save fails
+          toast.error(errorMessage, { id: analyzeToast });
+          setError(errorMessage);
+          setIsAnalyzing(false);
+          setAnalysisStage('error');
+          return;
         }
       } else {
-        if (analysisResult.partial) {
-          toast.success('Analysis completed with limited data!', { id: analyzeToast });
-        } else {
-          toast.success('Analysis completed successfully!', { id: analyzeToast });
+        console.log('Analysis completed successfully', response.data);
+        // Log the upload ID for debugging
+        if (response.data.uploadId) {
+          console.log('Upload ID:', response.data.uploadId);
         }
+        
+        setAnalysisResult(response.data);
+        toast.success('Analysis complete!', { id: analyzeToast });
       }
       
       // Final validation before storing the result
       try {
         // Validate analysis structure one more time before storing
-        if (!analysisResult || !analysisResult.analysis || typeof analysisResult.analysis !== 'object') {
-          console.warn('Invalid result structure before storing:', analysisResult);
+        if (!response.data || !response.data.analysis || typeof response.data.analysis !== 'object') {
+          console.warn('Invalid result structure before storing:', response.data);
           throw new Error('Invalid or corrupted analysis result');
         }
         
         // Store analysis result and metadata in sessionStorage
-        sessionStorage.setItem('analysisResult', JSON.stringify(analysisResult));
+        sessionStorage.setItem('analysisResult', JSON.stringify(response.data));
         sessionStorage.setItem('previewUrl', previewUrl || '');
-        sessionStorage.setItem('mealSaved', isSaved ? 'true' : 'false');
+        sessionStorage.setItem('mealSaved', response.data.saved ? 'true' : 'false');
         
-        if (isSaved) {
-          sessionStorage.setItem('savedImageUrl', imageUrl);
-          sessionStorage.setItem('savedMealId', savedMealId);
-          sessionStorage.setItem('mealName', mealName.trim() || 'Unnamed Meal');
+        if (response.data.saved) {
+          sessionStorage.setItem('savedImageUrl', response.data.imageUrl);
+          sessionStorage.setItem('savedMealId', response.data.mealId);
+          sessionStorage.setItem('mealName', response.data.mealName || 'Unnamed Meal');
         }
         
         setAnalysisStage('completed');
