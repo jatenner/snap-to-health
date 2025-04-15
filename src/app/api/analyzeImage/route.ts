@@ -1276,8 +1276,19 @@ function createFallbackResponse(reason: string, healthGoal: string, requestId: s
 
 export async function POST(request: NextRequest) {
   // Debug OpenAI API key injection
-  console.log("🧪 Runtime OpenAI Key Exists:", Boolean(process.env.OPENAI_API_KEY));
-  console.log("🔐 OPENAI Key Prefix:", process.env.OPENAI_API_KEY?.slice(0, 5));
+  console.log("🔐 Checking OpenAI key:", !!process.env.OPENAI_API_KEY);
+  if (!process.env.OPENAI_API_KEY) {
+    console.warn("⚠️ OPENAI_API_KEY is missing or undefined in production");
+  }
+  
+  // Safe logging of available environment variables (names only, no values)
+  console.log("📊 Available environment variables:", 
+    Object.keys(process.env)
+      .filter(key => key !== 'NODE_ENV') // Show interesting keys
+      .map(key => key.includes('KEY') || key.includes('SECRET') || key.includes('TOKEN') ? 
+        `${key}: [REDACTED]` : 
+        `${key}: ${typeof process.env[key]}`)
+  );
 
   // Generate unique request ID for tracking
   const requestId = Math.random().toString(36).substring(2, 10);
@@ -1379,92 +1390,4 @@ export async function POST(request: NextRequest) {
           gptAnalysis = createFallbackResponse(reason || 'unknown', healthGoal, requestId);
           partialSuccess = true; // Still return a response, just with fallback content
           
-          console.log(`✅ [${requestId}] Created fallback response due to unclear image`);
-        } else {
-          partialSuccess = true;
-          console.log(`✅ [${requestId}] GPT analysis succeeded with valid ingredients`);
-        }
-      } else {
-        errorMessages.push(`GPT analysis failed: ${gptResult.reason.message}`);
-        console.error(`❌ [${requestId}] GPT analysis failed:`, gptResult.reason);
-      }
-
-      // If we have at least partial success, return what we have
-      if (partialSuccess) {
-        console.log(`✅ [${requestId}] Analysis completed with ${gptAnalysis?.fallback ? 'fallback' : (partialSuccess ? 'partial' : 'full')} success`);
-        console.timeEnd(`⏱️ [${requestId}] analyzeImage`);
-        
-        // Return successful response with available data
-        return NextResponse.json({
-          success: gptAnalysis?.fallback ? false : true,
-          fallback: gptAnalysis?.fallback || false,
-          fallbackMessage: gptAnalysis?.fallbackMessage || null,
-          reason: gptAnalysis?.reason || null,
-          analysisResults: gptAnalysis,
-          nutritionData: nutritionixData,
-          isPartialResult: !gptAnalysis || !nutritionixData || gptAnalysis?.fallback,
-          _meta: { 
-            requestId,
-            concurrentRequests: activeRequests,
-            warnings: errorMessages.length > 0 ? errorMessages : undefined
-          }
-        });
-      }
-      
-      // If we reach here, both API calls failed
-      console.error(`❌ [${requestId}] Analysis completely failed`);
-      console.timeEnd(`⏱️ [${requestId}] analyzeImage`);
-      throw new Error(errorMessages.join('; '));
-    } else {
-      // This should never happen as we're using Promise.allSettled
-      throw new Error('Unexpected response format from API calls');
-    }
-  } catch (error: any) {
-    // Clean up tracking data
-    requestStartTimes.delete(requestId);
-    activeRequests--;
-    
-    console.error(`🛑 [${requestId}] Unhandled error in analyzeImage:`, error);
-    console.error(`🛑 [${requestId}] Error stack:`, error.stack);
-    console.log(`⚠️ [${requestId}] Unhandled error (${activeRequests} active requests remaining)`);
-    console.timeEnd(`⏱️ [${requestId}] analyzeImage`);
-    
-    // Categorize error for better user feedback
-    const errorMessage = error.message || 'Unknown error';
-    
-    if (errorMessage.includes('timeout') || errorMessage.includes('exceeded')) {
-      return NextResponse.json(
-        { 
-          success: false, 
-          error: 'The analysis is taking longer than expected. Please try again with a clearer image.',
-          fallback: true,
-          fallbackMessage: 'The image is taking too long to analyze. This often happens with unclear or complex images.',
-          reason: 'timeout',
-          _meta: { requestId, concurrentRequests: activeRequests }
-        },
-        { status: 504 }
-      );
-    } else if (errorMessage.includes('429')) {
-      return NextResponse.json(
-        { 
-          success: false, 
-          error: 'Too many requests. Please try again in a few minutes.',
-          _meta: { requestId, concurrentRequests: activeRequests }
-        },
-        { status: 429 }
-      );
-    }
-    
-    return NextResponse.json(
-      { 
-        success: false, 
-        error: `Analysis failed: ${errorMessage}`,
-        fallback: true,
-        fallbackMessage: 'We encountered an issue analyzing your meal. Please try again with a clearer photo.',
-        reason: 'error',
-        _meta: { requestId, concurrentRequests: activeRequests }
-      },
-      { status: 500 }
-    );
-  }
-} 
+          console.log(`
