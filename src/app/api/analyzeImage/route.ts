@@ -1178,6 +1178,102 @@ function formatGoalName(healthGoal: string): string {
   }
 }
 
+// Helper function to check if GPT results are valid and contain identified ingredients
+function isValidGptAnalysis(gptAnalysis: any): { isValid: boolean; reason: string | null } {
+  console.log('Validating GPT analysis results...');
+
+  // Check if we have any result at all
+  if (!gptAnalysis) {
+    return { isValid: false, reason: 'No analysis result returned' };
+  }
+
+  // Check if we have an ingredients list
+  if (!gptAnalysis.ingredientList || !Array.isArray(gptAnalysis.ingredientList) || gptAnalysis.ingredientList.length === 0) {
+    console.log('GPT did not identify any ingredients in the image');
+    return { isValid: false, reason: 'no_ingredients' };
+  }
+
+  // Check if ingredients look valid (not just placeholders or error messages)
+  const suspiciousIngredients = gptAnalysis.ingredientList.filter((ingredient: string) => 
+    ingredient.toLowerCase().includes('unable to') || 
+    ingredient.toLowerCase().includes('not clear') || 
+    ingredient.toLowerCase().includes('can\'t identify') ||
+    ingredient.toLowerCase().includes('cannot identify') ||
+    ingredient.toLowerCase().includes('unclear image') ||
+    ingredient.toLowerCase().includes('not visible') ||
+    ingredient.toLowerCase().includes('blurry')
+  );
+
+  if (suspiciousIngredients.length > 0 && suspiciousIngredients.length >= gptAnalysis.ingredientList.length / 2) {
+    console.log('Found suspicious ingredients suggesting unclear image:', suspiciousIngredients);
+    return { isValid: false, reason: 'unclear_image' };
+  }
+
+  // Check if description suggests an unclear image
+  if (gptAnalysis.description && 
+     (gptAnalysis.description.toLowerCase().includes('unclear') || 
+      gptAnalysis.description.toLowerCase().includes('blurry') ||
+      gptAnalysis.description.toLowerCase().includes('not visible') ||
+      gptAnalysis.description.toLowerCase().includes('unable to identify') ||
+      gptAnalysis.description.toLowerCase().includes('poor quality'))) {
+    console.log('Description suggests unclear image:', gptAnalysis.description);
+    return { isValid: false, reason: 'unclear_image_description' };
+  }
+
+  return { isValid: true, reason: null };
+}
+
+// Function to create a friendly fallback message based on the validation failure reason
+function createFallbackResponse(reason: string, healthGoal: string, requestId: string): any {
+  console.log(`[${requestId}] Creating fallback response for reason: ${reason}`);
+  
+  let fallbackMessage = '';
+  let reasonCode = '';
+  
+  switch (reason) {
+    case 'no_ingredients':
+      fallbackMessage = "We couldn't identify any ingredients in your photo. Please try a clearer image with better lighting, or try again with a different angle.";
+      reasonCode = 'no_ingredients';
+      break;
+    case 'unclear_image':
+    case 'unclear_image_description':
+      fallbackMessage = "Your photo appears to be blurry or unclear. For better results, try taking a photo with more light, less glare, and make sure the food is clearly visible.";
+      reasonCode = 'unclear_image';
+      break;
+    default:
+      fallbackMessage = "We had trouble analyzing your meal. Please try again with a clearer photo that shows all the food items.";
+      reasonCode = 'analysis_failed';
+  }
+
+  // Create a minimal analysis with helpful feedback
+  return {
+    fallback: true,
+    success: false,
+    reason: reasonCode,
+    fallbackMessage,
+    description: "Unidentified meal",
+    ingredientList: [],
+    basicNutrition: {
+      calories: "unknown",
+      protein: "unknown",
+      carbs: "unknown",
+      fat: "unknown"
+    },
+    goalName: formatGoalName(healthGoal),
+    goalImpactScore: 0,
+    feedback: [
+      fallbackMessage,
+      "Try a photo with better lighting and ensure all food items are clearly visible.",
+      "Make sure your meal is in focus and there isn't excessive glare or shadows."
+    ],
+    suggestions: [
+      "Take photos in natural daylight when possible",
+      "Ensure the camera lens is clean and the food is in focus",
+      "Take the photo from directly above the plate for best results"
+    ]
+  };
+}
+
 export async function POST(request: NextRequest) {
   // Generate unique request ID for tracking
   const requestId = Math.random().toString(36).substring(2, 10);
@@ -1269,8 +1365,21 @@ export async function POST(request: NextRequest) {
       // Process GPT result
       if (gptResult.status === 'fulfilled') {
         gptAnalysis = gptResult.value;
-        partialSuccess = true;
-        console.log(`✅ [${requestId}] GPT analysis succeeded`);
+        
+        // Validate the GPT analysis
+        const { isValid, reason } = isValidGptAnalysis(gptAnalysis);
+        
+        if (!isValid) {
+          console.log(`⚠️ [${requestId}] GPT analysis invalid: ${reason}`);
+          // Create a fallback response with friendly messaging
+          gptAnalysis = createFallbackResponse(reason || 'unknown', healthGoal, requestId);
+          partialSuccess = true; // Still return a response, just with fallback content
+          
+          console.log(`✅ [${requestId}] Created fallback response due to unclear image`);
+        } else {
+          partialSuccess = true;
+          console.log(`✅ [${requestId}] GPT analysis succeeded with valid ingredients`);
+        }
       } else {
         errorMessages.push(`GPT analysis failed: ${gptResult.reason.message}`);
         console.error(`❌ [${requestId}] GPT analysis failed:`, gptResult.reason);
@@ -1278,15 +1387,18 @@ export async function POST(request: NextRequest) {
 
       // If we have at least partial success, return what we have
       if (partialSuccess) {
-        console.log(`✅ [${requestId}] Analysis completed with ${partialSuccess ? 'partial' : 'full'} success`);
+        console.log(`✅ [${requestId}] Analysis completed with ${gptAnalysis?.fallback ? 'fallback' : (partialSuccess ? 'partial' : 'full')} success`);
         console.timeEnd(`⏱️ [${requestId}] analyzeImage`);
         
         // Return successful response with available data
         return NextResponse.json({
-          success: true,
+          success: gptAnalysis?.fallback ? false : true,
+          fallback: gptAnalysis?.fallback || false,
+          fallbackMessage: gptAnalysis?.fallbackMessage || null,
+          reason: gptAnalysis?.reason || null,
           analysisResults: gptAnalysis,
           nutritionData: nutritionixData,
-          isPartialResult: !gptAnalysis || !nutritionixData,
+          isPartialResult: !gptAnalysis || !nutritionixData || gptAnalysis?.fallback,
           _meta: { 
             requestId,
             concurrentRequests: activeRequests,
@@ -1321,6 +1433,9 @@ export async function POST(request: NextRequest) {
         { 
           success: false, 
           error: 'The analysis is taking longer than expected. Please try again with a clearer image.',
+          fallback: true,
+          fallbackMessage: 'The image is taking too long to analyze. This often happens with unclear or complex images.',
+          reason: 'timeout',
           _meta: { requestId, concurrentRequests: activeRequests }
         },
         { status: 504 }
@@ -1340,6 +1455,9 @@ export async function POST(request: NextRequest) {
       { 
         success: false, 
         error: `Analysis failed: ${errorMessage}`,
+        fallback: true,
+        fallbackMessage: 'We encountered an issue analyzing your meal. Please try again with a clearer photo.',
+        reason: 'error',
         _meta: { requestId, concurrentRequests: activeRequests }
       },
       { status: 500 }
