@@ -994,7 +994,7 @@ function formatGoalName(healthGoal: string): string {
 }
 
 export async function POST(request: NextRequest) {
-  console.log('Received image analysis request');
+  console.log('Analyze Image endpoint hit - starting image analysis');
   
   try {
     // Check content type
@@ -1070,9 +1070,9 @@ export async function POST(request: NextRequest) {
       );
     }
   } catch (error: any) {
-    console.error('Request processing error:', error);
+    console.error('Analyze Image Error:', error);
     return NextResponse.json(
-      { error: `Request processing failed: ${error.message}` }, 
+      { success: false, error: error.message },
       { status: 500 }
     );
   }
