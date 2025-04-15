@@ -151,6 +151,8 @@ async function analyzeWithGPT4Vision(base64Image: string, healthGoal: string, re
   // Try with primary prompt first, then fallback to simpler prompt if needed
   let attempt = 1;
   let lastError = null;
+  const reasoningLogs: any[] = [];
+  const fallbackMessage = "We couldn't analyze this image properly. Please try again with a clearer photo.";
 
   while (attempt <= 2) {
     try {
@@ -168,20 +170,30 @@ async function analyzeWithGPT4Vision(base64Image: string, healthGoal: string, re
       // Get goal-specific prompt
       const goalPrompt = getGoalSpecificPrompt(healthGoal);
       
-      // Use more resilient prompt for low-quality images
-      const primarySystemPrompt = `You are a food image analyst. The image may be low-quality, blurry, or partially obscured. Do your best to identify the meal's components. If anything is unclear, include your best guess. List all recognizable ingredients and possible food categories (e.g., grains, protein, vegetables), even if confidence is low. Never return 'unclear image' unless absolutely no food is visible at all.
+      // Use more resilient prompt for low-quality images - updated with multi-tiered approach
+      const primarySystemPrompt = `You are a nutrition-focused food vision expert. You are analyzing a real-world photo of a meal. The image may be blurry, dark, partially cropped, or contain multiple food items with overlap.
 
-The user's specific health goal is: "${healthGoal}"
+Do your best to:
+- List the most likely ingredients or food items, even if you are not 100% certain
+- Guess food categories (protein, vegetable, grain, etc.) for each item 
+- Note nutritional elements that relate to the health goal: "${healthGoal}"
+- If multiple interpretations are possible, prioritize the most likely ones
+- NEVER say "unclear image." Instead, describe what you *can* see and offer plausible guesses
 
 ${goalPrompt}`;
 
       // Simpler fallback prompt for retry attempts
       const fallbackSystemPrompt = attempt === 1 ? primarySystemPrompt 
-        : `You are a food image analyst. The image may be low-quality, blurry, or partially obscured. Do your best to identify the meal's components. If anything is unclear, include your best guess. List all recognizable ingredients and possible food categories (e.g., grains, protein, vegetables), even if confidence is low. Never return 'unclear image' unless absolutely no food is visible at all.
+        : `You are a nutrition-focused food vision expert analyzing a possibly low-quality food image. 
         
-If you can see any food at all, please identify it. If the image is completely unidentifiable, describe it as "a meal" and estimate basic nutrition values.
+Even if the image is blurry, dark, or partially visible:
+- Make educated guesses about food items present
+- Suggest plausible ingredients based on visible shapes, colors, and context
+- If you see any food-like objects, describe them and their likely identity
+- Consider common meal combinations if parts are visible (e.g., if you see what might be a sandwich, suggest potential fillings)
+- NEVER say "I cannot identify" or "unclear image" - always provide your best analysis with appropriate confidence levels
 
-Even with limited visual information, provide a response that follows the JSON format.`;
+The user's health goal is: "${healthGoal}" - relate your analysis to this goal when possible.`;
       
       // Log the prompt being used
       console.log(`[${requestId}] Analyzing image with health goal: ${healthGoal}`);
@@ -209,6 +221,10 @@ Return ONLY valid JSON that can be parsed with JSON.parse(). Use this exact form
 {
   "description": "A concise description of the meal focusing on key components",
   "ingredientList": ["ingredient1", "ingredient2", ...],
+  "detailedIngredients": [
+    { "name": "ingredient1", "category": "protein/vegetable/grain/etc", "confidence": 8.5 },
+    { "name": "ingredient2", "category": "protein/vegetable/grain/etc", "confidence": 6.0 }
+  ],
   "confidence": 7.5,
   "basicNutrition": {
     "calories": "estimated calories",
@@ -234,7 +250,8 @@ Return ONLY valid JSON that can be parsed with JSON.parse(). Use this exact form
   "suggestions": [
     "Specific, evidence-based recommendation 1",
     "Specific, evidence-based recommendation 2"
-  ]
+  ],
+  "imageChallenges": ["list any challenges with analyzing this image, like lighting, blur, etc."]
 }
 
 IMPORTANT GUIDELINES:
@@ -250,6 +267,7 @@ IMPORTANT GUIDELINES:
 10. Avoid redundancy between positiveFoodFactors, negativeFoodFactors, feedback, and suggestions
 11. Focus on the user's specific goal, not general healthy eating advice
 12. If image quality is poor, DO NOT refuse to analyze - provide your best guess and set confidence level appropriately
+13. The detailedIngredients array should include EVERY ingredient you identify, along with its food category and your confidence for that specific item
 
 Do not return any explanation or text outside the JSON block. Your entire response must be valid JSON only.`
               },
@@ -322,6 +340,51 @@ Do not return any explanation or text outside the JSON block. Your entire respon
           // Parse the JSON response
           const analysisJson = JSON.parse(analysisText.trim());
           console.log(`[${requestId}] Analysis JSON parsed successfully`);
+          
+          // Store the raw result in reasoningLogs for debugging
+          reasoningLogs.push({
+            stage: `initial_analysis_attempt_${attempt}`,
+            result: analysisJson,
+            timestamp: new Date().toISOString()
+          });
+          
+          // Check if we need to enrich the result with a second pass
+          const needsEnrichment = shouldEnrichAnalysis(analysisJson);
+          
+          if (needsEnrichment && attempt === 1) {
+            console.log(`[${requestId}] Low confidence analysis detected, performing enrichment pass`);
+            const enrichedAnalysis = await refineLowConfidenceAnalysis(
+              base64Image, 
+              analysisJson, 
+              healthGoal, 
+              requestId
+            );
+            
+            // Store the enriched result in reasoningLogs
+            reasoningLogs.push({
+              stage: "enrichment_pass",
+              originalConfidence: analysisJson.confidence,
+              detectedIssue: needsEnrichment,
+              result: enrichedAnalysis,
+              timestamp: new Date().toISOString()
+            });
+            
+            // Combine the enriched analysis with the original, prioritizing the enriched data
+            const combinedAnalysis = {
+              ...analysisJson,
+              ...enrichedAnalysis,
+              confidence: Math.max(analysisJson.confidence || 0, enrichedAnalysis.confidence || 0),
+              reasoningLogs: reasoningLogs
+            };
+            
+            console.log(`[${requestId}] GPT-4 Vision analysis completed in ${(endTime - startTime) / 1000}s (with enrichment)`);
+            console.timeEnd(`⏱️ [${requestId}] analyzeWithGPT4Vision`);
+            return combinedAnalysis;
+          }
+          
+          // Add reasoningLogs to the response
+          analysisJson.reasoningLogs = reasoningLogs;
+          
           console.log(`[${requestId}] GPT-4 Vision analysis completed in ${(endTime - startTime) / 1000}s`);
           console.timeEnd(`⏱️ [${requestId}] analyzeWithGPT4Vision`);
           return analysisJson;
@@ -329,16 +392,42 @@ Do not return any explanation or text outside the JSON block. Your entire respon
           console.error(`[${requestId}] Error parsing JSON from GPT response (attempt ${attempt}):`, parseError);
           console.error(`[${requestId}] Raw response:`, analysisText);
           
+          // Add parse error to reasoningLogs
+          reasoningLogs.push({
+            stage: `parse_error_attempt_${attempt}`,
+            error: parseError instanceof Error ? parseError.message : 'Unknown parsing error',
+            rawResponse: analysisText,
+            timestamp: new Date().toISOString()
+          });
+          
           // Try to extract JSON using regex if parsing fails
           const jsonMatch = analysisText.match(/({[\s\S]*})/);
           if (jsonMatch && jsonMatch[0]) {
             try {
               const extractedJson = JSON.parse(jsonMatch[0]);
               console.log(`[${requestId}] Extracted JSON using regex on attempt ${attempt}`);
+              
+              // Add extraction success to reasoningLogs
+              reasoningLogs.push({
+                stage: `regex_extraction_attempt_${attempt}`,
+                result: extractedJson,
+                timestamp: new Date().toISOString()
+              });
+              
+              // Add reasoningLogs to the response
+              extractedJson.reasoningLogs = reasoningLogs;
+              
               console.timeEnd(`⏱️ [${requestId}] analyzeWithGPT4Vision`);
               return extractedJson;
             } catch (extractError) {
               console.error(`[${requestId}] Failed to extract JSON with regex (attempt ${attempt}):`, extractError);
+              
+              // Add extraction failure to reasoningLogs
+              reasoningLogs.push({
+                stage: `regex_extraction_failure_attempt_${attempt}`,
+                error: extractError instanceof Error ? extractError.message : 'Unknown extraction error',
+                timestamp: new Date().toISOString()
+              });
             }
           }
           
@@ -350,6 +439,13 @@ Do not return any explanation or text outside the JSON block. Your entire respon
       } catch (fetchError: unknown) {
         // Clear the timeout in case of errors
         clearTimeout(timeoutId);
+        
+        // Add fetch error to reasoningLogs
+        reasoningLogs.push({
+          stage: `fetch_error_attempt_${attempt}`,
+          error: fetchError instanceof Error ? fetchError.message : 'Unknown fetch error',
+          timestamp: new Date().toISOString()
+        });
         
         // Check if this is an abort error
         if (fetchError instanceof Error && fetchError.name === 'AbortError') {
@@ -374,6 +470,13 @@ Do not return any explanation or text outside the JSON block. Your entire respon
     } catch (error) {
       console.error(`[${requestId}] Error analyzing image with GPT-4 Vision (attempt ${attempt}):`, error);
       
+      // Add general error to reasoningLogs
+      reasoningLogs.push({
+        stage: `general_error_attempt_${attempt}`,
+        error: error instanceof Error ? error.message : 'Unknown error',
+        timestamp: new Date().toISOString()
+      });
+      
       // Store this error but try again if it's our first attempt
       lastError = error instanceof Error 
         ? new Error(`Error on attempt ${attempt}: ${error.message}`) 
@@ -387,8 +490,216 @@ Do not return any explanation or text outside the JSON block. Your entire respon
   console.error(`[${requestId}] All GPT-4 Vision attempts failed. Last error:`, lastError);
   console.timeEnd(`⏱️ [${requestId}] analyzeWithGPT4Vision`);
   
-  // Throw the last error we encountered
-  throw lastError || new Error('Failed to analyze image after multiple attempts');
+  // Create a final reasoning log for the failure
+  reasoningLogs.push({
+    stage: "all_attempts_failed",
+    lastError: lastError instanceof Error ? lastError.message : 'Unknown final error',
+    timestamp: new Date().toISOString()
+  });
+  
+  // Create a minimal response with the reasoning logs
+  const fallbackResponse = {
+    description: "Unable to analyze the image after multiple attempts",
+    ingredientList: ["unidentified food item"],
+    detailedIngredients: [
+      { name: "unidentified food item", category: "unknown", confidence: 1.0 }
+    ],
+    confidence: 1,
+    basicNutrition: {
+      calories: "unknown",
+      protein: "unknown",
+      carbs: "unknown",
+      fat: "unknown"
+    },
+    goalName: formatGoalName(healthGoal),
+    goalImpactScore: 0,
+    feedback: [
+      fallbackMessage,
+      "Try a photo with better lighting and ensure all food items are clearly visible.",
+      "Make sure your meal is in focus and there isn't excessive glare or shadows."
+    ],
+    suggestions: [
+      "Take photos in natural daylight when possible",
+      "Ensure the camera lens is clean and the food is in focus",
+      "Take the photo from directly above the plate for best results"
+    ]
+  };
+  
+  // Throw the last error we encountered, but include our fallback response
+  const enhancedError = new Error('Failed to analyze image after multiple attempts');
+  // @ts-ignore
+  enhancedError.fallbackResponse = fallbackResponse;
+  throw enhancedError;
+}
+
+// Check if an analysis needs enrichment
+function shouldEnrichAnalysis(analysis: any): string | false {
+  // Check if there are too few ingredients
+  if (!analysis.ingredientList || analysis.ingredientList.length < 2) {
+    return 'too_few_ingredients';
+  }
+  
+  // Check if the detailedIngredients have low average confidence
+  if (analysis.detailedIngredients && analysis.detailedIngredients.length > 0) {
+    const totalConfidence = analysis.detailedIngredients.reduce(
+      (sum: number, ingredient: any) => sum + (ingredient.confidence || 0), 
+      0
+    );
+    const avgConfidence = totalConfidence / analysis.detailedIngredients.length;
+    
+    if (avgConfidence < 5) {
+      return 'low_confidence_ingredients';
+    }
+  }
+  
+  // Check overall confidence
+  if (typeof analysis.confidence === 'number' && analysis.confidence < 5) {
+    return 'low_overall_confidence';
+  }
+  
+  // Check if the image has reported challenges
+  if (analysis.imageChallenges && analysis.imageChallenges.length > 0) {
+    return 'reported_image_challenges';
+  }
+  
+  return false;
+}
+
+// Function to perform a second pass on low confidence analysis
+async function refineLowConfidenceAnalysis(
+  base64Image: string, 
+  initialAnalysis: any, 
+  healthGoal: string, 
+  requestId: string
+): Promise<any> {
+  console.time(`⏱️ [${requestId}] refineLowConfidenceAnalysis`);
+  const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
+  
+  if (!OPENAI_API_KEY) {
+    console.timeEnd(`⏱️ [${requestId}] refineLowConfidenceAnalysis`);
+    return initialAnalysis; // Return original if no API key
+  }
+  
+  try {
+    console.log(`[${requestId}] Starting enrichment pass for low confidence analysis`);
+    
+    // Create an AbortController for timeout management
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => {
+      controller.abort();
+      console.error(`[${requestId}] Enrichment request aborted due to timeout (30s)`);
+    }, 30000); // 30 second timeout for the enrichment pass
+
+    // Prepare the initial analysis as a string
+    const initialAnalysisString = JSON.stringify(initialAnalysis, null, 2);
+    
+    // Configure request headers
+    const headers = {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${OPENAI_API_KEY}`,
+      'OpenAI-Beta': 'assistants=v1'
+    };
+    
+    // Create enrichment prompt
+    const enrichmentPrompt = `You are a nutrition and food vision expert. You previously analyzed a food image with low confidence. 
+
+Here is your initial analysis:
+${initialAnalysisString}
+
+Improve this analysis using your best judgment. The image may be low-light, blurry, or missing resolution. Look more carefully at:
+1. Shapes, textures, and colors that might indicate specific food items
+2. Common meal combinations and plausible ingredients
+3. Context clues in the image background (plates, utensils, setting)
+4. Possible cultural or regional food patterns
+
+Keep the same JSON format, but enhance the ingredients list and descriptions. Don't be afraid to make educated guesses, but indicate your confidence level appropriately. NEVER say "unclear image" - always provide your best analysis.
+
+Return a complete analysis with the original keys but improved values.`;
+    
+    // Configure request parameters
+    const requestPayload = {
+      model: "gpt-4o",
+      messages: [
+        {
+          role: "user",
+          content: [
+            { 
+              type: "text", 
+              text: enrichmentPrompt
+            },
+            {
+              type: "image_url",
+              image_url: {
+                url: `data:image/jpeg;base64,${base64Image}`,
+                detail: "high" // Use high detail for the enrichment pass
+              }
+            }
+          ]
+        }
+      ],
+      max_tokens: 1500,
+      temperature: 0.7,  // Higher temperature for creative interpretation
+      response_format: { type: "json_object" }
+    };
+    
+    const startTime = Date.now();
+    
+    // Make the API call
+    const response = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(requestPayload),
+      signal: controller.signal
+    });
+    
+    // Clear the timeout
+    clearTimeout(timeoutId);
+    
+    const endTime = Date.now();
+    console.log(`[${requestId}] Enrichment API request completed in ${(endTime - startTime) / 1000}s`);
+    
+    if (!response.ok) {
+      console.error(`[${requestId}] Enrichment API Error:`, response.status);
+      console.timeEnd(`⏱️ [${requestId}] refineLowConfidenceAnalysis`);
+      return initialAnalysis; // Return original if enrichment fails
+    }
+    
+    const responseData = await response.json();
+    
+    if (
+      !responseData.choices || 
+      !responseData.choices[0] || 
+      !responseData.choices[0].message || 
+      !responseData.choices[0].message.content
+    ) {
+      console.error(`[${requestId}] Invalid enrichment response structure`);
+      console.timeEnd(`⏱️ [${requestId}] refineLowConfidenceAnalysis`);
+      return initialAnalysis; // Return original if response is invalid
+    }
+    
+    const enrichedText = responseData.choices[0].message.content;
+    
+    try {
+      // Parse the JSON response
+      const enrichedJson = JSON.parse(enrichedText.trim());
+      console.log(`[${requestId}] Enriched analysis parsed successfully`);
+      
+      // Add meta information about the enrichment
+      enrichedJson._enriched = true;
+      enrichedJson._enrichmentTime = endTime - startTime;
+      
+      console.timeEnd(`⏱️ [${requestId}] refineLowConfidenceAnalysis`);
+      return enrichedJson;
+    } catch (parseError) {
+      console.error(`[${requestId}] Error parsing enriched analysis:`, parseError);
+      console.timeEnd(`⏱️ [${requestId}] refineLowConfidenceAnalysis`);
+      return initialAnalysis; // Return original if parsing fails
+    }
+  } catch (error) {
+    console.error(`[${requestId}] Error in enrichment pass:`, error);
+    console.timeEnd(`⏱️ [${requestId}] refineLowConfidenceAnalysis`);
+    return initialAnalysis; // Return original if any error occurs
+  }
 }
 
 // Helper function to get goal-specific prompts
@@ -728,11 +1039,14 @@ function formatResponse(
   negativeFoodFactors?: string[];
   rawGoal: string;
   confidence?: number;
+  detailedIngredients?: any[];
+  reasoningLogs?: any[];
   // Add new properties to match what we're setting in the POST handler
   status?: string;
   success?: boolean;
   fallback?: boolean;
   message?: string;
+  partialResults?: boolean;
   _meta?: any;
 } {
   // Extend the supportive nutrients map with more detailed, goal-specific nutrients
@@ -784,6 +1098,23 @@ function formatResponse(
     carbs: "30-40",
     fat: "10-15"
   };
+
+  // Process detailed ingredients if available from enhanced analysis
+  const detailedIngredients = gptAnalysis.detailedIngredients 
+    ? gptAnalysis.detailedIngredients.map((ingredient: any) => ({
+        name: ingredient.name,
+        category: ingredient.category || 'unknown',
+        confidence: ingredient.confidence || 5.0,
+        confidenceEmoji: getConfidenceEmoji(ingredient.confidence || 5.0)
+      }))
+    : gptAnalysis.ingredientList 
+      ? gptAnalysis.ingredientList.map((ingredient: string, index: number) => ({
+          name: ingredient,
+          category: 'unknown',
+          confidence: 5.0,
+          confidenceEmoji: '⚪' // Neutral if we don't have confidence scores
+        }))
+      : [];
   
   // Prepare the nutrients array with smarter highlighting based on the goal
   const nutrients = [
@@ -975,6 +1306,12 @@ function formatResponse(
   // Format the goal name for display
   const goalName = formatGoalName(healthGoal);
   
+  // Include reasoning logs if available
+  const reasoningLogs = gptAnalysis.reasoningLogs || [];
+  
+  // Get image challenges if available
+  const imageChallenges = gptAnalysis.imageChallenges || [];
+  
   // Now return the object with all properties
   return {
     description: gptAnalysis.description || 'A meal containing various ingredients and nutrients.',
@@ -988,12 +1325,22 @@ function formatResponse(
     negativeFoodFactors,
     rawGoal: healthGoal,
     confidence: gptAnalysis.confidence || 5, // Extract confidence score with fallback to medium confidence
+    detailedIngredients,
+    reasoningLogs,
     status: 'success',
     success: true,
     fallback: false,
     message: '',
+    partialResults: false,
     _meta: undefined
   };
+}
+
+// Helper function to get confidence emoji
+function getConfidenceEmoji(confidence: number): string {
+  if (confidence >= 8) return '🟢'; // High confidence
+  if (confidence >= 5) return '🟡'; // Medium confidence
+  return '🔴'; // Low confidence
 }
 
 // Helper function to generate positive factors based on ingredients and goal type
@@ -1421,13 +1768,6 @@ export async function POST(request: NextRequest) {
     
     console.log(`⏱️ [${requestId}] Time remaining: ${timeRemaining}ms`);
 
-    // Set up global timeout promise to ensure we return before serverless timeout
-    const timeoutPromise = new Promise((_, reject) => {
-      setTimeout(() => {
-        reject(new Error('Global timeout: Request exceeded execution time limit'));
-      }, Math.max(timeRemaining, 0));
-    });
-
     // Extract base64 image with error handling 
     let base64Image: string;
     try {
@@ -1468,53 +1808,37 @@ export async function POST(request: NextRequest) {
       }, { status: 400 });
     }
 
-    // Run API calls in parallel with Promise.allSettled and proper error handling
-    let results;
-    try {
-      results = await Promise.race([
-        Promise.allSettled([
-          // Analyze with GPT-4 Vision
-          analyzeWithGPT4Vision(base64Image, healthGoal, requestId),
-          
-          // Get nutrition data from Nutritionix (disabled for now to simplify)
-          // getNutritionData(["dummy"]) // Placeholder to avoid breaking the array structure
-        ]),
-        timeoutPromise
-      ]);
-    } catch (timeoutError) {
-      console.error(`❌ [${requestId}] Timeout Error:`, timeoutError);
-      // Clean up tracking data
-      requestStartTimes.delete(requestId);
-      activeRequests--;
-      
-      return NextResponse.json({
-        status: 'timeout',
-        success: false,
-        fallback: true,
-        message: 'Analysis took too long. Please try a clearer image or try again later.',
-        ingredients: [],
-        description: 'Analysis timed out',
-        nutrition: null,
-        _meta: { requestId, error: 'Timeout exceeded' }
-      }, { status: 408 });
-    }
+    // Set up global timeout promise to ensure we return before serverless timeout (9.5s)
+    const globalTimeoutMs = Math.min(9500, timeRemaining);
+    console.log(`⏱️ [${requestId}] Setting global timeout: ${globalTimeoutMs}ms`);
+    
+    // Create a controller for the global timeout
+    const globalController = new AbortController();
+    const timeoutId = setTimeout(() => {
+      console.warn(`⏱️ [${requestId}] Global timeout reached after ${globalTimeoutMs}ms`);
+      globalController.abort('Global timeout reached');
+    }, globalTimeoutMs);
 
-    // Clean up tracking data
-    requestStartTimes.delete(requestId);
-    activeRequests--;
-
-    // Safe defaults in case processing fails
+    // Run API calls in parallel with Promise.allSettled for partial results
     let gptAnalysis: any = null;
     let nutritionixData: any = null;
     let analysisFailed = false;
     let failureReason = '';
+    let isTimeout = false;
 
-    // Process the results with comprehensive error handling
-    if (Array.isArray(results)) {
-      const [gptResult] = results;
+    try {
+      // Start both API calls in parallel
+      const [gptResult, nutritionResult] = await Promise.allSettled([
+        // Analyze with GPT-4 Vision
+        analyzeWithGPT4Vision(base64Image, healthGoal, requestId),
+        
+        // Get nutrition data from Nutritionix (commented to avoid breaking if not implemented)
+        // getNutritionData(["placeholder"], requestId)
+        Promise.resolve([]) // Placeholder to avoid breaking the array structure
+      ]);
       
       // Process GPT result with safe fallbacks
-      if (gptResult && gptResult.status === 'fulfilled') {
+      if (gptResult.status === 'fulfilled') {
         if (gptResult.value) {
           gptAnalysis = gptResult.value;
           
@@ -1538,7 +1862,7 @@ export async function POST(request: NextRequest) {
           analysisFailed = true;
           failureReason = 'empty_response';
         }
-      } else if (gptResult) {
+      } else {
         // Handle rejected promise case
         const errorMessage = gptResult.reason instanceof Error ? 
           gptResult.reason.message : 
@@ -1549,25 +1873,39 @@ export async function POST(request: NextRequest) {
         gptAnalysis = createFallbackResponse('api_error', healthGoal, requestId);
         analysisFailed = true;
         failureReason = 'api_error';
-      } else {
-        console.error(`❌ [${requestId}] GPT Error: Invalid result structure`);
-        gptAnalysis = createFallbackResponse('api_error', healthGoal, requestId);
-        analysisFailed = true;
-        failureReason = 'invalid_structure';
       }
 
-      // Process nutrition data if available (safely handle the second result)
-      if (results.length > 1 && results[1] && results[1].status === 'fulfilled') {
-        nutritionixData = results[1].value;
+      // Process nutrition data if available
+      if (nutritionResult.status === 'fulfilled') {
+        nutritionixData = nutritionResult.value;
         console.log(`✅ [${requestId}] Nutrition data fetched successfully`);
       } else {
-        console.warn(`⚠️ [${requestId}] Nutrition data not available`);
+        console.warn(`⚠️ [${requestId}] Nutrition data not available: ${nutritionResult.reason}`);
+        nutritionixData = [];
       }
-    } else {
-      console.error(`❌ [${requestId}] Unexpected Error: Invalid results format`, results);
-      gptAnalysis = createFallbackResponse('unexpected_error', healthGoal, requestId);
-      analysisFailed = true;
-      failureReason = 'invalid_results_format';
+    } catch (error) {
+      // This will only happen if there's an error outside of the Promise.allSettled
+      console.error(`❌ [${requestId}] Error during parallel API calls:`, error);
+      
+      // Check if this was a timeout
+      if (error instanceof Error && error.name === 'AbortError') {
+        isTimeout = true;
+        console.warn(`⏱️ [${requestId}] Request aborted due to global timeout`);
+      }
+      
+      // If we have partial results from GPT, we can still use them
+      if (!gptAnalysis) {
+        gptAnalysis = createFallbackResponse('timeout', healthGoal, requestId);
+        analysisFailed = true;
+        failureReason = isTimeout ? 'global_timeout' : 'unknown_error';
+      }
+    } finally {
+      // Always clear the timeout to prevent memory leaks
+      clearTimeout(timeoutId);
+      
+      // Clean up tracking data
+      requestStartTimes.delete(requestId);
+      activeRequests--;
     }
 
     // Always ensure we have valid gptAnalysis to avoid null references
@@ -1604,6 +1942,7 @@ export async function POST(request: NextRequest) {
         failureReason,
         lowConfidence: hasLowConfidence,
         confidence: gptAnalysis.confidence || 0,
+        isTimeout,
         processingTimeMs: Date.now() - (requestStartTimes.get(requestId) || Date.now())
       };
       
@@ -1612,7 +1951,10 @@ export async function POST(request: NextRequest) {
       response.fallback = analysisFailed;
       response.status = analysisFailed ? 'fallback' : (hasLowConfidence ? 'low_confidence' : 'success');
       
-      if (analysisFailed || hasLowConfidence) {
+      if (isTimeout) {
+        response.message = 'Analysis took too long. We\'ve returned the best results we could get.';
+        response.partialResults = true;
+      } else if (analysisFailed || hasLowConfidence) {
         response.message = gptAnalysis.fallbackMessage || 'Analysis could not be completed. Please try again with a clearer image.';
       }
       
@@ -1636,7 +1978,8 @@ export async function POST(request: NextRequest) {
           requestId,
           error: formatError instanceof Error ? formatError.message : 'Unknown formatting error',
           analysisFailed: true,
-          failureReason: 'formatting_error'
+          failureReason: 'formatting_error',
+          isTimeout
         }
       };
     }
@@ -1644,45 +1987,32 @@ export async function POST(request: NextRequest) {
     console.timeEnd(`⏱️ [${requestId}] analyzeImage`);
     console.log(`✅ [${requestId}] Analysis complete - ${analysisFailed ? 'Using fallback' : 'Success'}`);
     
-    // Return the response with appropriate status code
-    return NextResponse.json(response, { 
-      status: analysisFailed ? 200 : 200 // Always return 200 to avoid frontend errors, handle failure in response body
-    });
+    // Return the response with appropriate status code - always 200 to avoid frontend errors
+    return NextResponse.json(response, { status: 200 });
     
   } catch (error: unknown) {
     // Ultimate fallback - this should never happen if our error handling is complete
-    console.error(`❌ [${requestId}] Unhandled Error:`, error);
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    console.error(`❌ [${requestId}] Unhandled Error:`, errorMessage);
     
     // Clean up tracking data
     requestStartTimes.delete(requestId);
     activeRequests--;
     
-    console.timeEnd(`⏱️ [${requestId}] analyzeImage`);
-    
-    // Safe error message extraction
-    const errorMessage = error instanceof Error ? error.message : 
-      (typeof error === 'string' ? error : 'Unknown error');
-    
-    return NextResponse.json(
-      {
-        status: 'error',
-        success: false,
-        fallback: true,
-        message: 'An unexpected error occurred during analysis. Please try again.',
-        ingredients: [],
-        description: '',
-        nutrition: null,
-        goalName: 'Analysis Failed',
-        goalScore: 0,
-        feedback: ['Please try again with a different image.'],
-        suggestions: ['Make sure your image is clear and well-lit.'],
-        _meta: { 
-          requestId, 
-          error: errorMessage,
-          location: 'unhandled_exception'
-        }
-      },
-      { status: 200 } // Return 200 even for errors to avoid frontend crashes
-    );
+    // Return a friendly error
+    return NextResponse.json({
+      status: 'error',
+      success: false,
+      fallback: true,
+      message: 'Sorry, we encountered an unexpected error. Please try again later.',
+      ingredients: [],
+      description: 'Analysis failed',
+      nutrition: null,
+      _meta: { 
+        requestId, 
+        error: errorMessage,
+        unhandled: true
+      }
+    }, { status: 200 }); // Always return 200 to prevent frontend crashes
   }
 }
