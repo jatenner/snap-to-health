@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import axios from 'axios';
+import crypto from 'crypto';
 
 // Trigger new Vercel deployment - 15 Apr 2025
 // Request concurrency tracking
@@ -36,21 +37,45 @@ function assessImageQuality(base64Image: string, requestId: string): ImageQualit
 }
 
 // Function to determine if an analysis result has low confidence
-function isLowConfidenceAnalysis(analysisResult: any): boolean {
-  // Check for explicit confidence score
-  if (typeof analysisResult.confidence === 'number') {
-    return analysisResult.confidence < 4; // Threshold for low confidence
+function isLowConfidenceAnalysis(analysis: any): boolean {
+  if (!analysis) return false;
+  
+  // Check if explicitly marked as low confidence by previous processing
+  if (analysis.lowConfidence === true) return true;
+  
+  // Check overall confidence score
+  if (typeof analysis.confidence === 'number' && analysis.confidence < 5) {
+    return true;
   }
   
-  // Alternative checks if confidence score isn't available
-  const hasMinimalIngredients = !analysisResult.ingredientList || 
-                               analysisResult.ingredientList.length < 2;
-                               
-  const hasLowConfidenceIndicators = analysisResult.description && 
-    (analysisResult.description.toLowerCase().includes('unclear') ||
-     analysisResult.description.toLowerCase().includes('difficult to identify'));
-     
-  return hasMinimalIngredients || hasLowConfidenceIndicators;
+  // Check if the detailedIngredients have low average confidence
+  if (analysis.detailedIngredients && analysis.detailedIngredients.length > 0) {
+    const totalConfidence = analysis.detailedIngredients.reduce(
+      (sum: number, ingredient: any) => sum + (ingredient.confidence || 0), 
+      0
+    );
+    const avgConfidence = totalConfidence / analysis.detailedIngredients.length;
+    
+    if (avgConfidence < 5) {
+      return true;
+    }
+    
+    // Check if majority of ingredients have low confidence
+    const lowConfidenceCount = analysis.detailedIngredients.filter(
+      (i: any) => i.confidence < 5
+    ).length;
+    
+    if (lowConfidenceCount > analysis.detailedIngredients.length / 2) {
+      return true;
+    }
+  }
+  
+  // Check if there are reported image challenges
+  if (analysis.imageChallenges && analysis.imageChallenges.length > 0) {
+    return true;
+  }
+  
+  return false;
 }
 
 // Function to extract base64 from FormData image
@@ -140,9 +165,6 @@ async function analyzeWithGPT4Vision(base64Image: string, healthGoal: string, re
   console.time(`⏱️ [${requestId}] analyzeWithGPT4Vision`);
   const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
   
-  console.log(`[${requestId}] Base64 image length:`, base64Image.length);
-  console.log(`[${requestId}] Health goal:`, healthGoal);
-  
   if (!OPENAI_API_KEY) {
     console.timeEnd(`⏱️ [${requestId}] analyzeWithGPT4Vision`);
     throw new Error('OpenAI API key is not configured');
@@ -170,30 +192,35 @@ async function analyzeWithGPT4Vision(base64Image: string, healthGoal: string, re
       // Get goal-specific prompt
       const goalPrompt = getGoalSpecificPrompt(healthGoal);
       
-      // Use more resilient prompt for low-quality images - updated with multi-tiered approach
-      const primarySystemPrompt = `You are a nutrition-focused food vision expert. You are analyzing a real-world photo of a meal. The image may be blurry, dark, partially cropped, or contain multiple food items with overlap.
+      // Improved primary system prompt focused on ingredient detection
+      const primarySystemPrompt = `You are a nutrition expert analyzing a real-world meal photo. The image may be dim, blurry, or cropped.
 
-Do your best to:
-- List the most likely ingredients or food items, even if you are not 100% certain
-- Guess food categories (protein, vegetable, grain, etc.) for each item 
-- Note nutritional elements that relate to the health goal: "${healthGoal}"
-- If multiple interpretations are possible, prioritize the most likely ones
-- NEVER say "unclear image." Instead, describe what you *can* see and offer plausible guesses
+Your primary tasks:
+- Identify as many food items as possible, with confidence scores (0-10)
+- Categorize each item (protein, carb, vegetable, fruit, dairy, etc.)
+- NEVER say 'unclear image' or 'cannot identify'. Always provide your best guesses.
+- For low-quality images, look for shapes, colors, textures, and contextual clues
+- Consider partial visibility and common food combinations
+- Provide confidence scores that reflect your certainty (10=certain, 1=very uncertain)
 
 ${goalPrompt}`;
 
-      // Simpler fallback prompt for retry attempts
+      // Improved fallback prompt for retry attempts
       const fallbackSystemPrompt = attempt === 1 ? primarySystemPrompt 
-        : `You are a nutrition-focused food vision expert analyzing a possibly low-quality food image. 
-        
-Even if the image is blurry, dark, or partially visible:
-- Make educated guesses about food items present
-- Suggest plausible ingredients based on visible shapes, colors, and context
-- If you see any food-like objects, describe them and their likely identity
-- Consider common meal combinations if parts are visible (e.g., if you see what might be a sandwich, suggest potential fillings)
-- NEVER say "I cannot identify" or "unclear image" - always provide your best analysis with appropriate confidence levels
+        : `You are a nutrition expert analyzing a potentially low-quality food image. 
 
-The user's health goal is: "${healthGoal}" - relate your analysis to this goal when possible.`;
+I need you to identify ANY possible food items, even if very unclear:
+- Make educated guesses based on shapes, colors, textures and shadows
+- Identify partial items and suggest what they likely are
+- Propose contextually likely combinations (e.g., if you see rice, consider common pairings)
+- Use even subtle visual cues to infer possible ingredients
+- NEVER say "I cannot identify" or "unclear image" - always make reasonable guesses
+- Assign appropriate low confidence scores (1-4) for uncertain items
+
+The user's health goal is: "${healthGoal}" - relate your analysis to this goal when possible.
+
+IMPORTANT: Just because an image is blurry doesn't mean we can't extract useful information. 
+Even with 20% confidence, provide your best assessment of what food items are likely present.`;
       
       // Log the prompt being used
       console.log(`[${requestId}] Analyzing image with health goal: ${healthGoal}`);
@@ -206,7 +233,7 @@ The user's health goal is: "${healthGoal}" - relate your analysis to this goal w
         'OpenAI-Beta': 'assistants=v1'  // Use latest API features
       };
       
-      // Configure request parameters for better response
+      // Improved JSON response format with detailed ingredients and confidence scores
       const requestPayload = {
         model: "gpt-4o",  // Using GPT-4o for faster response
         messages: [
@@ -268,6 +295,8 @@ IMPORTANT GUIDELINES:
 11. Focus on the user's specific goal, not general healthy eating advice
 12. If image quality is poor, DO NOT refuse to analyze - provide your best guess and set confidence level appropriately
 13. The detailedIngredients array should include EVERY ingredient you identify, along with its food category and your confidence for that specific item
+14. ALWAYS return at least 3 ingredients with your best guess, even if confidence is low
+15. For very unclear images, look for shapes, colors, textures, and contextual clues to infer possible food items
 
 Do not return any explanation or text outside the JSON block. Your entire response must be valid JSON only.`
               },
@@ -275,7 +304,7 @@ Do not return any explanation or text outside the JSON block. Your entire respon
                 type: "image_url",
                 image_url: {
                   url: `data:image/jpeg;base64,${base64Image}`,
-                  detail: "low" // Use low detail for faster processing
+                  detail: attempt === 1 ? "low" : "high" // Use higher detail on second attempt
                 }
               }
             ]
@@ -352,7 +381,7 @@ Do not return any explanation or text outside the JSON block. Your entire respon
           const needsEnrichment = shouldEnrichAnalysis(analysisJson);
           
           if (needsEnrichment && attempt === 1) {
-            console.log(`[${requestId}] Low confidence analysis detected, performing enrichment pass`);
+            console.log(`[${requestId}] Low confidence analysis detected (${needsEnrichment}), performing enrichment pass`);
             const enrichedAnalysis = await refineLowConfidenceAnalysis(
               base64Image, 
               analysisJson, 
@@ -522,7 +551,8 @@ Do not return any explanation or text outside the JSON block. Your entire respon
       "Take photos in natural daylight when possible",
       "Ensure the camera lens is clean and the food is in focus",
       "Take the photo from directly above the plate for best results"
-    ]
+    ],
+    reasoningLogs: reasoningLogs
   };
   
   // Throw the last error we encountered, but include our fallback response
@@ -535,7 +565,7 @@ Do not return any explanation or text outside the JSON block. Your entire respon
 // Check if an analysis needs enrichment
 function shouldEnrichAnalysis(analysis: any): string | false {
   // Check if there are too few ingredients
-  if (!analysis.ingredientList || analysis.ingredientList.length < 2) {
+  if (!analysis.ingredientList || analysis.ingredientList.length < 3) {
     return 'too_few_ingredients';
   }
   
@@ -600,23 +630,32 @@ async function refineLowConfidenceAnalysis(
       'OpenAI-Beta': 'assistants=v1'
     };
     
-    // Create enrichment prompt
-    const enrichmentPrompt = `You are a nutrition and food vision expert. You previously analyzed a food image with low confidence. 
+    // Enhanced enrichment prompt
+    const enrichmentPrompt = `You are an expert in analyzing food images, especially when the image quality is poor.
 
-Here is your initial analysis:
+I previously analyzed this food image but with low confidence. Here's my initial analysis:
 ${initialAnalysisString}
 
-Improve this analysis using your best judgment. The image may be low-light, blurry, or missing resolution. Look more carefully at:
-1. Shapes, textures, and colors that might indicate specific food items
-2. Common meal combinations and plausible ingredients
-3. Context clues in the image background (plates, utensils, setting)
-4. Possible cultural or regional food patterns
+Please improve this analysis using these techniques:
+1. Look for subtle visual cues - colors, shapes, textures, spatial arrangement
+2. Consider common food combinations and contextual clues
+3. Use different brightness/contrast mental adjustments to identify items
+4. Note any edges, shadows, or partial forms that might indicate additional items
+5. Consider cultural or regional food patterns visible in the image
+6. Apply your knowledge of typical plating, garnishes, and accompaniments
 
-Keep the same JSON format, but enhance the ingredients list and descriptions. Don't be afraid to make educated guesses, but indicate your confidence level appropriately. NEVER say "unclear image" - always provide your best analysis.
+IMPORTANT REQUIREMENTS:
+1. Identify AT LEAST 3 ingredients, even with low confidence
+2. Assign accurate confidence scores (1-10) matching your certainty
+3. Use the category field to classify each ingredient
+4. Keep the same JSON format as the original analysis
+5. NEVER say "I cannot identify" or "unclear image" - always make your best educated guess
 
-Return a complete analysis with the original keys but improved values.`;
+If you see ANYTHING that could possibly be food, guess what it most likely is with an appropriate low confidence score.
+
+Return a complete analysis with the same JSON structure, but with improved values, especially more comprehensive ingredients list.`;
     
-    // Configure request parameters
+    // Configure request parameters for enhanced analysis
     const requestPayload = {
       model: "gpt-4o",
       messages: [
@@ -687,6 +726,16 @@ Return a complete analysis with the original keys but improved values.`;
       // Add meta information about the enrichment
       enrichedJson._enriched = true;
       enrichedJson._enrichmentTime = endTime - startTime;
+      
+      // Add additional tracking information
+      enrichedJson._enrichmentDetails = {
+        originalDetectedIngredients: initialAnalysis.detailedIngredients?.length || 0,
+        enrichedDetectedIngredients: enrichedJson.detailedIngredients?.length || 0,
+        originalConfidence: initialAnalysis.confidence || 0,
+        enrichedConfidence: enrichedJson.confidence || 0,
+        originalIngredientsList: initialAnalysis.ingredientList || [],
+        isImprovement: (enrichedJson.detailedIngredients?.length || 0) > (initialAnalysis.detailedIngredients?.length || 0)
+      };
       
       console.timeEnd(`⏱️ [${requestId}] refineLowConfidenceAnalysis`);
       return enrichedJson;
@@ -1110,9 +1159,9 @@ function formatResponse(
     : gptAnalysis.ingredientList 
       ? gptAnalysis.ingredientList.map((ingredient: string, index: number) => ({
           name: ingredient,
-          category: 'unknown',
-          confidence: 5.0,
-          confidenceEmoji: '⚪' // Neutral if we don't have confidence scores
+          category: 'food item',
+          confidence: 5.0, // Medium confidence as default
+          confidenceEmoji: '🟡' // Medium confidence as default
         }))
       : [];
   
@@ -1603,43 +1652,36 @@ function isValidGptAnalysis(gptAnalysis: any): { isValid: boolean; reason: strin
 
   // Check if we have any result at all
   if (!gptAnalysis) {
-    return { isValid: false, reason: 'No analysis result returned' };
+    return { isValid: false, reason: 'no_analysis_result' };
   }
 
   // Check if we have an ingredients list
-  if (!gptAnalysis.ingredientList || !Array.isArray(gptAnalysis.ingredientList) || gptAnalysis.ingredientList.length === 0) {
-    console.log('GPT did not identify any ingredients in the image');
-    return { isValid: false, reason: 'no_ingredients' };
+  if (!gptAnalysis.ingredientList || !Array.isArray(gptAnalysis.ingredientList)) {
+    console.log('GPT did not return any ingredients in the image');
+    return { isValid: false, reason: 'missing_ingredients_list' };
   }
 
-  // Check if ingredients look valid (not just placeholders or error messages)
-  const suspiciousIngredients = gptAnalysis.ingredientList.filter((ingredient: string) => 
-    ingredient.toLowerCase().includes('unable to') || 
-    ingredient.toLowerCase().includes('not clear') || 
-    ingredient.toLowerCase().includes('can\'t identify') ||
-    ingredient.toLowerCase().includes('cannot identify') ||
-    ingredient.toLowerCase().includes('unclear image') ||
-    ingredient.toLowerCase().includes('not visible') ||
-    ingredient.toLowerCase().includes('blurry')
-  );
-
-  if (suspiciousIngredients.length > 0 && suspiciousIngredients.length >= gptAnalysis.ingredientList.length / 2) {
-    console.log('Found suspicious ingredients suggesting unclear image:', suspiciousIngredients);
-    return { isValid: false, reason: 'unclear_image' };
+  // If we have at least 1 ingredient, consider it valid but possibly low confidence
+  if (gptAnalysis.ingredientList.length > 0) {
+    // Check for extremely low confidence across all ingredients
+    if (gptAnalysis.detailedIngredients && gptAnalysis.detailedIngredients.length > 0) {
+      const totalConfidence = gptAnalysis.detailedIngredients.reduce(
+        (sum: number, ingredient: any) => sum + (ingredient.confidence || 0), 0);
+      const avgConfidence = totalConfidence / gptAnalysis.detailedIngredients.length;
+      
+      // Only consider truly extremely low confidence invalid (below 2/10)
+      if (avgConfidence < 2) {
+        console.log(`Extremely low average confidence (${avgConfidence.toFixed(1)}) across all ingredients`);
+        return { isValid: false, reason: 'extremely_low_confidence' };
+      }
+    }
+    
+    // Has at least some ingredients with some confidence
+    return { isValid: true, reason: null };
   }
 
-  // Check if description suggests an unclear image
-  if (gptAnalysis.description && 
-     (gptAnalysis.description.toLowerCase().includes('unclear') || 
-      gptAnalysis.description.toLowerCase().includes('blurry') ||
-      gptAnalysis.description.toLowerCase().includes('not visible') ||
-      gptAnalysis.description.toLowerCase().includes('unable to identify') ||
-      gptAnalysis.description.toLowerCase().includes('poor quality'))) {
-    console.log('Description suggests unclear image:', gptAnalysis.description);
-    return { isValid: false, reason: 'unclear_image_description' };
-  }
-
-  return { isValid: true, reason: null };
+  // No ingredients found at all
+  return { isValid: false, reason: 'empty_ingredients_list' };
 }
 
 // Function to create a friendly fallback message based on the validation failure reason
@@ -1650,34 +1692,42 @@ function createFallbackResponse(reason: string, healthGoal: string, requestId: s
   let reasonCode = '';
   
   switch (reason) {
-    case 'no_ingredients':
+    case 'missing_ingredients_list':
+    case 'empty_ingredients_list':
       fallbackMessage = "We couldn't identify any ingredients in your photo. Please try a clearer image with better lighting, or try again with a different angle.";
       reasonCode = 'no_ingredients';
       break;
-    case 'unclear_image':
-    case 'unclear_image_description':
-      fallbackMessage = "Your photo appears to be blurry or unclear. For better results, try taking a photo with more light, less glare, and make sure the food is clearly visible.";
-      reasonCode = 'unclear_image';
+    case 'extremely_low_confidence':
+      fallbackMessage = "We detected some food items but with very low confidence. Try taking a photo with more light and less blur for a better analysis.";
+      reasonCode = 'extremely_low_confidence';
+      break;
+    case 'no_analysis_result':
+      fallbackMessage = "We encountered a problem analyzing your image. Please try again with a clearer photo.";
+      reasonCode = 'analysis_failed';
       break;
     default:
-      fallbackMessage = "We had trouble analyzing your meal. Please try again with a clearer photo that shows all the food items.";
-      reasonCode = 'analysis_failed';
+      fallbackMessage = "We had trouble analyzing your meal. Please try taking a photo with more light, less blur, and make sure the food is clearly visible.";
+      reasonCode = 'analysis_issue';
   }
 
-  // Create a minimal analysis with helpful feedback
+  // Create a fallback analysis that includes some minimal information
   return {
     fallback: true,
     success: false,
     reason: reasonCode,
     fallbackMessage,
-    description: "Unidentified meal",
-    ingredientList: [],
+    description: "Meal analysis could not be completed",
+    ingredientList: ["unidentified food item"],
+    detailedIngredients: [
+      { name: "unidentified food item", category: "unknown", confidence: 1.0 }
+    ],
     basicNutrition: {
       calories: "unknown",
       protein: "unknown",
       carbs: "unknown",
       fat: "unknown"
     },
+    confidence: 1,
     goalName: formatGoalName(healthGoal),
     goalImpactScore: 0,
     feedback: [
@@ -1688,14 +1738,14 @@ function createFallbackResponse(reason: string, healthGoal: string, requestId: s
     suggestions: [
       "Take photos in natural daylight when possible",
       "Ensure the camera lens is clean and the food is in focus",
-      "Take the photo from directly above the plate for best results"
+      "Take the photo from directly above for best results"
     ]
   };
 }
 
 export async function POST(request: NextRequest) {
-  // Generate unique request ID for tracking
-  const requestId = Math.random().toString(36).substring(2, 10);
+  // Generate a unique request ID for tracking
+  const requestId = crypto.randomUUID().substring(0, 8);
   
   // Track active requests and start time
   activeRequests++;
@@ -1769,7 +1819,7 @@ export async function POST(request: NextRequest) {
     console.log(`⏱️ [${requestId}] Time remaining: ${timeRemaining}ms`);
 
     // Extract base64 image with error handling 
-    let base64Image: string;
+    let base64Image;
     try {
       base64Image = await extractBase64Image(formData);
       console.log(`[${requestId}] Successfully extracted base64 image (${base64Image.length} chars)`);
@@ -1794,13 +1844,14 @@ export async function POST(request: NextRequest) {
         }, { status: 200 });
       }
       
-    } catch (imageError: any) {
-      console.error(`❌ [${requestId}] Image Error:`, imageError.message);
+    } catch (imageError: unknown) {
+      const errorMessage = imageError instanceof Error ? imageError.message : String(imageError);
+      console.error(`❌ [${requestId}] Image Error:`, errorMessage);
       return NextResponse.json({
         status: 'error',
         success: false,
         fallback: true,
-        message: `Failed to process image: ${imageError.message}`,
+        message: `Failed to process image: ${errorMessage}`,
         ingredients: [],
         description: '',
         nutrition: null,
@@ -1808,7 +1859,7 @@ export async function POST(request: NextRequest) {
       }, { status: 400 });
     }
 
-    // Set up global timeout promise to ensure we return before serverless timeout (9.5s)
+    // Set up global timeout promise to ensure we return before serverless timeout
     const globalTimeoutMs = Math.min(9500, timeRemaining);
     console.log(`⏱️ [${requestId}] Setting global timeout: ${globalTimeoutMs}ms`);
     
@@ -1820,11 +1871,12 @@ export async function POST(request: NextRequest) {
     }, globalTimeoutMs);
 
     // Run API calls in parallel with Promise.allSettled for partial results
-    let gptAnalysis: any = null;
-    let nutritionixData: any = null;
+    let gptAnalysis = null;
+    let nutritionixData = null;
     let analysisFailed = false;
     let failureReason = '';
     let isTimeout = false;
+    let fallbackMessage = '';
 
     try {
       // Start both API calls in parallel
@@ -1832,8 +1884,7 @@ export async function POST(request: NextRequest) {
         // Analyze with GPT-4 Vision
         analyzeWithGPT4Vision(base64Image, healthGoal, requestId),
         
-        // Get nutrition data from Nutritionix (commented to avoid breaking if not implemented)
-        // getNutritionData(["placeholder"], requestId)
+        // Get nutrition data from Nutritionix (if implemented)
         Promise.resolve([]) // Placeholder to avoid breaking the array structure
       ]);
       
@@ -1923,9 +1974,8 @@ export async function POST(request: NextRequest) {
     if (!analysisFailed && hasLowConfidence) {
       console.warn(`⚠️ [${requestId}] Analysis has low confidence: ${gptAnalysis.confidence || 'unknown'}`);
       gptAnalysis.lowConfidence = true;
-      gptAnalysis.fallbackMessage = gptAnalysis.fallbackMessage || 
-        "We did our best! This photo may be unclear, but here's what we could infer. Results might be limited.";
-        
+      fallbackMessage = "We did our best! This photo may be unclear, but here's what we could infer. Results might be limited.";
+      
       // We don't mark as failed, but we do set a warning flag
       failureReason = 'low_confidence';
     }
@@ -1947,72 +1997,102 @@ export async function POST(request: NextRequest) {
       };
       
       // Add success/fallback flags for frontend consistency
-      response.success = !analysisFailed;
-      response.fallback = analysisFailed;
-      response.status = analysisFailed ? 'fallback' : (hasLowConfidence ? 'low_confidence' : 'success');
+      response.success = !analysisFailed; 
+      response.status = analysisFailed ? 'error' : (hasLowConfidence ? 'warning' : 'success');
       
-      if (isTimeout) {
-        response.message = 'Analysis took too long. We\'ve returned the best results we could get.';
-        response.partialResults = true;
-      } else if (analysisFailed || hasLowConfidence) {
-        response.message = gptAnalysis.fallbackMessage || 'Analysis could not be completed. Please try again with a clearer image.';
+      // Never return fallback=true if we have ingredients, even with low confidence
+      response.fallback = analysisFailed && (!response.detailedIngredients || response.detailedIngredients.length === 0);
+      response.lowConfidence = hasLowConfidence || (gptAnalysis.confidence && gptAnalysis.confidence < 5);
+      
+      // Use any fallback message if available, or fallback to a default message
+      if (fallbackMessage) {
+        response.message = fallbackMessage;
+      } else if (gptAnalysis.fallbackMessage) {
+        response.message = gptAnalysis.fallbackMessage;
+      } else if (hasLowConfidence) {
+        response.message = "This photo may be unclear, but we've provided our best analysis. Results might be limited.";
       }
       
-    } catch (formatError) {
-      console.error(`❌ [${requestId}] Formatting Error:`, formatError);
+      // Always ensure we have at least one detailedIngredient even in partial failures
+      if (!response.detailedIngredients || response.detailedIngredients.length === 0) {
+        if (response.ingredients && response.ingredients.length > 0) {
+          // Convert plain ingredients to detailed ones
+          response.detailedIngredients = response.ingredients.map((name: string) => ({
+            name,
+            category: 'food item',
+            confidence: 3.0,
+            confidenceEmoji: '🔴' // Low confidence
+          }));
+        } else {
+          // Last resort - provide at least one placeholder
+          response.detailedIngredients = [{
+            name: 'unidentified food item',
+            category: 'unknown',
+            confidence: 1.0,
+            confidenceEmoji: '🔴'
+          }];
+        }
+      }
       
-      // Last resort fallback if even formatting fails
+      console.log(`✅ [${requestId}] Analysis complete: success=${response.success}, status=${response.status}, fallback=${response.fallback}, lowConfidence=${response.lowConfidence}`);
+    } catch (formatError) {
+      console.error(`❌ [${requestId}] Error formatting response:`, formatError);
+      
+      // Create a minimal response if formatting failed
       response = {
+        description: gptAnalysis.description || 'We had trouble analyzing this meal',
+        ingredients: gptAnalysis.ingredientList || [],
+        detailedIngredients: gptAnalysis.detailedIngredients || [{
+          name: 'unidentified food item',
+          category: 'unknown',
+          confidence: 1.0,
+          confidenceEmoji: '🔴'
+        }],
+        nutrients: [],
+        feedback: [],
+        suggestions: [],
+        goalName: formatGoalName(healthGoal),
+        rawGoal: healthGoal,
         status: 'error',
         success: false,
-        fallback: true,
-        message: 'Failed to format analysis results. Please try again.',
-        description: 'Analysis failed',
-        ingredients: [],
-        nutrients: [],
-        feedback: ['Please try again with a clearer image.'],
-        suggestions: ['Ensure the image is well-lit and in focus.'],
-        goalScore: 0,
-        goalName: formatGoalName(healthGoal),
-        _meta: { 
+        fallback: !gptAnalysis.detailedIngredients || gptAnalysis.detailedIngredients.length === 0,
+        lowConfidence: true,
+        message: 'We encountered an error preparing your analysis results, but we have some partial information.',
+        _meta: {
           requestId,
-          error: formatError instanceof Error ? formatError.message : 'Unknown formatting error',
-          analysisFailed: true,
-          failureReason: 'formatting_error',
-          isTimeout
+          error: 'formatting_error',
+          analysisFailed: true
         }
       };
     }
-
-    console.timeEnd(`⏱️ [${requestId}] analyzeImage`);
-    console.log(`✅ [${requestId}] Analysis complete - ${analysisFailed ? 'Using fallback' : 'Success'}`);
     
-    // Return the response with appropriate status code - always 200 to avoid frontend errors
+    console.timeEnd(`⏱️ [${requestId}] analyzeImage`);
+    
+    // Always return a 200 status to prevent frontend errors
+    // The actual success/error state is in the response body
     return NextResponse.json(response, { status: 200 });
     
-  } catch (error: unknown) {
-    // Ultimate fallback - this should never happen if our error handling is complete
-    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-    console.error(`❌ [${requestId}] Unhandled Error:`, errorMessage);
-    
-    // Clean up tracking data
+  } catch (error) {
+    // Final catch-all error handler
     requestStartTimes.delete(requestId);
     activeRequests--;
     
-    // Return a friendly error
+    console.error(`❌ [${requestId}] Unhandled error in route handler:`, error);
+    console.timeEnd(`⏱️ [${requestId}] analyzeImage`);
+    
     return NextResponse.json({
       status: 'error',
       success: false,
       fallback: true,
-      message: 'Sorry, we encountered an unexpected error. Please try again later.',
+      message: 'The server encountered an unexpected error. Please try again.',
       ingredients: [],
-      description: 'Analysis failed',
+      description: '',
       nutrition: null,
       _meta: { 
-        requestId, 
-        error: errorMessage,
-        unhandled: true
+        requestId,
+        error: 'unhandled_exception',
+        errorMessage: error instanceof Error ? error.message : String(error)
       }
-    }, { status: 200 }); // Always return 200 to prevent frontend crashes
+    }, { status: 200 }); // Still return 200 to avoid frontend errors
   }
 }
