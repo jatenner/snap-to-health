@@ -13,6 +13,13 @@ interface Nutrient {
   isHighlight: boolean;
 }
 
+interface DetailedIngredient {
+  name: string;
+  category: string;
+  confidence: number;
+  confidenceEmoji: string;
+}
+
 interface AnalysisResult {
   description: string;
   nutrients: Nutrient[];
@@ -27,7 +34,60 @@ interface AnalysisResult {
   rawGoal?: string;
   partial?: boolean;
   missing?: string;
+  confidence?: number;
+  detailedIngredients?: DetailedIngredient[];
+  reasoningLogs?: any[];
 }
+
+// Component to display ingredients with confidence levels
+const IngredientsList = ({ ingredients }: { ingredients: DetailedIngredient[] }) => {
+  const [showConfidenceInfo, setShowConfidenceInfo] = useState(false);
+  
+  return (
+    <div className="mt-4">
+      <div className="flex items-center mb-2">
+        <h3 className="text-base font-medium text-gray-800">Identified Ingredients</h3>
+        <button 
+          className="ml-2 text-primary hover:text-secondary transition-colors"
+          onClick={() => setShowConfidenceInfo(!showConfidenceInfo)}
+          aria-label="Show confidence information"
+        >
+          <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+          </svg>
+        </button>
+      </div>
+      
+      {showConfidenceInfo && (
+        <div className="bg-slate-50 p-3 rounded-md mb-3 text-xs text-slate-700 border border-slate-200">
+          <p className="mb-1 font-medium">Confidence Indicators:</p>
+          <ul className="space-y-1">
+            <li className="flex items-center"><span className="mr-2">🟢</span> High confidence (8-10)</li>
+            <li className="flex items-center"><span className="mr-2">🟡</span> Medium confidence (5-7)</li>
+            <li className="flex items-center"><span className="mr-2">🔴</span> Low confidence (1-4)</li>
+          </ul>
+        </div>
+      )}
+      
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+        {ingredients.map((ingredient, index) => (
+          <div 
+            key={index} 
+            className="flex items-center py-1.5 px-2.5 bg-white rounded-md border border-gray-200 shadow-sm"
+          >
+            <span className="mr-2">{ingredient.confidenceEmoji}</span>
+            <span className="flex-1 text-sm">{ingredient.name}</span>
+            {ingredient.category && ingredient.category !== 'unknown' && (
+              <span className="text-xs bg-gray-100 text-gray-600 px-1.5 py-0.5 rounded-full">
+                {ingredient.category}
+              </span>
+            )}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+};
 
 export default function MealAnalysisPage() {
   const [analysisResult, setAnalysisResult] = useState<AnalysisResult | null>(null);
@@ -524,6 +584,19 @@ export default function MealAnalysisPage() {
               </div>
             )}
           </div>
+          
+          {/* Ingredients List */}
+          {analysisResult?.detailedIngredients && analysisResult.detailedIngredients.length > 0 && (
+            <div className="mb-6">
+              <h2 className="font-bold text-navy text-lg mb-3 flex items-center">
+                <span className="text-teal-600 mr-2">🧪</span>
+                Identified Ingredients
+              </h2>
+              <div className="bg-white border border-slate/20 rounded-xl p-4">
+                <IngredientsList ingredients={analysisResult.detailedIngredients} />
+              </div>
+            </div>
+          )}
           
           {/* Partial result notification */}
           {isPartialResult && (
