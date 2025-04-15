@@ -10,6 +10,13 @@ interface Nutrient {
   amount?: number;
 }
 
+interface DetailedIngredient {
+  name: string;
+  category: string;
+  confidence: number;
+  confidenceEmoji?: string;
+}
+
 interface AnalysisResult {
   description?: string;
   nutrients?: Nutrient[];
@@ -22,6 +29,11 @@ interface AnalysisResult {
   positiveFoodFactors?: string[];
   negativeFoodFactors?: string[];
   rawGoal?: string;
+  detailedIngredients?: DetailedIngredient[];
+  reasoningLogs?: any[];
+  fallback?: boolean;
+  lowConfidence?: boolean;
+  message?: string;
 }
 
 interface AnalysisCardProps {
@@ -316,13 +328,20 @@ const getNutrientBadgeStyle = (nutrient: Nutrient, goalName: string = '') => {
 
 // Tooltip component for nutrients
 const Tooltip = ({ text, children }: { text: string, children: React.ReactNode }) => {
+  const [isVisible, setIsVisible] = useState(false);
+  
   return (
-    <div className="relative group">
+    <div className="relative inline-block"
+      onMouseEnter={() => setIsVisible(true)}
+      onMouseLeave={() => setIsVisible(false)}
+      onTouchStart={() => setIsVisible(prev => !prev)}>
       {children}
-      <div className="absolute bottom-full left-1/2 transform -translate-x-1/2 mb-2 px-3 py-2 bg-gray-800 text-white text-xs rounded-lg opacity-0 group-hover:opacity-100 transition-opacity duration-300 w-48 z-10 pointer-events-none">
-        {text}
-        <div className="absolute top-full left-1/2 transform -translate-x-1/2 border-4 border-transparent border-t-gray-800"></div>
-      </div>
+      {isVisible && (
+        <div className="absolute left-0 bottom-full mb-2 w-56 p-2 bg-gray-800 text-white text-xs rounded-md shadow-lg z-10">
+          {text}
+          <div className="arrow absolute -bottom-1 left-2 w-2 h-2 bg-gray-800 transform rotate-45"></div>
+        </div>
+      )}
     </div>
   );
 };
@@ -407,6 +426,98 @@ const getGoalIcon = (goalName?: string) => {
   return "🌿";
 };
 
+// Helper function to get confidence emoji based on confidence score
+const getConfidenceEmoji = (confidence: number): string => {
+  if (confidence >= 8) return '🟢'; // High confidence
+  if (confidence >= 5) return '🟡'; // Medium confidence
+  return '🔴'; // Low confidence
+};
+
+// Helper function to get confidence label
+const getConfidenceLabel = (confidence: number): string => {
+  if (confidence >= 8) return 'High confidence';
+  if (confidence >= 5) return 'Medium confidence';
+  return 'Low confidence';
+};
+
+// Format confidence score as a percentage
+const formatConfidence = (confidence: number): string => {
+  return `${Math.round(confidence * 10)}%`;
+};
+
+// Tooltip explaining what confidence means
+const getConfidenceTooltip = (confidence: number): string => {
+  if (confidence >= 8) {
+    return 'High confidence: This ingredient is clearly visible in the image.';
+  } else if (confidence >= 5) {
+    return 'Medium confidence: This ingredient is likely present based on visible characteristics.';
+  } else {
+    return 'Low confidence: This is our best guess based on limited visual information.';
+  }
+};
+
+// Ingredient component with confidence visualization
+const IngredientItem = ({ ingredient }: { ingredient: DetailedIngredient }) => {
+  // Calculate confidence emoji if not already provided
+  const emoji = ingredient.confidenceEmoji || getConfidenceEmoji(ingredient.confidence);
+  const tooltipText = getConfidenceTooltip(ingredient.confidence);
+  
+  return (
+    <div className="flex items-center mb-2">
+      <Tooltip text={tooltipText}>
+        <span className="mr-2 text-lg" aria-hidden="true">{emoji}</span>
+      </Tooltip>
+      <div className="flex-1">
+        <div className="flex justify-between">
+          <span className="font-medium capitalize">{ingredient.name}</span>
+          <span className="text-sm text-gray-600">{formatConfidence(ingredient.confidence)}</span>
+        </div>
+        <div className="text-xs text-gray-500 capitalize">{ingredient.category}</div>
+      </div>
+    </div>
+  );
+};
+
+// Component to display the ingredients section
+const IngredientsSection = ({ ingredients }: { ingredients: DetailedIngredient[] }) => {
+  if (!ingredients || ingredients.length === 0) {
+    return null;
+  }
+
+  return (
+    <div className="mt-4 p-4 bg-gray-50 rounded-lg">
+      <h3 className="text-lg font-semibold mb-3 text-gray-800">Identified Ingredients</h3>
+      
+      {ingredients.length > 0 ? (
+        <div className="space-y-1">
+          {ingredients.map((ingredient, index) => (
+            <IngredientItem key={index} ingredient={ingredient} />
+          ))}
+        </div>
+      ) : (
+        <p className="text-gray-600 text-sm">No ingredients could be identified.</p>
+      )}
+      
+      <div className="mt-3 pt-2 border-t border-gray-200">
+        <div className="flex justify-between text-xs text-gray-500">
+          <div className="flex items-center">
+            <span className="mr-1">🟢</span>
+            <span>High confidence</span>
+          </div>
+          <div className="flex items-center">
+            <span className="mr-1">🟡</span>
+            <span>Medium confidence</span>
+          </div>
+          <div className="flex items-center">
+            <span className="mr-1">🔴</span>
+            <span>Low confidence</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
 const AnalysisCard: React.FC<AnalysisCardProps> = ({ result, previewUrl, isLoading }) => {
   const { 
     description, 
@@ -419,7 +530,12 @@ const AnalysisCard: React.FC<AnalysisCardProps> = ({ result, previewUrl, isLoadi
     scoreExplanation = '',
     positiveFoodFactors = [],
     negativeFoodFactors = [],
-    rawGoal
+    rawGoal,
+    detailedIngredients = [],
+    reasoningLogs = [],
+    fallback = false,
+    lowConfidence = false,
+    message = ''
   } = result;
   
   // Animation state for score progress bars
@@ -613,6 +729,41 @@ const AnalysisCard: React.FC<AnalysisCardProps> = ({ result, previewUrl, isLoadi
                 </div>
               );
             })()}
+          </div>
+        )}
+
+        {/* Ingredients Section */}
+        {detailedIngredients && detailedIngredients.length > 0 && (
+          <IngredientsSection ingredients={detailedIngredients} />
+        )}
+
+        {/* Low confidence warning */}
+        {lowConfidence && (
+          <div className="px-4 py-3 bg-yellow-50 border-t border-yellow-100 text-yellow-800 text-sm">
+            <div className="flex items-start">
+              <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 mr-2 text-yellow-500 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+              </svg>
+              <div>
+                <p className="font-medium">Low confidence analysis</p>
+                <p>{message || "The image may be unclear, but we've provided our best analysis. Results might be limited."}</p>
+              </div>
+            </div>
+          </div>
+        )}
+        
+        {/* Fallback message */}
+        {fallback && (
+          <div className="px-4 py-3 bg-red-50 border-t border-red-100 text-red-800 text-sm">
+            <div className="flex items-start">
+              <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 mr-2 text-red-500 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+              </svg>
+              <div>
+                <p className="font-medium">Analysis issue</p>
+                <p>{message || "We had trouble analyzing your meal. Please try again with a clearer photo."}</p>
+              </div>
+            </div>
           </div>
         )}
       </div>
