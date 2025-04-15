@@ -268,6 +268,19 @@ export default function UploadPage() {
       
       const analysisResult = response.data;
       
+      // Check for partial results
+      if (analysisResult.partial) {
+        console.log(`Received partial results. Missing: ${analysisResult.missing}`);
+        
+        if (analysisResult.missing === 'nutrition') {
+          toast.loading('Limited nutrition data available...', { id: analyzeToast });
+          setErrorMessage('We were able to analyze your meal but couldn\'t fetch complete nutrition data. Results may be limited.');
+        } else if (analysisResult.missing === 'gpt') {
+          toast.loading('Basic analysis only...', { id: analyzeToast });
+          setErrorMessage('We identified ingredients but couldn\'t complete full analysis. Results may be limited.');
+        }
+      }
+      
       // If user is signed in and wants to save the meal
       let imageUrl = '';
       let savedMealId = '';
@@ -331,7 +344,11 @@ export default function UploadPage() {
           // Continue with analysis even if save fails
         }
       } else {
-        toast.success('Analysis completed successfully!', { id: analyzeToast });
+        if (analysisResult.partial) {
+          toast.success('Analysis completed with limited data!', { id: analyzeToast });
+        } else {
+          toast.success('Analysis completed successfully!', { id: analyzeToast });
+        }
       }
       
       // Store analysis result and metadata in sessionStorage
@@ -379,18 +396,21 @@ export default function UploadPage() {
         errorMsg = error.message;
       }
       
-      setErrorMessage(errorMsg);
-      
       // Handle specific error types with user-friendly messages
       if (error.response?.status === 504 || error.message.includes('timeout') || errorMsg.includes('timed out')) {
-        toast.error('Request timed out. Please try again with a smaller image.', { id: analyzeToast });
+        errorMsg = 'This image took too long to analyze. Please try again or use a different photo.';
+        toast.error(errorMsg, { id: analyzeToast });
       } else if (error.response?.status === 413 || errorMsg.includes('too large')) {
-        toast.error('Image too large. Please use a smaller image (under 5MB).', { id: analyzeToast });
+        errorMsg = 'Image too large. Please use a smaller image (under 5MB).';
+        toast.error(errorMsg, { id: analyzeToast });
       } else if (error.response?.status === 429 || errorMsg.includes('Too many requests')) {
-        toast.error('Rate limit reached. Please try again in a few minutes.', { id: analyzeToast });
+        errorMsg = 'Rate limit reached. Please try again in a few minutes.';
+        toast.error(errorMsg, { id: analyzeToast });
       } else {
         toast.error(`Failed to analyze image: ${errorMsg}`, { id: analyzeToast });
       }
+      
+      setErrorMessage(errorMsg);
       
       // Reset analysis state
       setIsAnalyzing(false);

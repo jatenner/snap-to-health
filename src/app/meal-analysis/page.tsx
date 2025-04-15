@@ -25,6 +25,8 @@ interface AnalysisResult {
   positiveFoodFactors?: string[];
   negativeFoodFactors?: string[];
   rawGoal?: string;
+  partial?: boolean;
+  missing?: string;
 }
 
 export default function MealAnalysisPage() {
@@ -33,6 +35,8 @@ export default function MealAnalysisPage() {
   const [loading, setLoading] = useState(true);
   const [loadingStage, setLoadingStage] = useState<string>('initializing');
   const [error, setError] = useState<string | null>(null);
+  const [isPartialResult, setIsPartialResult] = useState(false);
+  const [missingDataType, setMissingDataType] = useState<string | null>(null);
   const router = useRouter();
   const { currentUser } = useAuth();
 
@@ -70,6 +74,12 @@ export default function MealAnalysisPage() {
             !('nutrients' in parsedResult) || 
             !Array.isArray(parsedResult.nutrients)) {
           throw new Error('Invalid or corrupted analysis data');
+        }
+        
+        // Check if this is a partial result
+        if (parsedResult.partial) {
+          setIsPartialResult(true);
+          setMissingDataType(parsedResult.missing || null);
         }
         
         // Set preview image first for perceived performance
@@ -514,6 +524,27 @@ export default function MealAnalysisPage() {
               </div>
             )}
           </div>
+          
+          {/* Partial result notification */}
+          {isPartialResult && (
+            <div className="mb-4 bg-amber-50 border border-amber-300 rounded-lg p-3 sm:p-4 text-sm sm:text-base text-amber-800">
+              <div className="flex items-start">
+                <svg className="w-5 h-5 mr-2 mt-0.5 flex-shrink-0" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor">
+                  <path fillRule="evenodd" d="M8.485 2.495c.673-1.167 2.357-1.167 3.03 0l6.28 10.875c.673 1.167-.17 2.625-1.516 2.625H3.72c-1.347 0-2.189-1.458-1.515-2.625L8.485 2.495zM10 5a.75.75 0 01.75.75v4.5a.75.75 0 01-1.5 0v-4.5A.75.75 0 0110 5zm0 10a1 1 0 100-2 1 1 0 000 2z" clipRule="evenodd" />
+                </svg>
+                <div>
+                  <p className="font-medium">Limited Analysis Available</p>
+                  <p className="mt-1">
+                    {missingDataType === 'nutrition' ? 
+                      'We were able to analyze your meal but couldn\'t fetch complete nutrition data. Some details may be limited.' : 
+                      missingDataType === 'gpt' ? 
+                      'We identified ingredients but couldn\'t complete full analysis. Some insights may be limited.' : 
+                      'Some data couldn\'t be processed completely. Results may be limited.'}
+                  </p>
+                </div>
+              </div>
+            </div>
+          )}
           
           {/* Action Buttons */}
           <div className="flex flex-col sm:flex-row gap-3 mt-8">
