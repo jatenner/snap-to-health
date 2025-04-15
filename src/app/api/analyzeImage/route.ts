@@ -666,7 +666,24 @@ function formatResponse(
   gptAnalysis: any,
   nutritionData: any[],
   healthGoal: string
-) {
+): {
+  description: string;
+  nutrients: any[];
+  feedback: string[];
+  suggestions: string[];
+  goalScore?: number;
+  goalName: string;
+  scoreExplanation?: string;
+  positiveFoodFactors?: string[];
+  negativeFoodFactors?: string[];
+  rawGoal: string;
+  // Add new properties to match what we're setting in the POST handler
+  status?: string;
+  success?: boolean;
+  fallback?: boolean;
+  message?: string;
+  _meta?: any;
+} {
   // Extend the supportive nutrients map with more detailed, goal-specific nutrients
   const nutrientSupportMap: Record<string, string[]> = {
     'Sleep': ['magnesium', 'calcium', 'potassium', 'tryptophan', 'vitamin b6', 'melatonin', 'fiber'],
@@ -907,18 +924,23 @@ function formatResponse(
   // Format the goal name for display
   const goalName = formatGoalName(healthGoal);
   
-  // Final response object with all required fields
+  // Now return the object with all properties
   return {
     description: gptAnalysis.description || 'A meal containing various ingredients and nutrients.',
     nutrients,
     feedback: gptAnalysis.feedback || ['Try to eat a balanced meal with protein, healthy fats, and complex carbohydrates.'],
     suggestions: gptAnalysis.suggestions || ['Consider adding more vegetables to your next meal.'],
     goalScore,
-    goalName,
+    goalName: formatGoalName(healthGoal),
     scoreExplanation,
     positiveFoodFactors,
     negativeFoodFactors,
-    rawGoal: healthGoal
+    rawGoal: healthGoal,
+    status: 'success',
+    success: true,
+    fallback: false,
+    message: '',
+    _meta: undefined
   };
 }
 
@@ -1283,31 +1305,61 @@ export async function POST(request: NextRequest) {
   console.time(`⏱️ [${requestId}] analyzeImage`);
   console.log(`🔄 [${requestId}] New request (${activeRequests} concurrent requests)`);
   
-  // Check if we've exceeded concurrent request limit
-  if (activeRequests > MAX_CONCURRENT_REQUESTS) {
-    requestStartTimes.delete(requestId);
-    activeRequests--;
-    console.log(`⚠️ [${requestId}] Request rejected - concurrent limit reached (${activeRequests}/${MAX_CONCURRENT_REQUESTS})`);
-    return NextResponse.json(
-      { 
-        success: false, 
-        error: 'Server is busy processing too many requests. Please try again in a moment.',
-        _meta: { requestId, concurrentRequests: activeRequests }
-      },
-      { status: 429 }
-    );
-  }
-
   try {
+    // Check if we've exceeded concurrent request limit
+    if (activeRequests > MAX_CONCURRENT_REQUESTS) {
+      requestStartTimes.delete(requestId);
+      activeRequests--;
+      console.log(`⚠️ [${requestId}] Request rejected - concurrent limit reached (${activeRequests}/${MAX_CONCURRENT_REQUESTS})`);
+      return NextResponse.json(
+        { 
+          status: 'error',
+          success: false, 
+          fallback: true,
+          message: 'Server is busy processing too many requests. Please try again in a moment.',
+          ingredients: [],
+          description: '',
+          nutrition: null,
+          _meta: { requestId, concurrentRequests: activeRequests }
+        },
+        { status: 429 }
+      );
+    }
+
     // Check content type of request
     const contentType = request.headers.get('content-type') || '';
     if (!contentType.includes('multipart/form-data')) {
-      throw new Error(`Unsupported content type: ${contentType}`);
+      return NextResponse.json({
+        status: 'error',
+        success: false,
+        fallback: true,
+        message: `Unsupported content type: ${contentType}. Please use multipart/form-data.`,
+        ingredients: [],
+        description: '',
+        nutrition: null,
+        _meta: { requestId }
+      }, { status: 400 });
     }
 
-    // Parse form data
-    const formData = await request.formData();
-    const healthGoal = formData.get('healthGoal') as string;
+    // Parse form data with error handling
+    let formData;
+    try {
+      formData = await request.formData();
+    } catch (formDataError) {
+      console.error(`❌ [${requestId}] FormData Error:`, formDataError);
+      return NextResponse.json({
+        status: 'error',
+        success: false,
+        fallback: true,
+        message: 'Failed to parse form data. Please check your request format.',
+        ingredients: [],
+        description: '',
+        nutrition: null,
+        _meta: { requestId }
+      }, { status: 400 });
+    }
+    
+    const healthGoal = (formData.get('healthGoal') as string) || 'General Health';
 
     // Calculate time remaining until serverless function timeout (9.5s safety margin)
     const MAX_EXECUTION_TIME = 10 * 1000; // 10 seconds for Vercel
@@ -1324,90 +1376,224 @@ export async function POST(request: NextRequest) {
       }, Math.max(timeRemaining, 0));
     });
 
-    // Extract base64 image 
+    // Extract base64 image with error handling 
     let base64Image: string;
     try {
       base64Image = await extractBase64Image(formData);
       console.log(`[${requestId}] Successfully extracted base64 image (${base64Image.length} chars)`);
-    } catch (error: any) {
-      console.error(`[${requestId}] Image extraction failed:`, error.message);
-      throw new Error(`Image extraction failed: ${error.message}`);
+    } catch (imageError: any) {
+      console.error(`❌ [${requestId}] Image Error:`, imageError.message);
+      return NextResponse.json({
+        status: 'error',
+        success: false,
+        fallback: true,
+        message: `Failed to process image: ${imageError.message}`,
+        ingredients: [],
+        description: '',
+        nutrition: null,
+        _meta: { requestId }
+      }, { status: 400 });
     }
 
-    // Run API calls in parallel with Promise.allSettled
-    const results = await Promise.race([
-      Promise.allSettled([
-        // Analyze with GPT-4 Vision
-        analyzeWithGPT4Vision(base64Image, healthGoal, requestId),
-        
-        // Get nutrition data from Nutritionix (if applicable)
-        // Include your nutritionix calls here if needed
-      ]),
-      timeoutPromise
-    ]);
+    // Run API calls in parallel with Promise.allSettled and proper error handling
+    let results;
+    try {
+      results = await Promise.race([
+        Promise.allSettled([
+          // Analyze with GPT-4 Vision
+          analyzeWithGPT4Vision(base64Image, healthGoal, requestId),
+          
+          // Get nutrition data from Nutritionix (disabled for now to simplify)
+          // getNutritionData(["dummy"]) // Placeholder to avoid breaking the array structure
+        ]),
+        timeoutPromise
+      ]);
+    } catch (timeoutError) {
+      console.error(`❌ [${requestId}] Timeout Error:`, timeoutError);
+      // Clean up tracking data
+      requestStartTimes.delete(requestId);
+      activeRequests--;
+      
+      return NextResponse.json({
+        status: 'timeout',
+        success: false,
+        fallback: true,
+        message: 'Analysis took too long. Please try a clearer image or try again later.',
+        ingredients: [],
+        description: 'Analysis timed out',
+        nutrition: null,
+        _meta: { requestId, error: 'Timeout exceeded' }
+      }, { status: 408 });
+    }
 
     // Clean up tracking data
     requestStartTimes.delete(requestId);
     activeRequests--;
 
-    // Process the results
+    // Safe defaults in case processing fails
+    let gptAnalysis: any = null;
+    let nutritionixData: any = null;
+    let analysisFailed = false;
+    let failureReason = '';
+
+    // Process the results with comprehensive error handling
     if (Array.isArray(results)) {
       const [gptResult] = results;
       
-      // Check GPT result
-      let gptAnalysis = null;
-      let nutritionixData = null;
-      let partialSuccess = false;
-      let errorMessages = [];
-
-      // Process GPT result
-      if (gptResult.status === 'fulfilled') {
-        gptAnalysis = gptResult.value;
-        
-        // Validate the GPT analysis
-        const { isValid, reason } = isValidGptAnalysis(gptAnalysis);
-        
-        if (!isValid) {
-          console.log(`⚠️ [${requestId}] GPT analysis invalid: ${reason}`);
-          // Create a fallback response with friendly messaging
-          gptAnalysis = createFallbackResponse(reason || 'unknown', healthGoal, requestId);
-          partialSuccess = true; // Still return a response, just with fallback content
+      // Process GPT result with safe fallbacks
+      if (gptResult && gptResult.status === 'fulfilled') {
+        if (gptResult.value) {
+          gptAnalysis = gptResult.value;
           
-          console.log(`✅ [${requestId}] Created fallback response due to unclear image`);
+          // Validate the GPT analysis
+          const { isValid, reason } = isValidGptAnalysis(gptAnalysis);
+          
+          if (!isValid) {
+            console.log(`⚠️ [${requestId}] GPT analysis invalid: ${reason}`);
+            // Create a fallback response with friendly messaging
+            gptAnalysis = createFallbackResponse(reason || 'unknown', healthGoal, requestId);
+            analysisFailed = true;
+            failureReason = reason || 'unknown';
+            
+            console.log(`✅ [${requestId}] Created fallback response due to unclear image`);
+          } else {
+            console.log(`✅ [${requestId}] GPT analysis valid`);
+          }
         } else {
-          console.log(`[${requestId}] GPT analysis valid`);
+          console.error(`❌ [${requestId}] GPT Error: Empty response received`);
+          gptAnalysis = createFallbackResponse('empty_response', healthGoal, requestId);
+          analysisFailed = true;
+          failureReason = 'empty_response';
         }
+      } else if (gptResult) {
+        // Handle rejected promise case
+        const errorMessage = gptResult.reason instanceof Error ? 
+          gptResult.reason.message : 
+          typeof gptResult.reason === 'string' ? 
+            gptResult.reason : 'Unknown GPT error';
+            
+        console.error(`❌ [${requestId}] GPT Error:`, errorMessage);
+        gptAnalysis = createFallbackResponse('api_error', healthGoal, requestId);
+        analysisFailed = true;
+        failureReason = 'api_error';
       } else {
-        console.error(`[${requestId}] GPT analysis error:`, gptResult.reason);
-        errorMessages.push(gptResult.reason instanceof Error ? gptResult.reason.message : gptResult.reason.toString());
+        console.error(`❌ [${requestId}] GPT Error: Invalid result structure`);
+        gptAnalysis = createFallbackResponse('api_error', healthGoal, requestId);
+        analysisFailed = true;
+        failureReason = 'invalid_structure';
       }
 
-      // Process nutrition data
-      if (results.length > 1 && results[1].status === 'fulfilled') {
+      // Process nutrition data if available (safely handle the second result)
+      if (results.length > 1 && results[1] && results[1].status === 'fulfilled') {
         nutritionixData = results[1].value;
-        console.log(`[${requestId}] Nutrition data fetched successfully`);
+        console.log(`✅ [${requestId}] Nutrition data fetched successfully`);
       } else {
-        console.warn(`[${requestId}] Nutrition data not available`);
+        console.warn(`⚠️ [${requestId}] Nutrition data not available`);
       }
     } else {
-      console.error(`[${requestId}] Unexpected results format:`, results);
-      throw new Error('Unexpected results format');
+      console.error(`❌ [${requestId}] Unexpected Error: Invalid results format`, results);
+      gptAnalysis = createFallbackResponse('unexpected_error', healthGoal, requestId);
+      analysisFailed = true;
+      failureReason = 'invalid_results_format';
     }
 
-    // Format the response
-    const response = formatResponse(gptAnalysis, nutritionixData, healthGoal);
+    // Always ensure we have valid gptAnalysis to avoid null references
+    if (!gptAnalysis) {
+      console.error(`❌ [${requestId}] Critical Error: Missing analysis result`);
+      gptAnalysis = createFallbackResponse('missing_analysis', healthGoal, requestId);
+      analysisFailed = true;
+      failureReason = 'missing_analysis';
+    }
 
-    // Return the response
-    return NextResponse.json(response, { status: 200 });
-  } catch (error) {
-    console.error(`[${requestId}] Error processing request:`, error);
+    // Format the response, with fallback handling for formatting errors
+    let response;
+    try {
+      response = formatResponse(gptAnalysis, nutritionixData || [], healthGoal);
+      
+      // Add meta information about the analysis result
+      response._meta = {
+        requestId,
+        analysisFailed,
+        failureReason,
+        processingTimeMs: Date.now() - (requestStartTimes.get(requestId) || Date.now())
+      };
+      
+      // Add success/fallback flags for frontend consistency
+      response.success = !analysisFailed;
+      response.fallback = analysisFailed;
+      response.status = analysisFailed ? 'fallback' : 'success';
+      
+      if (analysisFailed) {
+        response.message = gptAnalysis.fallbackMessage || 'Analysis could not be completed. Please try again with a clearer image.';
+      }
+      
+    } catch (formatError) {
+      console.error(`❌ [${requestId}] Formatting Error:`, formatError);
+      
+      // Last resort fallback if even formatting fails
+      response = {
+        status: 'error',
+        success: false,
+        fallback: true,
+        message: 'Failed to format analysis results. Please try again.',
+        description: 'Analysis failed',
+        ingredients: [],
+        nutrients: [],
+        feedback: ['Please try again with a clearer image.'],
+        suggestions: ['Ensure the image is well-lit and in focus.'],
+        goalScore: 0,
+        goalName: formatGoalName(healthGoal),
+        _meta: { 
+          requestId,
+          error: formatError instanceof Error ? formatError.message : 'Unknown formatting error',
+          analysisFailed: true,
+          failureReason: 'formatting_error'
+        }
+      };
+    }
+
+    console.timeEnd(`⏱️ [${requestId}] analyzeImage`);
+    console.log(`✅ [${requestId}] Analysis complete - ${analysisFailed ? 'Using fallback' : 'Success'}`);
+    
+    // Return the response with appropriate status code
+    return NextResponse.json(response, { 
+      status: analysisFailed ? 200 : 200 // Always return 200 to avoid frontend errors, handle failure in response body
+    });
+    
+  } catch (error: unknown) {
+    // Ultimate fallback - this should never happen if our error handling is complete
+    console.error(`❌ [${requestId}] Unhandled Error:`, error);
+    
+    // Clean up tracking data
+    requestStartTimes.delete(requestId);
+    activeRequests--;
+    
+    console.timeEnd(`⏱️ [${requestId}] analyzeImage`);
+    
+    // Safe error message extraction
+    const errorMessage = error instanceof Error ? error.message : 
+      (typeof error === 'string' ? error : 'Unknown error');
+    
     return NextResponse.json(
       {
+        status: 'error',
         success: false,
-        error: error instanceof Error ? error.message : error.toString(),
-        _meta: { requestId }
+        fallback: true,
+        message: 'An unexpected error occurred during analysis. Please try again.',
+        ingredients: [],
+        description: '',
+        nutrition: null,
+        goalName: 'Analysis Failed',
+        goalScore: 0,
+        feedback: ['Please try again with a different image.'],
+        suggestions: ['Make sure your image is clear and well-lit.'],
+        _meta: { 
+          requestId, 
+          error: errorMessage,
+          location: 'unhandled_exception'
+        }
       },
-      { status: 500 }
+      { status: 200 } // Return 200 even for errors to avoid frontend crashes
     );
   }
 }
