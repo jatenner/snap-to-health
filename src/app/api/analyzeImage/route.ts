@@ -1,6 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
 import axios from 'axios';
 
+// Request concurrency tracking
+let activeRequests = 0;
+const requestStartTimes = new Map<string, number>();
+
 // Function to extract base64 from FormData image
 async function extractBase64Image(formData: FormData): Promise<string> {
   console.time('extractBase64Image');
@@ -1124,14 +1128,23 @@ function formatGoalName(healthGoal: string): string {
 }
 
 export async function POST(request: NextRequest) {
-  console.log('🔥 Hit /api/analyzeImage - analysis started');
-  console.time('⏱️ analyzeImage');  // Start global performance timer
+  // Generate a unique request ID for tracking concurrent requests
+  const requestId = `req_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
+  
+  // Track request concurrency
+  activeRequests++;
+  requestStartTimes.set(requestId, Date.now());
+  
+  console.log(`🔥 [${requestId}] Hit /api/analyzeImage - analysis started (${activeRequests} active requests)`);
+  console.time(`⏱️ [${requestId}] analyzeImage`);  // Start global performance timer
   
   try {
     // Check content type
     const contentType = request.headers.get('content-type') || '';
     if (!contentType.includes('multipart/form-data')) {
-      console.timeEnd('⏱️ analyzeImage');
+      activeRequests--;
+      console.log(`⚠️ [${requestId}] Invalid content type (${activeRequests} active requests remaining)`);
+      console.timeEnd(`⏱️ [${requestId}] analyzeImage`);
       return NextResponse.json({ 
         success: false, 
         error: 'Content type must be multipart/form-data' 
@@ -1140,53 +1153,70 @@ export async function POST(request: NextRequest) {
     
     // Parse form data
     const formData = await request.formData();
-    console.log('Form data keys:', Array.from(formData.keys()));
+    console.log(`📦 [${requestId}] Form data keys:`, Array.from(formData.keys()));
     
     // Extract image file
     const imageFile = formData.get('image') as File;
     const healthGoal = formData.get('healthGoal') as string || 'Improve overall health';
     
     if (!imageFile) {
-      console.timeEnd('⏱️ analyzeImage');
+      activeRequests--;
+      console.log(`⚠️ [${requestId}] No image provided (${activeRequests} active requests remaining)`);
+      console.timeEnd(`⏱️ [${requestId}] analyzeImage`);
       return NextResponse.json({ 
         success: false, 
         error: 'No image file provided' 
       }, { status: 400 });
     }
     
-    console.log('Received image:', imageFile.name, 'type:', imageFile.type, 'size:', imageFile.size);
-    console.log('Health goal:', healthGoal);
+    console.log(`📸 [${requestId}] Received image:`, imageFile.name, 'type:', imageFile.type, 'size:', imageFile.size);
+    console.log(`🎯 [${requestId}] Health goal:`, healthGoal);
+    
+    // Calculate time remaining until 10s Vercel timeout
+    const timeElapsed = Date.now() - requestStartTimes.get(requestId)!;
+    const timeRemaining = 10000 - timeElapsed;
+    console.log(`⏲️ [${requestId}] ${timeElapsed}ms elapsed, ${timeRemaining}ms remaining until serverless timeout`);
     
     // Convert image to base64
     let base64Image;
     try {
       base64Image = await extractBase64Image(formData);
       if (!base64Image) {
-        console.timeEnd('⏱️ analyzeImage');
+        activeRequests--;
+        console.log(`⚠️ [${requestId}] Failed to extract image (${activeRequests} active requests remaining)`);
+        console.timeEnd(`⏱️ [${requestId}] analyzeImage`);
         return NextResponse.json({ 
           success: false, 
           error: 'Failed to extract image' 
         }, { status: 400 });
       }
     } catch (extractError: any) {
-      console.error('Image extraction error:', extractError);
-      console.timeEnd('⏱️ analyzeImage');
+      activeRequests--;
+      console.error(`❌ [${requestId}] Image extraction error:`, extractError);
+      console.log(`⚠️ [${requestId}] Image extraction failed (${activeRequests} active requests remaining)`);
+      console.timeEnd(`⏱️ [${requestId}] analyzeImage`);
       return NextResponse.json({ 
         success: false, 
         error: `Failed to process image: ${extractError.message}` 
       }, { status: 400 });
     }
     
-    console.log('Successfully extracted image as base64');
+    console.log(`✅ [${requestId}] Successfully extracted image as base64`);
     
     try {
-      // Create a global timeout promise that will reject after 9.5 seconds
+      // Recalculate time elapsed and adjust timeout margins accordingly
+      const timeElapsedAfterExtraction = Date.now() - requestStartTimes.get(requestId)!;
+      const adjustedTimeoutMargin = Math.max(8500 - timeElapsedAfterExtraction, 3000); // at least 3s safety margin
+      
+      console.log(`⏲️ [${requestId}] ${timeElapsedAfterExtraction}ms elapsed after extraction, setting timeout to ${adjustedTimeoutMargin}ms`);
+      
+      // Create a global timeout promise that will reject after the adjusted time
       // This ensures we always return before Vercel's 10s serverless function timeout
       const globalTimeoutPromise = new Promise((_, reject) => {
         setTimeout(() => {
-          console.log('🛑 Total timeout hit - reached 9.5s limit');
+          console.log(`🛑 [${requestId}] Total timeout hit - reached ${adjustedTimeoutMargin}ms limit`);
           reject(new Error('GLOBAL_TIMEOUT'));
-        }, 9500);
+        }, adjustedTimeoutMargin);
       });
       
       // Set up parallel promises for GPT-4 Vision and Nutritionix
@@ -1199,10 +1229,10 @@ export async function POST(request: NextRequest) {
         // Promise 1: Analyze with GPT-4 Vision
         (async () => {
           try {
-            console.time('⏱️ GPT Vision');
+            console.time(`⏱️ [${requestId}] GPT Vision`);
             gptAnalysis = await analyzeWithGPT4Vision(base64Image, healthGoal);
-            console.timeEnd('⏱️ GPT Vision');
-            console.log('✅ GPT-4 Vision analysis succeeded');
+            console.timeEnd(`⏱️ [${requestId}] GPT Vision`);
+            console.log(`✅ [${requestId}] GPT-4 Vision analysis succeeded`);
             
             // Extract ingredients if GPT analysis was successful
             if (gptAnalysis?.ingredientList) {
@@ -1214,7 +1244,7 @@ export async function POST(request: NextRequest) {
             }
             return true;
           } catch (error) {
-            console.error('❌ GPT-4 Vision failed:', error);
+            console.error(`❌ [${requestId}] GPT-4 Vision failed:`, error);
             return false;
           }
         })(),
@@ -1226,30 +1256,30 @@ export async function POST(request: NextRequest) {
             await new Promise(resolve => setTimeout(resolve, 500));
             
             if (ingredientList.length > 0) {
-              console.time('⏱️ Nutritionix Lookup');
+              console.time(`⏱️ [${requestId}] Nutritionix Lookup`);
               nutritionData = await getNutritionData(ingredientList);
-              console.timeEnd('⏱️ Nutritionix Lookup');
-              console.log('✅ Nutritionix data retrieval succeeded');
+              console.timeEnd(`⏱️ [${requestId}] Nutritionix Lookup`);
+              console.log(`✅ [${requestId}] Nutritionix data retrieval succeeded`);
               return true;
             } else {
-              console.log('⚠️ No ingredients available for nutrition lookup yet');
+              console.log(`⚠️ [${requestId}] No ingredients available for nutrition lookup yet`);
               // Check every 500ms if ingredients are available
               for (let i = 0; i < 10; i++) {
                 await new Promise(resolve => setTimeout(resolve, 500));
                 if (ingredientList.length > 0) {
-                  console.log(`Found ingredients on attempt ${i+1}, fetching nutrition data...`);
-                  console.time('⏱️ Nutritionix Lookup');
+                  console.log(`🔍 [${requestId}] Found ingredients on attempt ${i+1}, fetching nutrition data...`);
+                  console.time(`⏱️ [${requestId}] Nutritionix Lookup`);
                   nutritionData = await getNutritionData(ingredientList);
-                  console.timeEnd('⏱️ Nutritionix Lookup');
-                  console.log('✅ Nutritionix data retrieval succeeded (delayed)');
+                  console.timeEnd(`⏱️ [${requestId}] Nutritionix Lookup`);
+                  console.log(`✅ [${requestId}] Nutritionix data retrieval succeeded (delayed)`);
                   return true;
                 }
               }
-              console.log('❌ Timed out waiting for ingredients');
+              console.log(`❌ [${requestId}] Timed out waiting for ingredients`);
               return false;
             }
           } catch (error) {
-            console.error('❌ Nutritionix lookup failed:', error);
+            console.error(`❌ [${requestId}] Nutritionix lookup failed:`, error);
             return false;
           }
         })()
@@ -1264,7 +1294,7 @@ export async function POST(request: NextRequest) {
       } catch (error: any) {
         if (error.message === 'GLOBAL_TIMEOUT') {
           // Continue with whatever data we have so far
-          console.log('🛑 Global timeout reached, proceeding with partial results');
+          console.log(`🛑 [${requestId}] Global timeout reached, proceeding with partial results`);
         } else {
           throw error; // Rethrow unexpected errors
         }
@@ -1278,8 +1308,9 @@ export async function POST(request: NextRequest) {
       
       if (!gptSucceeded && !nutritionSucceeded) {
         // Neither analysis succeeded
-        console.error('❌ Both GPT and Nutritionix analyses failed');
-        console.timeEnd('⏱️ analyzeImage');
+        activeRequests--;
+        console.error(`❌ [${requestId}] Both GPT and Nutritionix analyses failed (${activeRequests} active requests remaining)`);
+        console.timeEnd(`⏱️ [${requestId}] analyzeImage`);
         return NextResponse.json(
           { 
             success: false, 
@@ -1289,7 +1320,7 @@ export async function POST(request: NextRequest) {
         );
       } else if (!gptSucceeded) {
         // Only Nutritionix succeeded
-        console.log('⚠️ Partial result, nutrition data only');
+        console.log(`⚠️ [${requestId}] Partial result, nutrition data only`);
         partial = true;
         missing = 'gpt';
         
@@ -1313,13 +1344,13 @@ export async function POST(request: NextRequest) {
         };
       } else if (!nutritionSucceeded) {
         // Only GPT succeeded
-        console.log('⚠️ Partial result, GPT analysis only');
+        console.log(`⚠️ [${requestId}] Partial result, GPT analysis only`);
         partial = true;
         missing = 'nutrition';
       }
       
       // Format the response with whatever data we have
-      console.log('Formatting response...');
+      console.log(`📊 [${requestId}] Formatting response...`);
       const formattedResponse = formatResponse(gptAnalysis, nutritionData, healthGoal);
       
       // Add partial result metadata
@@ -1327,17 +1358,35 @@ export async function POST(request: NextRequest) {
         Object.assign(formattedResponse, { partial, missing });
       }
       
+      // Add requestId and concurrency info for debugging purposes
+      Object.assign(formattedResponse, { 
+        _meta: { 
+          requestId, 
+          concurrentRequests: activeRequests,
+          processingTimeMs: Date.now() - requestStartTimes.get(requestId)!
+        } 
+      });
+      
+      // Clean up tracking data
+      requestStartTimes.delete(requestId);
+      activeRequests--;
+      
       // Return the formatted response
-      console.log('✅ Analysis complete, returning results');
-      console.timeEnd('⏱️ analyzeImage');
+      console.log(`✅ [${requestId}] Analysis complete, returning results (${activeRequests} active requests remaining)`);
+      console.timeEnd(`⏱️ [${requestId}] analyzeImage`);
       return NextResponse.json({
         success: true,
         ...formattedResponse
       });
     } catch (analysisError: any) {
-      console.error('Analysis error details:', analysisError);
-      console.error('Analysis error stack:', analysisError.stack);
-      console.timeEnd('⏱️ analyzeImage');
+      // Clean up tracking data
+      requestStartTimes.delete(requestId);
+      activeRequests--;
+      
+      console.error(`❌ [${requestId}] Analysis error details:`, analysisError);
+      console.error(`❌ [${requestId}] Analysis error stack:`, analysisError.stack);
+      console.log(`⚠️ [${requestId}] Analysis failed (${activeRequests} active requests remaining)`);
+      console.timeEnd(`⏱️ [${requestId}] analyzeImage`);
       
       // Provide friendly error messages based on error type
       const errorMessage = analysisError.message || 'Unknown error';
@@ -1346,7 +1395,8 @@ export async function POST(request: NextRequest) {
         return NextResponse.json(
           { 
             success: false, 
-            error: 'Analysis timed out. Please try again with a smaller image or clearer photo.' 
+            error: 'Analysis timed out. Please try again with a smaller image or clearer photo.',
+            _meta: { requestId, concurrentRequests: activeRequests }
           },
           { status: 504 }
         );
@@ -1354,7 +1404,8 @@ export async function POST(request: NextRequest) {
         return NextResponse.json(
           { 
             success: false, 
-            error: 'Too many requests. Please try again in a few minutes.' 
+            error: 'Too many requests. Please try again in a few minutes.',
+            _meta: { requestId, concurrentRequests: activeRequests }
           },
           { status: 429 }
         );
@@ -1363,20 +1414,27 @@ export async function POST(request: NextRequest) {
       return NextResponse.json(
         { 
           success: false, 
-          error: `Analysis failed: ${errorMessage}` 
+          error: `Analysis failed: ${errorMessage}`,
+          _meta: { requestId, concurrentRequests: activeRequests }
         },
         { status: 500 }
       );
     }
   } catch (error: any) {
-    console.error('🛑 Unhandled error in analyzeImage:', error);
-    console.error('Error stack:', error.stack);
-    console.timeEnd('⏱️ analyzeImage');
+    // Clean up tracking data
+    requestStartTimes.delete(requestId);
+    activeRequests--;
+    
+    console.error(`🛑 [${requestId}] Unhandled error in analyzeImage:`, error);
+    console.error(`🛑 [${requestId}] Error stack:`, error.stack);
+    console.log(`⚠️ [${requestId}] Unhandled error (${activeRequests} active requests remaining)`);
+    console.timeEnd(`⏱️ [${requestId}] analyzeImage`);
     
     return NextResponse.json(
       { 
         success: false, 
-        error: 'An unexpected error occurred. Please try again with a different image.' 
+        error: 'An unexpected error occurred. Please try again with a different image.',
+        _meta: { requestId, concurrentRequests: activeRequests } 
       },
       { status: 500 }
     );
