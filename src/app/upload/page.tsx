@@ -421,7 +421,7 @@ export default function UploadPage() {
       // Final validation before storing the result
       try {
         // Validate analysis structure one more time before storing
-        if (!response.data || !response.data.analysis || typeof response.data.analysis !== 'object') {
+        if (!response.data || typeof response.data !== 'object') {
           console.warn('Invalid result structure before storing:', response.data);
           throw new Error('Invalid or corrupted analysis result');
         }
