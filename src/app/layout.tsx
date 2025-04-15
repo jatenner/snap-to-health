@@ -8,10 +8,10 @@ import LoadingProvider from '@/components/LoadingProvider'
 import Navbar from '@/components/Navbar'
 
 export const metadata: Metadata = {
-  title: 'Snap-to-Health | AI-Powered Nutrition Analysis',
-  description: 'Track and optimize your nutrition with AI-powered meal analysis tailored to your health goals',
+  title: 'Snap2Health | Meal Analysis for Your Health Goals',
+  description: 'Analyze meals instantly with AI and get personalized nutrition insights for your health goals - Updated for Vercel deployment',
   keywords: ['nutrition', 'health tracking', 'AI analysis', 'meal tracking', 'personalized health'],
-  authors: [{ name: 'Snap-to-Health Team' }],
+  authors: [{ name: 'Snap2Health Team' }],
   viewport: 'width=device-width, initial-scale=1, maximum-scale=1',
   themeColor: '#10b981',
   manifest: '/manifest.json',
@@ -19,29 +19,29 @@ export const metadata: Metadata = {
   openGraph: {
     type: 'website',
     locale: 'en_US',
-    url: 'https://snap-to-health.vercel.app',
-    title: 'Snap-to-Health | AI-Powered Nutrition Analysis',
-    description: 'Track and optimize your nutrition with AI-powered meal analysis tailored to your health goals',
-    siteName: 'Snap-to-Health',
+    url: 'https://snap2health.com',
+    title: 'Snap2Health | Meal Analysis for Your Health Goals',
+    description: 'Analyze meals instantly with AI and get personalized nutrition insights for your health goals - Updated for Vercel deployment',
+    siteName: 'Snap2Health',
     images: [{
       url: '/og-image.jpg',
       width: 1200,
       height: 630,
-      alt: 'Snap-to-Health'
+      alt: 'Snap2Health'
     }],
   },
   twitter: {
     card: 'summary_large_image',
-    title: 'Snap-to-Health | AI-Powered Nutrition Analysis',
-    description: 'Track and optimize your nutrition with AI-powered meal analysis tailored to your health goals',
+    title: 'Snap2Health | Meal Analysis for Your Health Goals',
+    description: 'Analyze meals instantly with AI and get personalized nutrition insights for your health goals',
     images: ['/twitter-image.jpg'],
   },
   appleWebApp: {
-    title: 'Snap-to-Health',
+    title: 'Snap2Health',
     statusBarStyle: 'black-translucent',
     capable: true
   },
-  applicationName: 'Snap-to-Health',
+  applicationName: 'Snap2Health',
   formatDetection: {
     telephone: false
   },
@@ -98,7 +98,7 @@ export default function RootLayout({
             />
             <header className="px-4 py-4 md:py-6 max-w-lg mx-auto w-full">
               <Link href="/" className="block">
-                <h1 className="text-xl md:text-2xl font-bold text-primary">Snap-to-Health</h1>
+                <h1 className="text-xl md:text-2xl font-bold text-primary">Snap2Health</h1>
                 <p className="text-xs md:text-sm text-gray-600">Analyze meals for your health goals</p>
               </Link>
             </header>
@@ -109,7 +109,7 @@ export default function RootLayout({
             <footer className="px-4 py-4 border-t border-gray-200 bg-white mt-auto">
               <div className="max-w-lg mx-auto text-center">
                 <p className="text-xs text-gray-500">
-                  <span className="text-primary font-medium">Snap-to-Health</span> &middot; Analyze your meals for better health
+                  <span className="text-primary font-medium">Snap2Health</span> &middot; Analyze your meals for better health
                 </p>
               </div>
             </footer>
