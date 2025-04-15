@@ -290,45 +290,16 @@ export default function UploadPage() {
       if (!response.data || response.data.success === false) {
         // Check if this is a fallback response for unclear images
         if (response.data?.fallback) {
-          console.log('Received fallback response:', response.data.reason);
+          console.log('Received fallback response:', response.data.reason || 'unknown reason');
           
           // Show helpful message to the user
-          const fallbackMessage = response.data.fallbackMessage || 
+          const fallbackMessage = response.data.fallbackMessage || response.data.message || 
             "We couldn't clearly identify your meal. Try a photo with better lighting, or describe your meal in the notes section.";
           
           toast.error(fallbackMessage, { id: analyzeToast, duration: 8000 });
           
-          // Store minimal fallback info in session storage for display
-          const fallbackResult = response.data.analysisResults || {
-            fallback: true,
-            fallbackMessage,
-            description: "Unidentified meal",
-            ingredientList: [],
-            feedback: [
-              fallbackMessage,
-              "Try taking a photo with better lighting and ensure all food items are clearly visible.",
-              "Photos taken in natural daylight work best."
-            ],
-            suggestions: [
-              "Take photos from directly above the plate",
-              "Ensure there's adequate lighting",
-              "Make sure your camera lens is clean",
-              "Avoid shadows and glare on the food"
-            ]
-          };
-          
-          sessionStorage.setItem('analysisResult', JSON.stringify(fallbackResult));
-          sessionStorage.setItem('previewUrl', previewUrl || '');
-          sessionStorage.setItem('mealSaved', 'false'); // Don't save fallback results
-          
-          setAnalysisStage('completed');
-          
-          // Small delay to allow user to read the error message
-          setTimeout(() => {
-            // Redirect to meal analysis page to show fallback content
-            router.push('/meal-analysis');
-          }, 2000);
-          
+          // We don't want to proceed with saving or processing fallback results
+          setIsAnalyzing(false);
           return;
         }
         
@@ -344,28 +315,25 @@ export default function UploadPage() {
       const analysisResult = response.data;
       
       // Check if this is a fallback response (just in case it comes with success: true)
-      if (analysisResult.fallback) {
-        console.log('Received fallback response with success flag:', analysisResult.reason);
+      if (analysisResult.fallback === true) {
+        console.log('Received fallback response with success flag:', analysisResult.reason || 'unknown reason');
         
         // Show helpful message to the user
-        const fallbackMessage = analysisResult.fallbackMessage || 
+        const fallbackMessage = analysisResult.fallbackMessage || analysisResult.message || 
           "We couldn't clearly identify your meal. Try a photo with better lighting, or describe your meal in the notes section.";
         
         toast.error(fallbackMessage, { id: analyzeToast, duration: 8000 });
         
-        // Store minimal fallback info for display
-        sessionStorage.setItem('analysisResult', JSON.stringify(analysisResult.analysisResults || analysisResult));
-        sessionStorage.setItem('previewUrl', previewUrl || '');
-        sessionStorage.setItem('mealSaved', 'false'); // Don't save fallback results
-        
-        setAnalysisStage('completed');
-        
-        // Small delay to allow user to read the error message
-        setTimeout(() => {
-          // Redirect to meal analysis page to show fallback content
-          router.push('/meal-analysis');
-        }, 2000);
-        
+        // Do not proceed with saving or processing fallback results
+        setIsAnalyzing(false);
+        return;
+      }
+      
+      // Add safeguard check for invalid result structure
+      if (!analysisResult || !analysisResult.analysis || typeof analysisResult.analysis !== "object") {
+        console.warn('Invalid analysis result structure:', analysisResult);
+        toast.error('Invalid analysis result. Please try again with a clearer image.', { id: analyzeToast });
+        setIsAnalyzing(false);
         return;
       }
       
@@ -387,8 +355,11 @@ export default function UploadPage() {
       let savedMealId = '';
       let isSaved = false;
       
-      // Only save to account if it's not a fallback response
-      if (saveToAccount && currentUser && file && !analysisResult.fallback) {
+      // Only save to account if we have a valid, non-fallback analysis
+      if (saveToAccount && currentUser && file && 
+          !analysisResult.fallback && 
+          analysisResult.analysis && 
+          typeof analysisResult.analysis === 'object') {
         try {
           setAnalysisStage('saving');
           toast.loading('Saving to your account...', { id: analyzeToast });
@@ -412,6 +383,11 @@ export default function UploadPage() {
           });
           
           console.log('Firebase Storage upload complete, saving to Firestore...');
+          
+          // Final validation before saving to Firestore
+          if (!analysisResult || !analysisResult.analysis) {
+            throw new Error('Invalid analysis result, cannot save to Firestore');
+          }
           
           // Save the meal to Firestore with the provided meal name
           savedMealId = await saveMealToFirestore(
@@ -453,24 +429,37 @@ export default function UploadPage() {
         }
       }
       
-      // Store analysis result and metadata in sessionStorage
-      sessionStorage.setItem('analysisResult', JSON.stringify(analysisResult));
-      sessionStorage.setItem('previewUrl', previewUrl || '');
-      sessionStorage.setItem('mealSaved', isSaved ? 'true' : 'false');
-      
-      if (isSaved) {
-        sessionStorage.setItem('savedImageUrl', imageUrl);
-        sessionStorage.setItem('savedMealId', savedMealId);
-        sessionStorage.setItem('mealName', mealName.trim() || 'Unnamed Meal');
+      // Final validation before storing the result
+      try {
+        // Validate analysis structure one more time before storing
+        if (!analysisResult || !analysisResult.analysis || typeof analysisResult.analysis !== 'object') {
+          console.warn('Invalid result structure before storing:', analysisResult);
+          throw new Error('Invalid or corrupted analysis result');
+        }
+        
+        // Store analysis result and metadata in sessionStorage
+        sessionStorage.setItem('analysisResult', JSON.stringify(analysisResult));
+        sessionStorage.setItem('previewUrl', previewUrl || '');
+        sessionStorage.setItem('mealSaved', isSaved ? 'true' : 'false');
+        
+        if (isSaved) {
+          sessionStorage.setItem('savedImageUrl', imageUrl);
+          sessionStorage.setItem('savedMealId', savedMealId);
+          sessionStorage.setItem('mealName', mealName.trim() || 'Unnamed Meal');
+        }
+        
+        setAnalysisStage('completed');
+        
+        // Small delay to allow for animation before redirect
+        setTimeout(() => {
+          // Redirect to meal analysis page
+          router.push('/meal-analysis');
+        }, 300);
+      } catch (storageError) {
+        console.error('Error storing analysis result:', storageError);
+        toast.error('Error processing analysis result. Please try again.', { id: analyzeToast });
+        setIsAnalyzing(false);
       }
-      
-      setAnalysisStage('completed');
-      
-      // Small delay to allow for animation before redirect
-      setTimeout(() => {
-        // Redirect to meal analysis page
-        router.push('/meal-analysis');
-      }, 300);
     } catch (error: any) {
       // Check if this is a cancellation error
       if (axios.isCancel(error)) {
