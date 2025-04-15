@@ -1,0 +1,68 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Base function to check if the user is authenticated
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+    
+    // Check if the user is the owner of the resource
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+    
+    // Users collection - users can only read and write their own profile data
+    match /users/{userId} {
+      allow read, write: if isOwner(userId);
+      
+      // Meals subcollection - users can read and write their own meal data
+      match /meals/{mealId} {
+        allow read, write: if isOwner(userId);
+        
+        // Comments or additional data for meals
+        match /{subCollection}/{docId} {
+          allow read, write: if isOwner(userId);
+        }
+      }
+      
+      // MealLogs subcollection - the specific path mentioned in the requirements
+      match /mealLogs/{mealId} {
+        allow read, write: if isOwner(userId);
+        
+        // Nested collections under mealLogs if any
+        match /{subCollection}/{docId} {
+          allow read, write: if isOwner(userId);
+        }
+      }
+    }
+    
+    // Standalone meals collection if used in your app architecture
+    match /meals/{mealId} {
+      allow read, write: if isAuthenticated() && resource.data.userId == request.auth.uid;
+      allow create: if isAuthenticated() && request.resource.data.userId == request.auth.uid;
+    }
+    
+    // Standalone mealLogs collection if used
+    match /mealLogs/{mealId} {
+      allow read, write: if isAuthenticated() && resource.data.userId == request.auth.uid;
+      allow create: if isAuthenticated() && request.resource.data.userId == request.auth.uid;
+    }
+    
+    // Storage references in Firestore (if any)
+    match /storage_refs/{refId} {
+      allow read: if isAuthenticated() && resource.data.userId == request.auth.uid;
+      allow create, update: if isAuthenticated() && request.resource.data.userId == request.auth.uid;
+    }
+    
+    // Analytics or aggregated data (read-only for authenticated users)
+    match /analytics/{docId} {
+      allow read: if isAuthenticated();
+      allow write: if false; // Only admins should write to analytics (handled by backend functions)
+    }
+    
+    // Default deny - no access to any other collections
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+} 

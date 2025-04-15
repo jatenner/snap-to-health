@@ -1,0 +1,16 @@
+[
+  {
+    "origin": ["https://snap-to-health.vercel.app", "https://snaphealth-39b14.web.app"],
+    "method": ["GET", "POST", "PUT", "DELETE"],
+    "maxAgeSeconds": 3600,
+    "responseHeader": [
+      "Content-Type",
+      "Authorization",
+      "Content-Length",
+      "X-Requested-With",
+      "User-Agent",
+      "Accept",
+      "Origin"
+    ]
+  }
+] 

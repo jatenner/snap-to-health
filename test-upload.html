@@ -1,0 +1,263 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Firebase Storage Upload Test</title>
+  <script src="https://www.gstatic.com/firebasejs/9.6.10/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.6.10/firebase-storage-compat.js"></script>
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif;
+      max-width: 800px;
+      margin: 0 auto;
+      padding: 20px;
+      line-height: 1.6;
+    }
+    h1 {
+      color: #4285f4;
+    }
+    .container {
+      border: 1px solid #ccc;
+      padding: 20px;
+      border-radius: 8px;
+      margin-bottom: 20px;
+    }
+    button {
+      background-color: #4285f4;
+      color: white;
+      border: none;
+      padding: 10px 20px;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 16px;
+    }
+    button:hover {
+      background-color: #3367d6;
+    }
+    textarea {
+      width: 100%;
+      height: 200px;
+      margin-top: 10px;
+      font-family: monospace;
+      padding: 8px;
+    }
+    #uploadProgress {
+      height: 20px;
+      background-color: #f1f1f1;
+      border-radius: 4px;
+      margin-top: 10px;
+      overflow: hidden;
+    }
+    #progressBar {
+      height: 100%;
+      background-color: #4caf50;
+      width: 0%;
+      transition: width 0.3s;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: white;
+      font-size: 12px;
+    }
+    .success {
+      color: #4caf50;
+      font-weight: bold;
+    }
+    .error {
+      color: #f44336;
+      font-weight: bold;
+    }
+    #downloadLink {
+      margin-top: 10px;
+      display: block;
+    }
+  </style>
+</head>
+<body>
+  <h1>Firebase Storage Upload Test</h1>
+  
+  <div class="container">
+    <h2>Configuration</h2>
+    <p>Enter your Firebase configuration:</p>
+    <textarea id="firebaseConfig">
+{
+  "apiKey": "AIzaSyAUvJPkN2H44CCayUX9S2QEr268hykmXKc",
+  "authDomain": "snaphealth-39b14.firebaseapp.com",
+  "projectId": "snaphealth-39b14",
+  "storageBucket": "snaphealth-39b14.appspot.com",
+  "messagingSenderId": "740672895155",
+  "appId": "1:740672895155:web:f088e585daca6460e9d8c6"
+}
+</textarea>
+  </div>
+  
+  <div class="container">
+    <h2>Test Upload</h2>
+    <p>Select a file to upload to Firebase Storage:</p>
+    <input type="file" id="fileInput">
+    <div id="uploadProgress" style="display: none;">
+      <div id="progressBar">0%</div>
+    </div>
+    <p>
+      <button id="uploadButton">Upload File</button>
+    </p>
+    <div id="results"></div>
+    <a id="downloadLink" target="_blank"></a>
+  </div>
+  
+  <div class="container">
+    <h2>Console Log</h2>
+    <textarea id="logOutput" readonly></textarea>
+  </div>
+
+  <script>
+    // Override console.log to also write to our textarea
+    const originalLog = console.log;
+    const originalError = console.error;
+    const logOutput = document.getElementById('logOutput');
+
+    console.log = function(...args) {
+      originalLog.apply(console, args);
+      logOutput.value += '> ' + args.map(arg => {
+        return typeof arg === 'object' ? JSON.stringify(arg, null, 2) : arg;
+      }).join(' ') + '\n';
+      logOutput.scrollTop = logOutput.scrollHeight;
+    };
+
+    console.error = function(...args) {
+      originalError.apply(console, args);
+      logOutput.value += '❌ ERROR: ' + args.map(arg => {
+        return typeof arg === 'object' ? JSON.stringify(arg, null, 2) : arg;
+      }).join(' ') + '\n';
+      logOutput.scrollTop = logOutput.scrollHeight;
+    };
+
+    // Firebase initialization
+    let firebaseApp;
+    let storage;
+
+    function initializeFirebase() {
+      try {
+        // Get config from textarea
+        const configText = document.getElementById('firebaseConfig').value;
+        const config = JSON.parse(configText);
+        
+        console.log("Initializing Firebase with config:", {
+          ...config,
+          apiKey: "[HIDDEN]"
+        });
+        
+        // Initialize Firebase
+        firebaseApp = firebase.initializeApp(config);
+        storage = firebase.storage();
+        
+        console.log("Firebase initialized successfully");
+        return true;
+      } catch (error) {
+        console.error("Error initializing Firebase:", error);
+        showResult("Error initializing Firebase: " + error.message, true);
+        return false;
+      }
+    }
+
+    // Upload file function
+    function uploadFile() {
+      const fileInput = document.getElementById('fileInput');
+      if (!fileInput.files.length) {
+        showResult("Please select a file to upload", true);
+        return;
+      }
+
+      // Initialize Firebase if not already done
+      if (!firebaseApp) {
+        if (!initializeFirebase()) {
+          return;
+        }
+      }
+
+      const file = fileInput.files[0];
+      console.log("Selected file:", file.name, "Size:", file.size, "bytes", "Type:", file.type);
+
+      // Create a storage reference
+      const storageRef = storage.ref();
+      const fileRef = storageRef.child(`test-uploads/${Date.now()}-${file.name}`);
+      console.log("Storage path:", fileRef.fullPath);
+
+      // Show progress bar
+      const progressBar = document.getElementById('progressBar');
+      const uploadProgress = document.getElementById('uploadProgress');
+      uploadProgress.style.display = 'block';
+      progressBar.style.width = '0%';
+      progressBar.textContent = '0%';
+
+      // Set metadata
+      const metadata = {
+        contentType: file.type || 'application/octet-stream',
+        customMetadata: {
+          'uploadedFrom': window.location.origin,
+          'timestamp': new Date().toISOString()
+        }
+      };
+
+      console.log("Starting upload with metadata:", metadata);
+
+      // Upload the file with progress monitoring
+      const uploadTask = fileRef.put(file, metadata);
+
+      uploadTask.on('state_changed',
+        // Progress observer
+        (snapshot) => {
+          const progress = (snapshot.bytesTransferred / snapshot.totalBytes) * 100;
+          console.log('Upload progress:', progress.toFixed(1) + '%');
+          progressBar.style.width = progress + '%';
+          progressBar.textContent = progress.toFixed(1) + '%';
+        },
+        // Error observer
+        (error) => {
+          console.error('Upload error:', error);
+          showResult("Upload failed: " + error.message, true);
+          progressBar.style.backgroundColor = '#f44336';
+        },
+        // Completion observer
+        async () => {
+          try {
+            console.log('Upload completed successfully');
+            
+            // Get download URL
+            const downloadURL = await uploadTask.snapshot.ref.getDownloadURL();
+            console.log('File available at:', downloadURL);
+            
+            // Show success message
+            showResult("Upload successful! Your file has been uploaded to Firebase Storage.", false);
+            
+            // Set download link
+            const downloadLink = document.getElementById('downloadLink');
+            downloadLink.href = downloadURL;
+            downloadLink.textContent = "View uploaded file";
+            
+            console.log("✅ TEST SUCCESSFUL: Firebase Storage upload and URL generation worked!");
+            console.log("This confirms that your CORS configuration is properly set up.");
+          } catch (error) {
+            console.error('Error getting download URL:', error);
+            showResult("Upload completed but couldn't get download URL: " + error.message, true);
+          }
+        }
+      );
+    }
+
+    function showResult(message, isError) {
+      const resultsDiv = document.getElementById('results');
+      resultsDiv.innerHTML = `<p class="${isError ? 'error' : 'success'}">${message}</p>`;
+    }
+
+    // Set up event listeners
+    document.addEventListener('DOMContentLoaded', function() {
+      document.getElementById('uploadButton').addEventListener('click', uploadFile);
+      
+      // Initialize Firebase when the page loads
+      initializeFirebase();
+    });
+  </script>
+</body>
+</html> 

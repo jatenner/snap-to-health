@@ -1,0 +1,19 @@
+[
+  {
+    "origin": [
+      "http://localhost:3007",
+      "http://localhost:3009"
+    ],
+    "method": [
+      "GET",
+      "POST",
+      "PUT",
+      "DELETE"
+    ],
+    "responseHeader": [
+      "Content-Type",
+      "Authorization"
+    ],
+    "maxAgeSeconds": 3600
+  }
+]

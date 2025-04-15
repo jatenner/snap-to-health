@@ -1,0 +1,37 @@
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+    // Basic authentication check
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+    
+    // Check if the user is accessing their own data
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+    
+    // User-specific stored files (like meal images)
+    match /users/{userId}/{allPaths=**} {
+      // Allow users to read and write only their own files
+      allow read, write: if isOwner(userId);
+    }
+    
+    // Shared resources that any authenticated user can access
+    match /shared/{fileName} {
+      allow read: if isAuthenticated();
+      allow write: if false; // Only admin can write to shared resources
+    }
+    
+    // Public resources (accessible to all users including anonymous)
+    match /public/{fileName} {
+      allow read: if true;
+      allow write: if false; // Only admin can write to public resources
+    }
+    
+    // Default deny - no access to other storage paths
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+  }
+} 
