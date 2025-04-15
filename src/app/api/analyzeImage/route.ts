@@ -94,9 +94,7 @@ async function analyzeWithGPT4Vision(base64Image: string, healthGoal: string, re
   console.time(`⏱️ [${requestId}] analyzeWithGPT4Vision`);
   const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
   
-  console.log(`[${requestId}] OpenAI API Key available:`, !!OPENAI_API_KEY);
   console.log(`[${requestId}] Base64 image length:`, base64Image.length);
-  console.log(`[${requestId}] Base64 image preview:`, base64Image.substring(0, 50) + '...');
   console.log(`[${requestId}] Health goal:`, healthGoal);
   
   if (!OPENAI_API_KEY) {
@@ -1275,21 +1273,6 @@ function createFallbackResponse(reason: string, healthGoal: string, requestId: s
 }
 
 export async function POST(request: NextRequest) {
-  // Debug OpenAI API key injection
-  console.log("🔐 Checking OpenAI key:", !!process.env.OPENAI_API_KEY);
-  if (!process.env.OPENAI_API_KEY) {
-    console.warn("⚠️ OPENAI_API_KEY is missing or undefined in production");
-  }
-  
-  // Safe logging of available environment variables (names only, no values)
-  console.log("📊 Available environment variables:", 
-    Object.keys(process.env)
-      .filter(key => key !== 'NODE_ENV') // Show interesting keys
-      .map(key => key.includes('KEY') || key.includes('SECRET') || key.includes('TOKEN') ? 
-        `${key}: [REDACTED]` : 
-        `${key}: ${typeof process.env[key]}`)
-  );
-
   // Generate unique request ID for tracking
   const requestId = Math.random().toString(36).substring(2, 10);
   
@@ -1390,4 +1373,41 @@ export async function POST(request: NextRequest) {
           gptAnalysis = createFallbackResponse(reason || 'unknown', healthGoal, requestId);
           partialSuccess = true; // Still return a response, just with fallback content
           
-          console.log(`
+          console.log(`✅ [${requestId}] Created fallback response due to unclear image`);
+        } else {
+          console.log(`[${requestId}] GPT analysis valid`);
+        }
+      } else {
+        console.error(`[${requestId}] GPT analysis error:`, gptResult.reason);
+        errorMessages.push(gptResult.reason instanceof Error ? gptResult.reason.message : gptResult.reason.toString());
+      }
+
+      // Process nutrition data
+      if (results.length > 1 && results[1].status === 'fulfilled') {
+        nutritionixData = results[1].value;
+        console.log(`[${requestId}] Nutrition data fetched successfully`);
+      } else {
+        console.warn(`[${requestId}] Nutrition data not available`);
+      }
+    } else {
+      console.error(`[${requestId}] Unexpected results format:`, results);
+      throw new Error('Unexpected results format');
+    }
+
+    // Format the response
+    const response = formatResponse(gptAnalysis, nutritionixData, healthGoal);
+
+    // Return the response
+    return NextResponse.json(response, { status: 200 });
+  } catch (error) {
+    console.error(`[${requestId}] Error processing request:`, error);
+    return NextResponse.json(
+      {
+        success: false,
+        error: error instanceof Error ? error.message : error.toString(),
+        _meta: { requestId }
+      },
+      { status: 500 }
+    );
+  }
+}
