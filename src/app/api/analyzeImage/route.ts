@@ -1097,6 +1097,8 @@ function formatResponse(
   message?: string;
   partialResults?: boolean;
   _meta?: any;
+  lowConfidence?: boolean;
+  ingredients?: string[];
 } {
   // Extend the supportive nutrients map with more detailed, goal-specific nutrients
   const nutrientSupportMap: Record<string, string[]> = {
@@ -1376,9 +1378,11 @@ function formatResponse(
     confidence: gptAnalysis.confidence || 5, // Extract confidence score with fallback to medium confidence
     detailedIngredients,
     reasoningLogs,
+    ingredients: gptAnalysis.ingredientList || [],
     status: 'success',
     success: true,
     fallback: false,
+    lowConfidence: isLowConfidenceAnalysis(gptAnalysis),
     message: '',
     partialResults: false,
     _meta: undefined
@@ -1595,7 +1599,7 @@ function getGoalCategoryType(healthGoal: string): string {
     return 'Recovery';
   
   if (goalLower.includes('immune') || goalLower.includes('sick') || goalLower.includes('cold') || goalLower.includes('flu') || goalLower.includes('virus')) 
-    return 'Immune Support';
+    return 'Immune';
   
   if (goalLower.includes('digest') || goalLower.includes('gut') || goalLower.includes('stomach') || goalLower.includes('bloat') || goalLower.includes('ibs')) 
     return 'Digestive Health';
