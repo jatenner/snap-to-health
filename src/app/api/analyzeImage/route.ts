@@ -1125,12 +1125,13 @@ function formatGoalName(healthGoal: string): string {
 
 export async function POST(request: NextRequest) {
   console.log('🔥 Hit /api/analyzeImage - analysis started');
-  console.time('analyzeImageTotal');
+  console.time('⏱️ analyzeImage');  // Start global performance timer
   
   try {
     // Check content type
     const contentType = request.headers.get('content-type') || '';
     if (!contentType.includes('multipart/form-data')) {
+      console.timeEnd('⏱️ analyzeImage');
       return NextResponse.json({ 
         success: false, 
         error: 'Content type must be multipart/form-data' 
@@ -1146,7 +1147,7 @@ export async function POST(request: NextRequest) {
     const healthGoal = formData.get('healthGoal') as string || 'Improve overall health';
     
     if (!imageFile) {
-      console.timeEnd('analyzeImageTotal');
+      console.timeEnd('⏱️ analyzeImage');
       return NextResponse.json({ 
         success: false, 
         error: 'No image file provided' 
@@ -1161,7 +1162,7 @@ export async function POST(request: NextRequest) {
     try {
       base64Image = await extractBase64Image(formData);
       if (!base64Image) {
-        console.timeEnd('analyzeImageTotal');
+        console.timeEnd('⏱️ analyzeImage');
         return NextResponse.json({ 
           success: false, 
           error: 'Failed to extract image' 
@@ -1169,7 +1170,7 @@ export async function POST(request: NextRequest) {
       }
     } catch (extractError: any) {
       console.error('Image extraction error:', extractError);
-      console.timeEnd('analyzeImageTotal');
+      console.timeEnd('⏱️ analyzeImage');
       return NextResponse.json({ 
         success: false, 
         error: `Failed to process image: ${extractError.message}` 
@@ -1179,83 +1180,156 @@ export async function POST(request: NextRequest) {
     console.log('Successfully extracted image as base64');
     
     try {
-      // Call GPT-4 Vision API
-      console.log('Calling GPT-4 Vision API...');
-      let gptAnalysis;
+      // Create a global timeout promise that will reject after 9.5 seconds
+      // This ensures we always return before Vercel's 10s serverless function timeout
+      const globalTimeoutPromise = new Promise((_, reject) => {
+        setTimeout(() => {
+          console.log('🛑 Total timeout hit - reached 9.5s limit');
+          reject(new Error('GLOBAL_TIMEOUT'));
+        }, 9500);
+      });
+      
+      // Set up parallel promises for GPT-4 Vision and Nutritionix
+      let gptAnalysis = null;
+      let nutritionData: any[] = [];
+      let ingredientList: string[] = [];
+      
+      // Run API calls in parallel using Promise.allSettled
+      const analysisPromises = [
+        // Promise 1: Analyze with GPT-4 Vision
+        (async () => {
+          try {
+            console.time('⏱️ GPT Vision');
+            gptAnalysis = await analyzeWithGPT4Vision(base64Image, healthGoal);
+            console.timeEnd('⏱️ GPT Vision');
+            console.log('✅ GPT-4 Vision analysis succeeded');
+            
+            // Extract ingredients if GPT analysis was successful
+            if (gptAnalysis?.ingredientList) {
+              if (Array.isArray(gptAnalysis.ingredientList)) {
+                ingredientList = gptAnalysis.ingredientList;
+              } else if (typeof gptAnalysis.ingredientList === 'string') {
+                ingredientList = gptAnalysis.ingredientList.split(',').map((item: string) => item.trim());
+              }
+            }
+            return true;
+          } catch (error) {
+            console.error('❌ GPT-4 Vision failed:', error);
+            return false;
+          }
+        })(),
+        
+        // Promise 2: Fetch nutrition data (starts after ingredientList is available)
+        (async () => {
+          try {
+            // Small delay to allow GPT to generate ingredients first
+            await new Promise(resolve => setTimeout(resolve, 500));
+            
+            if (ingredientList.length > 0) {
+              console.time('⏱️ Nutritionix Lookup');
+              nutritionData = await getNutritionData(ingredientList);
+              console.timeEnd('⏱️ Nutritionix Lookup');
+              console.log('✅ Nutritionix data retrieval succeeded');
+              return true;
+            } else {
+              console.log('⚠️ No ingredients available for nutrition lookup yet');
+              // Check every 500ms if ingredients are available
+              for (let i = 0; i < 10; i++) {
+                await new Promise(resolve => setTimeout(resolve, 500));
+                if (ingredientList.length > 0) {
+                  console.log(`Found ingredients on attempt ${i+1}, fetching nutrition data...`);
+                  console.time('⏱️ Nutritionix Lookup');
+                  nutritionData = await getNutritionData(ingredientList);
+                  console.timeEnd('⏱️ Nutritionix Lookup');
+                  console.log('✅ Nutritionix data retrieval succeeded (delayed)');
+                  return true;
+                }
+              }
+              console.log('❌ Timed out waiting for ingredients');
+              return false;
+            }
+          } catch (error) {
+            console.error('❌ Nutritionix lookup failed:', error);
+            return false;
+          }
+        })()
+      ];
+      
+      // Race the parallel promises against the global timeout
       try {
-        console.time('⏱️ GPT Vision');
-        gptAnalysis = await analyzeWithGPT4Vision(base64Image, healthGoal);
-        console.timeEnd('⏱️ GPT Vision');
-      } catch (visionError: any) {
-        console.error('GPT-4 Vision analysis failed:', visionError);
-        console.timeEnd('analyzeImageTotal');
-        
-        // Check for specific OpenAI API errors
-        const errorMessage = visionError.message || 'Unknown error';
-        
-        if (errorMessage.includes('timed out')) {
-          console.error('CRITICAL: OpenAI request timed out');
-          return NextResponse.json(
-            { 
-              success: false, 
-              error: 'Analysis timed out. Please try again with a smaller image or shorter description.' 
-            },
-            { status: 504 }
-          );
+        await Promise.race([
+          Promise.allSettled(analysisPromises),
+          globalTimeoutPromise
+        ]);
+      } catch (error: any) {
+        if (error.message === 'GLOBAL_TIMEOUT') {
+          // Continue with whatever data we have so far
+          console.log('🛑 Global timeout reached, proceeding with partial results');
+        } else {
+          throw error; // Rethrow unexpected errors
         }
-        
-        if (errorMessage.includes('429')) {
-          console.error('CRITICAL: OpenAI rate limit reached');
-          return NextResponse.json(
-            { 
-              success: false, 
-              error: 'Too many requests. Please try again in a few minutes.' 
-            },
-            { status: 429 }
-          );
-        }
-        
+      }
+      
+      // Determine if we have partial or complete results
+      const gptSucceeded = !!gptAnalysis;
+      const nutritionSucceeded = nutritionData.length > 0;
+      let partial = false;
+      let missing = '';
+      
+      if (!gptSucceeded && !nutritionSucceeded) {
+        // Neither analysis succeeded
+        console.error('❌ Both GPT and Nutritionix analyses failed');
+        console.timeEnd('⏱️ analyzeImage');
         return NextResponse.json(
           { 
             success: false, 
-            error: `Analysis failed: ${errorMessage}` 
+            error: 'Image analysis failed. Please try again with a clearer image.' 
           },
           { status: 500 }
         );
+      } else if (!gptSucceeded) {
+        // Only Nutritionix succeeded
+        console.log('⚠️ Partial result, nutrition data only');
+        partial = true;
+        missing = 'gpt';
+        
+        // Create a fallback GPT analysis
+        gptAnalysis = {
+          description: 'A meal containing various ingredients.',
+          ingredientList: ingredientList.length > 0 ? ingredientList : ['food item'],
+          basicNutrition: {
+            calories: "Calculating...",
+            protein: "Calculating...",
+            carbs: "Calculating...",
+            fat: "Calculating..."
+          },
+          goalImpactScore: 5,
+          goalName: formatGoalName(healthGoal),
+          scoreExplanation: "Analysis not complete. Here's what we know about the nutrition content so far.",
+          positiveFoodFactors: [],
+          negativeFoodFactors: [],
+          feedback: ["Please try again if you'd like a more detailed analysis."],
+          suggestions: ["Consider retrying with a clearer image for better results."]
+        };
+      } else if (!nutritionSucceeded) {
+        // Only GPT succeeded
+        console.log('⚠️ Partial result, GPT analysis only');
+        partial = true;
+        missing = 'nutrition';
       }
       
-      let ingredientList: string[] = [];
-      if (gptAnalysis.ingredientList && Array.isArray(gptAnalysis.ingredientList)) {
-        ingredientList = gptAnalysis.ingredientList;
-      } else if (typeof gptAnalysis.ingredientList === 'string') {
-        // Handle case where GPT returns a string instead of array
-        ingredientList = gptAnalysis.ingredientList.split(',').map((item: string) => item.trim());
-      }
-      
-      // Fetch nutrition data for ingredients
-      console.log('Fetching nutrition data for ingredients...');
-      let nutritionData: any[] = [];
-      try {
-        if (ingredientList.length > 0) {
-          console.time('⏱️ Nutritionix Lookup');
-          nutritionData = await getNutritionData(ingredientList);
-          console.timeEnd('⏱️ Nutritionix Lookup');
-        } else {
-          console.warn('No ingredients detected for nutrition lookup');
-        }
-      } catch (nutritionError: any) {
-        console.error('Error fetching nutrition data:', nutritionError);
-        console.log('Continuing without complete nutrition data');
-        // Continue without nutrition data or with partial data we have
-      }
-      
-      // Format the response
+      // Format the response with whatever data we have
       console.log('Formatting response...');
       const formattedResponse = formatResponse(gptAnalysis, nutritionData, healthGoal);
       
+      // Add partial result metadata
+      if (partial) {
+        Object.assign(formattedResponse, { partial, missing });
+      }
+      
       // Return the formatted response
-      console.log('✅ Image analysis complete, returning results');
-      console.timeEnd('analyzeImageTotal');
+      console.log('✅ Analysis complete, returning results');
+      console.timeEnd('⏱️ analyzeImage');
       return NextResponse.json({
         success: true,
         ...formattedResponse
@@ -1263,12 +1337,33 @@ export async function POST(request: NextRequest) {
     } catch (analysisError: any) {
       console.error('Analysis error details:', analysisError);
       console.error('Analysis error stack:', analysisError.stack);
-      console.timeEnd('analyzeImageTotal');
+      console.timeEnd('⏱️ analyzeImage');
+      
+      // Provide friendly error messages based on error type
+      const errorMessage = analysisError.message || 'Unknown error';
+      
+      if (errorMessage.includes('timed out') || errorMessage === 'GLOBAL_TIMEOUT') {
+        return NextResponse.json(
+          { 
+            success: false, 
+            error: 'Analysis timed out. Please try again with a smaller image or clearer photo.' 
+          },
+          { status: 504 }
+        );
+      } else if (errorMessage.includes('429')) {
+        return NextResponse.json(
+          { 
+            success: false, 
+            error: 'Too many requests. Please try again in a few minutes.' 
+          },
+          { status: 429 }
+        );
+      }
       
       return NextResponse.json(
         { 
           success: false, 
-          error: `Analysis failed: ${analysisError.message || 'Unknown error'}` 
+          error: `Analysis failed: ${errorMessage}` 
         },
         { status: 500 }
       );
@@ -1276,12 +1371,12 @@ export async function POST(request: NextRequest) {
   } catch (error: any) {
     console.error('🛑 Unhandled error in analyzeImage:', error);
     console.error('Error stack:', error.stack);
-    console.timeEnd('analyzeImageTotal');
+    console.timeEnd('⏱️ analyzeImage');
     
     return NextResponse.json(
       { 
         success: false, 
-        error: error.message || 'An unexpected error occurred' 
+        error: 'An unexpected error occurred. Please try again with a different image.' 
       },
       { status: 500 }
     );
