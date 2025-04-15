@@ -123,7 +123,7 @@ export default function UploadPage() {
       // Create image preview
       const reader = new FileReader();
       reader.onload = (event) => {
-        const img = new Image();
+        const img: HTMLImageElement = document.createElement('img') as HTMLImageElement;
         img.onload = () => {
           // Check if image loaded properly
           if (img.width === 0 || img.height === 0) {
