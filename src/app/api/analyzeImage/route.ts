@@ -88,58 +88,76 @@ async function fetchWithRetryAndTimeout(url: string, options: any, retries = 2, 
 }
 
 // Function to analyze the image with GPT-4 Vision
-async function analyzeWithGPT4Vision(base64Image: string, healthGoal: string) {
-  console.time('analyzeWithGPT4Vision');
+async function analyzeWithGPT4Vision(base64Image: string, healthGoal: string, requestId: string) {
+  console.time(`analyzeWithGPT4Vision-${requestId}`);
   const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
   
-  console.log('OpenAI API Key available:', !!OPENAI_API_KEY);
-  console.log('Base64 image length:', base64Image.length);
-  console.log('Base64 image preview:', base64Image.substring(0, 50) + '...');
-  console.log('Health goal:', healthGoal);
+  console.log(`[${requestId}] OpenAI API Key available:`, !!OPENAI_API_KEY);
+  console.log(`[${requestId}] Base64 image length:`, base64Image.length);
+  console.log(`[${requestId}] Base64 image preview:`, base64Image.substring(0, 50) + '...');
+  console.log(`[${requestId}] Health goal:`, healthGoal);
   
   if (!OPENAI_API_KEY) {
-    console.timeEnd('analyzeWithGPT4Vision');
+    console.timeEnd(`analyzeWithGPT4Vision-${requestId}`);
     throw new Error('OpenAI API key is not configured');
   }
 
-  // Create an AbortController for timeout management
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => {
-    controller.abort();
-    console.error('OpenAI request aborted due to timeout (45s)');
-  }, 45000); // 45 second timeout (to stay within Vercel's limits)
+  // Try with primary prompt first, then fallback to simpler prompt if needed
+  let attempt = 1;
+  let lastError = null;
 
-  try {
-    console.log('Sending request to OpenAI API...');
-    
-    // Get goal-specific prompt
-    const goalPrompt = getGoalSpecificPrompt(healthGoal);
-    
-    // Log the prompt being used
-    console.log(`Analyzing image with health goal: ${healthGoal}`);
-    console.log(`Using ${goalPrompt.length} character prompt for this goal`);
-    
-    // Configure request headers for better performance
-    const headers = {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${OPENAI_API_KEY}`,
-      'OpenAI-Beta': 'assistants=v1'  // Use latest API features
-    };
-    
-    // Configure request parameters for better response
-    const requestPayload = {
-      model: "gpt-4o",  // Using GPT-4o for faster response
-      messages: [
-        {
-          role: "user",
-          content: [
-            { 
-              type: "text", 
-              text: `You are an expert nutritionist and performance coach who specializes in analyzing meals for specific health goals. Analyze the image of this meal and return the result as strict JSON.
+  while (attempt <= 2) {
+    try {
+      console.log(`[${requestId}] GPT-4 Vision attempt ${attempt} starting...`);
+      
+      // Create an AbortController for timeout management
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => {
+        controller.abort();
+        console.error(`[${requestId}] OpenAI request aborted due to timeout (45s)`);
+      }, 45000); // 45 second timeout (to stay within Vercel's limits)
+
+      console.log(`[${requestId}] Sending request to OpenAI API...`);
+      
+      // Get goal-specific prompt
+      const goalPrompt = getGoalSpecificPrompt(healthGoal);
+      
+      // Use more resilient prompt for low-quality images
+      const primarySystemPrompt = `You are a world-class nutritionist looking at a food photo. Even if the photo is blurry, dim, or low quality, try your best to identify the meal. 
 
 The user's specific health goal is: "${healthGoal}"
 
-${goalPrompt}
+${goalPrompt}`;
+
+      // Simpler fallback prompt for retry attempts
+      const fallbackSystemPrompt = attempt === 1 ? primarySystemPrompt 
+        : `You are a world-class nutritionist analyzing a food photo. The image may be unclear, but make your best estimation of what food is shown. 
+        
+If you can see any food at all, please identify it. If the image is completely unidentifiable, describe it as "a meal" and estimate basic nutrition values.
+
+Even with limited visual information, provide a response that follows the JSON format.`;
+      
+      // Log the prompt being used
+      console.log(`[${requestId}] Analyzing image with health goal: ${healthGoal}`);
+      console.log(`[${requestId}] Using ${attempt === 1 ? 'primary' : 'fallback'} prompt (${fallbackSystemPrompt.length} chars)`);
+      
+      // Configure request headers for better performance
+      const headers = {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${OPENAI_API_KEY}`,
+        'OpenAI-Beta': 'assistants=v1'  // Use latest API features
+      };
+      
+      // Configure request parameters for better response
+      const requestPayload = {
+        model: "gpt-4o",  // Using GPT-4o for faster response
+        messages: [
+          {
+            role: "user",
+            content: [
+              { 
+                type: "text", 
+                text: `${fallbackSystemPrompt}
 
 Return ONLY valid JSON that can be parsed with JSON.parse(). Use this exact format:
 {
@@ -184,112 +202,143 @@ IMPORTANT GUIDELINES:
 9. Focus on the user's specific goal, not general healthy eating advice
 
 Do not return any explanation or text outside the JSON block. Your entire response must be valid JSON only.`
-            },
-            {
-              type: "image_url",
-              image_url: {
-                url: `data:image/jpeg;base64,${base64Image}`,
-                detail: "low" // Use low detail for faster processing
+              },
+              {
+                type: "image_url",
+                image_url: {
+                  url: `data:image/jpeg;base64,${base64Image}`,
+                  detail: "low" // Use low detail for faster processing
+                }
               }
-            }
-          ]
-        }
-      ],
-      max_tokens: 1500,
-      temperature: 0.5,  // Lower temperature for more deterministic output
-      response_format: { type: "json_object" }  // Force JSON response
-    };
-    
-    console.log('Request URL:', 'https://api.openai.com/v1/chat/completions');
-    console.log('Request model:', requestPayload.model);
-    
-    const startTime = Date.now();
-    
-    try {
-      // Use native fetch with the AbortController signal for timeout management
-      const response = await fetch('https://api.openai.com/v1/chat/completions', {
-        method: 'POST',
-        headers,
-        body: JSON.stringify(requestPayload),
-        signal: controller.signal
-      });
+            ]
+          }
+        ],
+        max_tokens: 1500,
+        temperature: attempt === 1 ? 0.5 : 0.7,  // Higher temperature on second attempt for more creativity
+        response_format: { type: "json_object" }  // Force JSON response
+      };
       
-      // Clear the timeout since the request completed
-      clearTimeout(timeoutId);
+      console.log(`[${requestId}] Request URL: https://api.openai.com/v1/chat/completions`);
+      console.log(`[${requestId}] Request model:`, requestPayload.model);
       
-      const endTime = Date.now();
-      console.log(`OpenAI API request completed in ${(endTime - startTime) / 1000}s`);
-      
-      if (!response.ok) {
-        const errorText = await response.text();
-        console.error('OpenAI API Error Status:', response.status);
-        console.error('OpenAI API Error Response:', errorText);
-        console.timeEnd('analyzeWithGPT4Vision');
-        throw new Error(`OpenAI API Error: ${response.status} ${response.statusText}`);
-      }
-      
-      const responseData = await response.json();
-      console.log('GPT-4 Vision Analysis Complete');
-      
-      if (
-        !responseData.choices || 
-        !responseData.choices[0] || 
-        !responseData.choices[0].message || 
-        !responseData.choices[0].message.content
-      ) {
-        console.error('Invalid OpenAI response structure:', JSON.stringify(responseData));
-        console.timeEnd('analyzeWithGPT4Vision');
-        throw new Error('Invalid response structure from OpenAI API');
-      }
-      
-      const analysisText = responseData.choices[0].message.content;
+      const startTime = Date.now();
       
       try {
-        // Parse the JSON response
-        const analysisJson = JSON.parse(analysisText.trim());
-        console.log('Analysis JSON parsed successfully');
-        console.timeEnd('analyzeWithGPT4Vision');
-        return analysisJson;
-      } catch (parseError) {
-        console.error('Error parsing JSON from GPT response:', parseError);
-        console.error('Raw response:', analysisText);
+        // Use native fetch with the AbortController signal for timeout management
+        const response = await fetch('https://api.openai.com/v1/chat/completions', {
+          method: 'POST',
+          headers,
+          body: JSON.stringify(requestPayload),
+          signal: controller.signal
+        });
         
-        // Try to extract JSON using regex if parsing fails
-        const jsonMatch = analysisText.match(/({[\s\S]*})/);
-        if (jsonMatch && jsonMatch[0]) {
-          try {
-            const extractedJson = JSON.parse(jsonMatch[0]);
-            console.log('Extracted JSON using regex');
-            console.timeEnd('analyzeWithGPT4Vision');
-            return extractedJson;
-          } catch (extractError) {
-            console.error('Failed to extract JSON with regex:', extractError);
-          }
+        // Clear the timeout since the request completed
+        clearTimeout(timeoutId);
+        
+        const endTime = Date.now();
+        console.log(`[${requestId}] OpenAI API request completed in ${(endTime - startTime) / 1000}s`);
+        
+        if (!response.ok) {
+          const errorText = await response.text();
+          console.error(`[${requestId}] OpenAI API Error Status:`, response.status);
+          console.error(`[${requestId}] OpenAI API Error Response:`, errorText);
+          
+          // Store this error but try again if it's our first attempt
+          lastError = new Error(`OpenAI API Error (attempt ${attempt}): ${response.status} ${response.statusText}`);
+          attempt++;
+          continue;
         }
         
-        console.timeEnd('analyzeWithGPT4Vision');
-        throw new Error('Failed to parse analysis result');
+        const responseData = await response.json();
+        console.log(`[${requestId}] GPT-4 Vision Analysis Complete`);
+        
+        if (
+          !responseData.choices || 
+          !responseData.choices[0] || 
+          !responseData.choices[0].message || 
+          !responseData.choices[0].message.content
+        ) {
+          console.error(`[${requestId}] Invalid OpenAI response structure:`, JSON.stringify(responseData));
+          
+          // Store this error but try again if it's our first attempt
+          lastError = new Error(`Invalid response structure from OpenAI API (attempt ${attempt})`);
+          attempt++;
+          continue;
+        }
+        
+        const analysisText = responseData.choices[0].message.content;
+        
+        try {
+          // Parse the JSON response
+          const analysisJson = JSON.parse(analysisText.trim());
+          console.log(`[${requestId}] Analysis JSON parsed successfully`);
+          console.log(`[${requestId}] GPT-4 Vision analysis completed in ${(endTime - startTime) / 1000}s`);
+          console.timeEnd(`analyzeWithGPT4Vision-${requestId}`);
+          return analysisJson;
+        } catch (parseError) {
+          console.error(`[${requestId}] Error parsing JSON from GPT response (attempt ${attempt}):`, parseError);
+          console.error(`[${requestId}] Raw response:`, analysisText);
+          
+          // Try to extract JSON using regex if parsing fails
+          const jsonMatch = analysisText.match(/({[\s\S]*})/);
+          if (jsonMatch && jsonMatch[0]) {
+            try {
+              const extractedJson = JSON.parse(jsonMatch[0]);
+              console.log(`[${requestId}] Extracted JSON using regex on attempt ${attempt}`);
+              console.timeEnd(`analyzeWithGPT4Vision-${requestId}`);
+              return extractedJson;
+            } catch (extractError) {
+              console.error(`[${requestId}] Failed to extract JSON with regex (attempt ${attempt}):`, extractError);
+            }
+          }
+          
+          // Store this error but try again if it's our first attempt
+          lastError = new Error(`Failed to parse analysis result (attempt ${attempt}): ${parseError instanceof Error ? parseError.message : 'Unknown parsing error'}`);
+          attempt++;
+          continue;
+        }
+      } catch (fetchError: unknown) {
+        // Clear the timeout in case of errors
+        clearTimeout(timeoutId);
+        
+        // Check if this is an abort error
+        if (fetchError instanceof Error && fetchError.name === 'AbortError') {
+          console.error(`[${requestId}] OpenAI request aborted due to timeout on attempt ${attempt}`);
+          
+          // Store this error but try again if it's our first attempt
+          lastError = new Error(`OpenAI request timed out after 45 seconds (attempt ${attempt})`);
+          attempt++;
+          continue;
+        }
+        
+        // Other fetch errors
+        console.error(`[${requestId}] Error fetching from OpenAI API (attempt ${attempt}):`, fetchError);
+        
+        // Store this error but try again if it's our first attempt
+        lastError = fetchError instanceof Error 
+          ? new Error(`Fetch error on attempt ${attempt}: ${fetchError.message}`) 
+          : new Error(`Unknown fetch error occurred on attempt ${attempt}`);
+        attempt++;
+        continue;
       }
-    } catch (fetchError: unknown) {
-      // Check if this is an abort error
-      if (fetchError instanceof Error && fetchError.name === 'AbortError') {
-        console.error('OpenAI request aborted due to timeout');
-        console.timeEnd('analyzeWithGPT4Vision');
-        throw new Error('OpenAI request timed out after 45 seconds');
-      }
+    } catch (error) {
+      console.error(`[${requestId}] Error analyzing image with GPT-4 Vision (attempt ${attempt}):`, error);
       
-      // Other fetch errors
-      console.error('Error fetching from OpenAI API:', fetchError);
-      console.timeEnd('analyzeWithGPT4Vision');
-      throw fetchError instanceof Error ? fetchError : new Error('Unknown fetch error occurred');
+      // Store this error but try again if it's our first attempt
+      lastError = error instanceof Error 
+        ? new Error(`Error on attempt ${attempt}: ${error.message}`) 
+        : new Error(`Unknown error on attempt ${attempt}`);
+      attempt++;
+      continue;
     }
-  } catch (error) {
-    // Clear the timeout in case of errors
-    clearTimeout(timeoutId);
-    console.error('Error analyzing image with GPT-4 Vision:', error);
-    console.timeEnd('analyzeWithGPT4Vision');
-    throw error;
   }
+  
+  // If we've reached here, all attempts failed
+  console.error(`[${requestId}] All GPT-4 Vision attempts failed. Last error:`, lastError);
+  console.timeEnd(`analyzeWithGPT4Vision-${requestId}`);
+  
+  // Throw the last error we encountered
+  throw lastError || new Error('Failed to analyze image after multiple attempts');
 }
 
 // Helper function to get goal-specific prompts
@@ -1230,7 +1279,7 @@ export async function POST(request: NextRequest) {
         (async () => {
           try {
             console.time(`⏱️ [${requestId}] GPT Vision`);
-            gptAnalysis = await analyzeWithGPT4Vision(base64Image, healthGoal);
+            gptAnalysis = await analyzeWithGPT4Vision(base64Image, healthGoal, requestId);
             console.timeEnd(`⏱️ [${requestId}] GPT Vision`);
             console.log(`✅ [${requestId}] GPT-4 Vision analysis succeeded`);
             

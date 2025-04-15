@@ -13,10 +13,10 @@ import { toast } from 'react-hot-toast';
 export default function UploadPage() {
   const [file, setFile] = useState<File | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
-  const [healthGoal, setHealthGoal] = useState<string>('General Health');
-  const [isAnalyzing, setIsAnalyzing] = useState<boolean>(false);
-  const [uploadProgress, setUploadProgress] = useState<number>(0);
-  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [healthGoal, setHealthGoal] = useState<string>("");
+  const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState(0);
+  const [error, setError] = useState<string | null>(null);
   const [isDragging, setIsDragging] = useState<boolean>(false);
   const [saveToAccount, setSaveToAccount] = useState<boolean>(false);
   const [mealName, setMealName] = useState<string>('');
@@ -25,6 +25,9 @@ export default function UploadPage() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const router = useRouter();
   const { currentUser, loading: authLoading, authInitialized } = useAuth();
+  const [showOptions, setShowOptions] = useState(false);
+  const [imagePreview, setImagePreview] = useState<string | null>(null);
+  const [imageValidated, setImageValidated] = useState(true);
 
   // Redirect unauthenticated users
   useEffect(() => {
@@ -100,26 +103,50 @@ export default function UploadPage() {
     }
   }, [currentUser, authInitialized]);
 
+  // Handle file selection
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (e.target.files && e.target.files[0]) {
-      const selectedFile = e.target.files[0];
-      
+    const selectedFile = e.target.files?.[0] || null;
+    setFile(selectedFile);
+    setError(null);
+    setImageValidated(true);
+    
+    if (selectedFile) {
       // Check file type
-      if (!['image/jpeg', 'image/jpg', 'image/png'].includes(selectedFile.type)) {
-        setErrorMessage('Please select a JPG or PNG image');
+      if (!selectedFile.type.startsWith('image/')) {
+        setError('Please select a valid image file.');
+        setFile(null);
+        setImagePreview(null);
+        setImageValidated(false);
         return;
       }
       
-      // Check file size (limit to 5MB)
-      if (selectedFile.size > 5 * 1024 * 1024) {
-        setErrorMessage('File is too large. Please select an image under 5MB');
-        return;
-      }
-      
-      setFile(selectedFile);
-      setPreviewUrl(URL.createObjectURL(selectedFile));
-      // Reset error when a new image is selected
-      setErrorMessage(null);
+      // Create image preview
+      const reader = new FileReader();
+      reader.onload = (event) => {
+        const img = new Image();
+        img.onload = () => {
+          // Check if image loaded properly
+          if (img.width === 0 || img.height === 0) {
+            setError('The selected file does not appear to be a valid image.');
+            setImageValidated(false);
+          } else {
+            setImagePreview(event.target?.result as string);
+            setImageValidated(true);
+          }
+        };
+        img.onerror = () => {
+          setError('Failed to load the image. Please try another one.');
+          setImageValidated(false);
+        };
+        img.src = event.target?.result as string;
+      };
+      reader.onerror = () => {
+        setError('Failed to read the file. Please try another one.');
+        setImageValidated(false);
+      };
+      reader.readAsDataURL(selectedFile);
+    } else {
+      setImagePreview(null);
     }
   };
 
@@ -129,7 +156,7 @@ export default function UploadPage() {
       URL.revokeObjectURL(previewUrl);
     }
     setPreviewUrl(null);
-    setErrorMessage(null);
+    setError(null);
     setUploadProgress(0);
     
     // Reset file input
@@ -157,19 +184,19 @@ export default function UploadPage() {
       
       // Check file type
       if (!['image/jpeg', 'image/jpg', 'image/png'].includes(droppedFile.type)) {
-        setErrorMessage('Please select a JPG or PNG image');
+        setError('Please select a JPG or PNG image');
         return;
       }
       
       // Check file size
       if (droppedFile.size > 5 * 1024 * 1024) {
-        setErrorMessage('File is too large. Please select an image under 5MB');
+        setError('File is too large. Please select an image under 5MB');
         return;
       }
       
       setFile(droppedFile);
       setPreviewUrl(URL.createObjectURL(droppedFile));
-      setErrorMessage(null);
+      setError(null);
     }
   };
 
@@ -178,25 +205,29 @@ export default function UploadPage() {
   const [optimisticResult, setOptimisticResult] = useState<any>(null);
   const cancelTokenRef = useRef<CancelTokenSource | null>(null);
 
-  // Function to handle the file upload
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    setError(null);
     
+    // Validate form inputs
     if (!file) {
-      setErrorMessage('Please select an image to analyze');
-      toast.error('Please select an image to analyze');
+      setError("Please select an image file");
       return;
     }
-
-    if (!healthGoal.trim()) {
-      setErrorMessage('Please enter your health goal');
-      toast.error('Please enter your health goal');
+    
+    if (!imageValidated) {
+      setError("Please select a valid image file");
+      return;
+    }
+    
+    if (!healthGoal) {
+      setError("Please select a health goal");
       return;
     }
 
     // Reset previous errors
     setIsAnalyzing(true);
-    setErrorMessage(null);
+    setError(null);
     setUploadProgress(0);
     setAnalysisStage('preparing');
     
@@ -230,7 +261,7 @@ export default function UploadPage() {
       if (file.size > 5 * 1024 * 1024) {
         console.log('File size is large, sending a warning');
         toast.loading('Large image detected, processing may take longer...', { id: analyzeToast });
-        setErrorMessage('Image is large, analysis may take longer. Please use images under 5MB for faster results.');
+        setError('Image is large, analysis may take longer. Please use images under 5MB for faster results.');
       }
       
       // Use the file directly
@@ -274,10 +305,10 @@ export default function UploadPage() {
         
         if (analysisResult.missing === 'nutrition') {
           toast.loading('Limited nutrition data available...', { id: analyzeToast });
-          setErrorMessage('We were able to analyze your meal but couldn\'t fetch complete nutrition data. Results may be limited.');
+          setError('We were able to analyze your meal but couldn\'t fetch complete nutrition data. Results may be limited.');
         } else if (analysisResult.missing === 'gpt') {
           toast.loading('Basic analysis only...', { id: analyzeToast });
-          setErrorMessage('We identified ingredients but couldn\'t complete full analysis. Results may be limited.');
+          setError('We identified ingredients but couldn\'t complete full analysis. Results may be limited.');
         }
       }
       
@@ -335,10 +366,10 @@ export default function UploadPage() {
               saveError.message.includes('cross-origin')
           )) {
             console.error('⚠️ DETECTED CORS ERROR ⚠️');
-            setErrorMessage('Network error detected. Your analysis is available but could not be saved to your account.');
+            setError('Network error detected. Your analysis is available but could not be saved to your account.');
             toast.error('Network error. Analysis available but not saved.', { id: analyzeToast });
           } else {
-            setErrorMessage('Failed to save to account, but analysis is available.');
+            setError('Failed to save to account, but analysis is available.');
             toast.error('Failed to save to account. Analysis still available.', { id: analyzeToast });
           }
           // Continue with analysis even if save fails
@@ -410,7 +441,7 @@ export default function UploadPage() {
         toast.error(`Failed to analyze image: ${errorMsg}`, { id: analyzeToast });
       }
       
-      setErrorMessage(errorMsg);
+      setError(errorMsg);
       
       // Reset analysis state
       setIsAnalyzing(false);
@@ -532,9 +563,9 @@ export default function UploadPage() {
               </div>
             )}
 
-            {errorMessage && (
+            {error && (
               <div className="bg-coral/10 border border-coral/30 text-coral rounded-lg p-3 mb-4 sm:mb-6 text-sm">
-                <p>{errorMessage}</p>
+                <p>{error}</p>
               </div>
             )}
 
