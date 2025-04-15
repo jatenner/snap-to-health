@@ -1275,6 +1275,10 @@ function createFallbackResponse(reason: string, healthGoal: string, requestId: s
 }
 
 export async function POST(request: NextRequest) {
+  // Debug OpenAI API key injection
+  console.log("🧪 Runtime OpenAI Key Exists:", Boolean(process.env.OPENAI_API_KEY));
+  console.log("🔐 OPENAI Key Prefix:", process.env.OPENAI_API_KEY?.slice(0, 5));
+
   // Generate unique request ID for tracking
   const requestId = Math.random().toString(36).substring(2, 10);
   
