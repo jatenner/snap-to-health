@@ -32,6 +32,7 @@ export default function MealAnalysisPage() {
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [loadingStage, setLoadingStage] = useState<string>('initializing');
+  const [error, setError] = useState<string | null>(null);
   const router = useRouter();
   const { currentUser } = useAuth();
 
@@ -62,6 +63,15 @@ export default function MealAnalysisPage() {
         setLoadingStage('parsing');
         const parsedResult = JSON.parse(storedResult);
         
+        // Validate that the parsed result has the required fields
+        if (!parsedResult || 
+            typeof parsedResult !== 'object' || 
+            !('description' in parsedResult) || 
+            !('nutrients' in parsedResult) || 
+            !Array.isArray(parsedResult.nutrients)) {
+          throw new Error('Invalid or corrupted analysis data');
+        }
+        
         // Set preview image first for perceived performance
         if (storedPreviewUrl) {
           setPreviewUrl(storedPreviewUrl);
@@ -83,8 +93,9 @@ export default function MealAnalysisPage() {
             }, 300);
           }, 100);
         }, 300);
-      } catch (err) {
+      } catch (err: any) {
         console.error('Failed to parse stored analysis result:', err);
+        setError(err.message || 'Failed to load analysis results');
         setLoading(false);
         setLoadingStage('error');
       }
@@ -136,7 +147,29 @@ export default function MealAnalysisPage() {
             {loadingStage === 'initializing' && 'Loading data...'}
             {loadingStage === 'parsing' && 'Processing analysis...'}
             {loadingStage === 'rendering' && 'Preparing insights...'}
+            {loadingStage === 'error' && 'Error loading analysis...'}
           </div>
+        </div>
+      </div>
+    );
+  }
+
+  // Display an error message if something went wrong
+  if (error) {
+    return (
+      <div className="min-h-[60vh] flex items-center justify-center">
+        <div className="text-center max-w-sm mx-auto bg-white shadow-lab rounded-xl p-6">
+          <svg xmlns="http://www.w3.org/2000/svg" className="h-12 w-12 text-red-500 mx-auto mb-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+          </svg>
+          <h2 className="text-xl font-semibold text-gray-800 mb-2">Analysis Error</h2>
+          <p className="text-gray-600 mb-6">{error}</p>
+          <Link 
+            href="/upload" 
+            className="inline-block bg-primary hover:bg-secondary text-white font-medium py-2 px-4 rounded-lg transition-colors"
+          >
+            Try Again
+          </Link>
         </div>
       </div>
     );
@@ -162,38 +195,38 @@ export default function MealAnalysisPage() {
     );
   }
 
-  // Extract the analysis data
+  // Safely extract and validate the analysis data with fallbacks
   const { 
-    description, 
-    nutrients, 
-    feedback, 
-    suggestions, 
+    description = 'A nutritious meal with various ingredients', 
+    nutrients = [], 
+    feedback = ['Try to maintain a balanced diet with appropriate portions.'], 
+    suggestions = ['Consider incorporating a variety of nutrients in your meals.'], 
     goalScore = 5, 
     goalName = 'Health Impact', 
-    scoreExplanation = '',
+    scoreExplanation = 'This meal has been analyzed for its nutritional content.',
     positiveFoodFactors = [],
     negativeFoodFactors = [],
-    rawGoal
+    rawGoal = 'Improve overall health'
   } = analysisResult;
 
-  // Group nutrients into categories
-  const macros = nutrients.filter(n => 
+  // Group nutrients into categories - with validation to prevent errors
+  const macros = Array.isArray(nutrients) ? nutrients.filter(n => 
     ['protein', 'carbs', 'fat', 'calories'].some(
-      macro => n.name.toLowerCase().includes(macro)
+      macro => n && n.name && n.name.toLowerCase().includes(macro)
     )
-  );
+  ) : [];
   
-  const micronutrients = nutrients.filter(n => 
-    !['protein', 'carbs', 'fat', 'calories'].some(
+  const micronutrients = Array.isArray(nutrients) ? nutrients.filter(n => 
+    n && n.name && !['protein', 'carbs', 'fat', 'calories'].some(
       macro => n.name.toLowerCase().includes(macro)
     ) && n.isHighlight
-  );
+  ) : [];
   
-  const otherNutrients = nutrients.filter(n => 
-    !['protein', 'carbs', 'fat', 'calories'].some(
+  const otherNutrients = Array.isArray(nutrients) ? nutrients.filter(n => 
+    n && n.name && !['protein', 'carbs', 'fat', 'calories'].some(
       macro => n.name.toLowerCase().includes(macro)
     ) && !n.isHighlight
-  );
+  ) : [];
 
   // Generate score color based on value
   const getScoreColor = (value: number) => {

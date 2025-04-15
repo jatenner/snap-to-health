@@ -255,6 +255,13 @@ export default function UploadPage() {
         timeout: 60000 // 1 minute timeout
       });
       
+      // Check if response is successful and contains valid data
+      if (!response.data || response.data.success === false) {
+        // Handle unsuccessful response but with valid error data
+        const errorMsg = response.data?.error || 'Failed to analyze meal. Please try again.';
+        throw new Error(errorMsg);
+      }
+      
       // The analysis result from the API
       setAnalysisStage('processing');
       toast.loading('Processing nutritional data...', { id: analyzeToast });
@@ -350,23 +357,42 @@ export default function UploadPage() {
       if (axios.isCancel(error)) {
         console.log('Request canceled:', error.message);
         toast.error('Analysis was canceled', { id: analyzeToast });
+        setIsAnalyzing(false);
+        setAnalysisStage('');
+        setOptimisticResult(null);
         return;
       }
       
       console.error('Error analyzing image:', error);
-      const errorMsg = error.response?.data?.error || 
-                       error.message || 
-                       'Failed to analyze image. Please try again.';
-      setErrorMessage(errorMsg);
       
-      if (error.response?.status === 504 || error.message.includes('timeout')) {
-        toast.error('Request timed out. Please try again with a smaller image.', { id: analyzeToast });
-      } else if (error.response?.status === 413) {
-        toast.error('Image too large. Please use a smaller image (under 5MB).', { id: analyzeToast });
-      } else {
-        toast.error('Failed to analyze image. Please try again.', { id: analyzeToast });
+      // Get the error message from various possible sources
+      let errorMsg = 'Failed to analyze image. Please try again.';
+      
+      if (error.response?.data?.error) {
+        // Server returned an error response with data
+        errorMsg = error.response.data.error;
+      } else if (error.response?.data?.message) {
+        // Alternative error format
+        errorMsg = error.response.data.message;
+      } else if (error.message) {
+        // Error object has a message property
+        errorMsg = error.message;
       }
       
+      setErrorMessage(errorMsg);
+      
+      // Handle specific error types with user-friendly messages
+      if (error.response?.status === 504 || error.message.includes('timeout') || errorMsg.includes('timed out')) {
+        toast.error('Request timed out. Please try again with a smaller image.', { id: analyzeToast });
+      } else if (error.response?.status === 413 || errorMsg.includes('too large')) {
+        toast.error('Image too large. Please use a smaller image (under 5MB).', { id: analyzeToast });
+      } else if (error.response?.status === 429 || errorMsg.includes('Too many requests')) {
+        toast.error('Rate limit reached. Please try again in a few minutes.', { id: analyzeToast });
+      } else {
+        toast.error(`Failed to analyze image: ${errorMsg}`, { id: analyzeToast });
+      }
+      
+      // Reset analysis state
       setIsAnalyzing(false);
       setAnalysisStage('');
       setOptimisticResult(null);
