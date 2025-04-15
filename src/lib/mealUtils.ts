@@ -202,7 +202,7 @@ export const uploadMealImage = async (
               }, 500);
               
               // Attempt the upload
-              const downloadURL = await uploadFileWithCors(file, storagePath);
+              const downloadURL = await uploadFileWithCors(file, storagePath, progressCallback);
               
               // Clear the interval and set to 100%
               clearInterval(progressInterval);

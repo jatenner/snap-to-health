@@ -9,12 +9,18 @@ const storage = getStorage(app);
  * Upload a file to Firebase Storage with CORS proxy support for local development
  * @param file The file to upload
  * @param path The path to upload the file to
+ * @param progressCallback Optional callback for upload progress
  * @returns The download URL for the uploaded file
  */
-export async function uploadFileWithCors(file: File | Blob, path: string) {
+export async function uploadFileWithCors(file: File | Blob, path: string, progressCallback?: (progress: number) => void) {
   try {
     console.log('uploadFileWithCors: Starting upload process via CORS proxy helper');
     console.log(`File type: ${file.type}, size: ${file.size} bytes, path: ${path}`);
+    
+    // Let the caller know we're starting
+    if (progressCallback) {
+      progressCallback(10);
+    }
     
     // Log storage bucket information
     console.log('Storage bucket from env:', process.env.NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET);
@@ -43,10 +49,20 @@ export async function uploadFileWithCors(file: File | Blob, path: string) {
     };
     console.log('Metadata:', metadata);
     
+    // Let the caller know we're uploading
+    if (progressCallback) {
+      progressCallback(30);
+    }
+    
     // Upload the file
     console.log('Uploading file to Firebase Storage...');
     const snapshot = await uploadBytes(storageRef, file, metadata);
     console.log('Upload successful, getting download URL...');
+    
+    // Let the caller know we're finishing up
+    if (progressCallback) {
+      progressCallback(80);
+    }
     
     // Get the download URL
     let downloadUrl = await getDownloadURL(snapshot.ref);
@@ -86,6 +102,11 @@ export async function uploadFileWithCors(file: File | Blob, path: string) {
       }
     }
     
+    // Let the caller know we're done
+    if (progressCallback) {
+      progressCallback(100);
+    }
+    
     console.log('CORS proxy upload completed successfully');
     return downloadUrl;
   } catch (error: any) {
@@ -101,6 +122,11 @@ export async function uploadFileWithCors(file: File | Blob, path: string) {
       console.error('Upload was canceled');
     } else if (error.code === 'storage/unknown') {
       console.error('Unknown storage error - check browser console for more details');
+    }
+    
+    // Inform caller of failure
+    if (progressCallback) {
+      progressCallback(-1); // Use -1 to indicate failure as in uploadMealImage
     }
     
     throw error;
