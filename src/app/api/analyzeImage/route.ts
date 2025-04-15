@@ -1124,7 +1124,7 @@ function formatGoalName(healthGoal: string): string {
 }
 
 export async function POST(request: NextRequest) {
-  console.log('Analyze Image endpoint hit - starting image analysis');
+  console.log('🔥 Hit /api/analyzeImage - analysis started');
   console.time('analyzeImageTotal');
   
   try {
@@ -1183,10 +1183,9 @@ export async function POST(request: NextRequest) {
       console.log('Calling GPT-4 Vision API...');
       let gptAnalysis;
       try {
-        const startTime = Date.now();
+        console.time('⏱️ GPT Vision');
         gptAnalysis = await analyzeWithGPT4Vision(base64Image, healthGoal);
-        const endTime = Date.now();
-        console.log(`GPT-4 Vision analysis completed in ${(endTime - startTime) / 1000}s`);
+        console.timeEnd('⏱️ GPT Vision');
       } catch (visionError: any) {
         console.error('GPT-4 Vision analysis failed:', visionError);
         console.timeEnd('analyzeImageTotal');
@@ -1238,7 +1237,9 @@ export async function POST(request: NextRequest) {
       let nutritionData: any[] = [];
       try {
         if (ingredientList.length > 0) {
+          console.time('⏱️ Nutritionix Lookup');
           nutritionData = await getNutritionData(ingredientList);
+          console.timeEnd('⏱️ Nutritionix Lookup');
         } else {
           console.warn('No ingredients detected for nutrition lookup');
         }
@@ -1253,7 +1254,7 @@ export async function POST(request: NextRequest) {
       const formattedResponse = formatResponse(gptAnalysis, nutritionData, healthGoal);
       
       // Return the formatted response
-      console.log('Analysis completed successfully, returning response');
+      console.log('✅ Image analysis complete, returning results');
       console.timeEnd('analyzeImageTotal');
       return NextResponse.json({
         success: true,
@@ -1273,7 +1274,7 @@ export async function POST(request: NextRequest) {
       );
     }
   } catch (error: any) {
-    console.error('Analyze Image Error:', error);
+    console.error('🛑 Unhandled error in analyzeImage:', error);
     console.error('Error stack:', error.stack);
     console.timeEnd('analyzeImageTotal');
     
