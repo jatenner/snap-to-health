@@ -17,7 +17,7 @@ interface SavedMealDetails {
   analysis: {
     description?: string;
     nutrients?: any[];
-    feedback?: string;
+    feedback?: string[];
     suggestions?: string[];
     goalScore?: number;
     goalName?: string;
@@ -26,6 +26,18 @@ interface SavedMealDetails {
     negativeFoodFactors?: string[];
     sleepScore?: number;
     rawGoal?: string;
+    lowConfidence?: boolean;
+    fallback?: boolean;
+    message?: string;
+    detailedIngredients?: {
+      name: string;
+      category: string;
+      confidence: number;
+      confidenceEmoji?: string;
+    }[];
+    reasoningLogs?: string[];
+    partialResults?: boolean;
+    missing?: string[];
   };
   goalType?: string;
   goalScore?: number;
@@ -107,8 +119,37 @@ export default function MealDetailPage() {
           setEditedMealName(mealData.mealName || '');
           setLoadingStage('complete');
         } else {
-          setError('Meal not found');
-          setLoadingStage('error');
+          // Check if we have analysis in session storage (from meal-analysis page)
+          try {
+            const analysisResult = sessionStorage.getItem('analysisResult');
+            const imageUrl = sessionStorage.getItem('previewUrl');
+            
+            if (analysisResult && imageUrl && mealId) {
+              const parsedAnalysis = JSON.parse(analysisResult);
+              const sessionMeal = {
+                id: mealId,
+                mealName: 'Unsaved Meal',
+                imageUrl: imageUrl,
+                createdAt: new Date(),
+                analysis: parsedAnalysis,
+                goalType: parsedAnalysis.goalName || 'General Health',
+                goalScore: parsedAnalysis.goalScore || 5,
+                goal: parsedAnalysis.rawGoal || 'General Health'
+              };
+              
+              setMeal(sessionMeal);
+              setEditedMealName(sessionMeal.mealName);
+              setLoadingStage('session');
+              setError('This meal is in your session but not saved to your account.');
+            } else {
+              setError('Meal not found');
+              setLoadingStage('error');
+            }
+          } catch (sessionErr) {
+            console.warn('Failed to load session meal:', sessionErr);
+            setError('Meal not found');
+            setLoadingStage('error');
+          }
         }
       } catch (error) {
         console.error('Error fetching meal details:', error);
@@ -183,6 +224,375 @@ export default function MealDetailPage() {
     setImageLoaded(true);
   };
 
+  // Component to display ingredients with confidence levels
+  const IngredientsWithConfidence = ({ ingredients }: { ingredients: SavedMealDetails['analysis']['detailedIngredients'] }) => {
+    if (!ingredients || ingredients.length === 0) return null;
+
+    const getConfidenceEmoji = (confidence: number): string => {
+      if (confidence >= 8) return '🟢';
+      if (confidence >= 5) return '🟡';
+      return '🔴';
+    };
+
+    const getConfidenceClass = (confidence: number): string => {
+      if (confidence >= 8) return 'text-green-600';
+      if (confidence >= 5) return 'text-amber-600';
+      return 'text-rose-600';
+    };
+
+    return (
+      <div className="mt-4 p-4 bg-background rounded-lg border border-stone border-opacity-30">
+        <h3 className="font-medium text-gray-800 mb-3 flex items-center">
+          <span className="inline-block w-6 h-6 rounded-full bg-primary bg-opacity-20 flex items-center justify-center mr-2">
+            <svg xmlns="http://www.w3.org/2000/svg" className="h-3.5 w-3.5 text-primary" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
+            </svg>
+          </span>
+          Ingredients Detected
+        </h3>
+        <div className="space-y-2">
+          {ingredients.map((ingredient, index) => {
+            const confidenceEmoji = ingredient.confidenceEmoji || getConfidenceEmoji(ingredient.confidence);
+            const confidenceClass = getConfidenceClass(ingredient.confidence);
+            
+            return (
+              <div key={index} className="flex justify-between items-center p-2 bg-white rounded-md border border-stone border-opacity-20">
+                <div className="flex items-center">
+                  <span className="text-lg mr-2">{confidenceEmoji}</span>
+                  <span className="font-medium text-gray-800">{ingredient.name}</span>
+                  {ingredient.category && (
+                    <span className="ml-2 text-xs bg-gray-100 text-gray-600 px-2 py-0.5 rounded-full">
+                      {ingredient.category}
+                    </span>
+                  )}
+                </div>
+                <span className={`text-sm font-medium ${confidenceClass}`}>
+                  {ingredient.confidence.toFixed(1)}/10
+                </span>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    );
+  };
+
+  // Component to display confidence warnings
+  const AnalysisConfidenceWarning = ({ analysis }: { analysis: SavedMealDetails['analysis'] }) => {
+    const [expanded, setExpanded] = useState(false);
+    
+    if (!analysis.lowConfidence && !analysis.fallback) return null;
+    
+    const warningType = analysis.fallback ? 'fallback' : 'lowConfidence';
+    const warningTitle = analysis.fallback ? 'Analysis Fallback' : 'Low Confidence Analysis';
+    
+    // Safer approach for dynamic classes
+    const bgClass = analysis.fallback ? 'bg-red-50' : 'bg-yellow-50';
+    const borderClass = analysis.fallback ? 'border-red-100' : 'border-yellow-100';
+    const textClass = analysis.fallback ? 'text-red-800' : 'text-yellow-800';
+    const iconClass = analysis.fallback ? 'text-red-500' : 'text-yellow-500';
+    const buttonClass = analysis.fallback ? 'text-red-700' : 'text-yellow-700';
+    
+    const warningMessage = analysis.message || (
+      analysis.fallback 
+        ? "We had trouble analyzing your meal completely. Here's what we could detect."
+        : "The image may be unclear, but we've provided our best analysis. Results might be limited."
+    );
+    
+    const missingItems = analysis.missing?.length 
+      ? analysis.missing 
+      : ['Complete nutritional breakdown', 'Accurate calorie estimation'];
+      
+    const improvementTips = [
+      "Ensure food items are clearly visible in the photo",
+      "Try to capture the entire plate in the image",
+      "Avoid extreme close-ups or distant shots",
+      analysis.fallback ? "Try uploading a different image" : "Better lighting can improve analysis"
+    ];
+    
+    return (
+      <div className={`px-4 py-3 mb-4 ${bgClass} border ${borderClass} ${textClass} text-sm rounded-lg`}>
+        <div className="flex items-start">
+          <svg xmlns="http://www.w3.org/2000/svg" className={`h-5 w-5 mr-2 ${iconClass} mt-0.5 flex-shrink-0`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            {warningType === 'fallback' ? (
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+            ) : (
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+            )}
+          </svg>
+          <div className="flex-1">
+            <div className="flex justify-between items-center">
+              <p className="font-medium">{warningTitle}</p>
+              <button 
+                onClick={() => setExpanded(!expanded)}
+                className={`${buttonClass} text-xs ml-2 underline`}
+              >
+                {expanded ? 'Show Less' : 'Show More'}
+              </button>
+            </div>
+            <p className="mt-1">{warningMessage}</p>
+            
+            {expanded && (
+              <div className="mt-3 space-y-3">
+                <div>
+                  <p className="font-medium mb-1">What might be missing:</p>
+                  <ul className="list-disc list-inside pl-2 space-y-1 text-xs">
+                    {missingItems.map((item, i) => (
+                      <li key={i}>{item}</li>
+                    ))}
+                  </ul>
+                </div>
+                
+                <div>
+                  <p className="font-medium mb-1">Tips for better analysis:</p>
+                  <ul className="list-disc list-inside pl-2 space-y-1 text-xs">
+                    {improvementTips.map((tip, i) => (
+                      <li key={i}>{tip}</li>
+                    ))}
+                  </ul>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    );
+  };
+  
+  // Simple tooltip component
+  const Tooltip = ({ text, children }: { text: string, children: React.ReactNode }) => {
+    return (
+      <div className="group relative inline-flex">
+        {children}
+        <div className="absolute bottom-full mb-2 hidden group-hover:block z-10">
+          <div className="bg-gray-800 text-white text-xs rounded py-1 px-2 max-w-xs">
+            {text}
+            <div className="absolute top-full left-1/2 transform -translate-x-1/2">
+              <div className="border-t-4 border-l-4 border-r-4 border-transparent border-t-gray-800 w-2 h-2"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  };
+  
+  // Component to display goal score with confidence indicators
+  const GoalScoreDisplay = ({ score, goalName, lowConfidence, fallback }: { 
+    score?: number, 
+    goalName?: string,
+    lowConfidence?: boolean,
+    fallback?: boolean 
+  }) => {
+    if (!score) return null;
+    
+    const getScoreColor = (value: number) => {
+      if (value >= 8) return 'bg-green-500';
+      if (value >= 5) return 'bg-yellow-400';
+      return 'bg-red-500';
+    };
+    
+    const getScoreLabel = (value: number) => {
+      if (value >= 8) return 'Excellent';
+      if (value >= 6) return 'Good';
+      if (value >= 4) return 'Fair';
+      return 'Needs Improvement';
+    };
+    
+    const getScoreText = () => {
+      if (fallback) return "Based on limited data";
+      if (lowConfidence) return "Based on partial analysis";
+      return `${getScoreLabel(score)} for ${goalName || 'Health'}`;
+    };
+    
+    const getTooltipText = () => {
+      if (fallback) {
+        return "This score is an estimate based on limited data. The analysis could not fully process all aspects of the meal.";
+      }
+      if (lowConfidence) {
+        return "This score is based on a partial analysis. Some nutritional data may be incomplete or estimated.";
+      }
+      return `A score of ${score}/10 indicates ${getScoreLabel(score).toLowerCase()} alignment with your ${goalName || 'health'} goals.`;
+    };
+    
+    return (
+      <div className="mb-4">
+        <div className="flex items-center mb-2">
+          <h3 className="text-lg font-medium text-gray-800 mr-2">
+            {goalName || 'Health'} Impact Score
+          </h3>
+          {(lowConfidence || fallback) && (
+            <Tooltip text={getTooltipText()}>
+              <span className="text-yellow-500">
+                <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                </svg>
+              </span>
+            </Tooltip>
+          )}
+        </div>
+        
+        <div className="bg-gray-200 rounded-full h-4 mb-2">
+          <div 
+            className={`h-4 rounded-full ${getScoreColor(score)}`} 
+            style={{ width: `${score * 10}%` }}
+          ></div>
+        </div>
+        
+        <div className="flex justify-between items-center text-sm">
+          <span className="text-gray-600">{getScoreText()}</span>
+          <span className="font-medium">{score}/10</span>
+        </div>
+      </div>
+    );
+  };
+  
+  // Component to display reasoning logs
+  const ReasoningLogs = ({ logs }: { logs?: string[] }) => {
+    const [expanded, setExpanded] = useState(false);
+    
+    if (!logs || logs.length === 0) return null;
+    
+    return (
+      <div className="mt-4 p-4 bg-gray-50 rounded-lg border border-gray-200">
+        <div className="flex justify-between items-center mb-2">
+          <h3 className="font-medium text-gray-800 flex items-center">
+            <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 mr-2 text-gray-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+            </svg>
+            Analysis Logs
+          </h3>
+          <button 
+            onClick={() => setExpanded(!expanded)}
+            className="text-primary text-xs underline"
+          >
+            {expanded ? 'Hide' : 'Show'}
+          </button>
+        </div>
+        
+        {expanded && (
+          <div className="bg-white p-3 rounded border border-gray-200 text-xs font-mono text-gray-700 max-h-64 overflow-y-auto">
+            {logs.map((log, index) => (
+              <div key={index} className="mb-2 pb-2 border-b border-gray-100 last:border-0 last:mb-0 last:pb-0">
+                <span className="text-gray-500">Step {index + 1}:</span> {log}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  // Component to display suggestions and feedback
+  const SuggestionsAndFeedback = ({ suggestions, feedback }: { 
+    suggestions?: string[], 
+    feedback?: string[] 
+  }) => {
+    if ((!suggestions || suggestions.length === 0) && (!feedback || feedback.length === 0)) {
+      return null;
+    }
+    
+    return (
+      <div className="mt-4 space-y-4">
+        {feedback && feedback.length > 0 && (
+          <div className="bg-background rounded-lg p-4 border border-stone border-opacity-30">
+            <h3 className="font-medium text-gray-800 mb-3 flex items-center">
+              <span className="inline-block w-6 h-6 rounded-full bg-primary bg-opacity-20 flex items-center justify-center mr-2">
+                <svg xmlns="http://www.w3.org/2000/svg" className="h-3.5 w-3.5 text-primary" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                </svg>
+              </span>
+              Nutritional Feedback
+            </h3>
+            <ul className="space-y-2">
+              {feedback.map((item, index) => (
+                <li key={index} className="text-sm text-gray-700 pl-4 border-l-2 border-primary">
+                  {item}
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+        
+        {suggestions && suggestions.length > 0 && (
+          <div className="bg-background rounded-lg p-4 border border-stone border-opacity-30">
+            <h3 className="font-medium text-gray-800 mb-3 flex items-center">
+              <span className="inline-block w-6 h-6 rounded-full bg-accent bg-opacity-20 flex items-center justify-center mr-2">
+                <svg xmlns="http://www.w3.org/2000/svg" className="h-3.5 w-3.5 text-accent" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
+                </svg>
+              </span>
+              Wellness Suggestions
+            </h3>
+            <ul className="space-y-2">
+              {suggestions.map((suggestion, index) => (
+                <li key={index} className="text-sm text-gray-700 flex items-start">
+                  <span className="text-accent mr-2">•</span>
+                  {suggestion}
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  // Component to display a session meal banner
+  const SessionMealBanner = () => {
+    return (
+      <div className="bg-blue-50 border border-blue-200 text-blue-800 px-4 py-3 rounded mb-4 animate-fade-in">
+        <div className="flex items-start">
+          <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 mr-2 text-blue-500 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+          </svg>
+          <div>
+            <p className="font-medium">Unsaved Analysis</p>
+            <p className="text-sm">This meal analysis is stored in your browser session but not yet saved to your account.</p>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  // Helper function to check if an analysis object is essentially empty
+  const isAnalysisEmpty = (analysis: SavedMealDetails['analysis']) => {
+    if (!analysis) return true;
+    
+    // Check if any of these exist
+    const hasBasicData = !!(
+      analysis.description || 
+      analysis.nutrients?.length || 
+      (Array.isArray(analysis.feedback) && analysis.feedback.length > 0) ||
+      analysis.suggestions?.length ||
+      analysis.positiveFoodFactors?.length ||
+      analysis.negativeFoodFactors?.length ||
+      analysis.detailedIngredients?.length ||
+      analysis.goalScore
+    );
+    
+    return !hasBasicData;
+  };
+  
+  // Component to display when no analysis data is available
+  const NoAnalysisData = () => {
+    return (
+      <div className="p-6 bg-background rounded-md text-center">
+        <div className="rounded-full bg-gray-200 w-16 h-16 mx-auto mb-4 flex items-center justify-center">
+          <svg xmlns="http://www.w3.org/2000/svg" className="h-8 w-8 text-gray-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.172 16.172a4 4 0 015.656 0M9 10h.01M15 10h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+          </svg>
+        </div>
+        <h3 className="text-lg font-medium text-gray-800 mb-2">No Analysis Available</h3>
+        <p className="text-gray-600 mb-4">
+          We couldn't find any nutritional analysis data for this meal.
+        </p>
+        <p className="text-sm text-gray-500">
+          Try uploading a new image or check if there was an error during analysis.
+        </p>
+      </div>
+    );
+  };
+
   // If auth is loading, show loading state
   if (authLoading) {
     return (
@@ -254,7 +664,25 @@ export default function MealDetailPage() {
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
           </svg>
           <h2 className="text-xl font-semibold text-gray-800 mb-2">{error || 'Something went wrong'}</h2>
-          <p className="text-gray-600 mb-6">We couldn't find the meal you're looking for.</p>
+          <p className="text-gray-600 mb-6">{!meal ? 'We couldn\'t find the meal you\'re looking for.' : 'There was a problem loading this meal\'s data.'}</p>
+          
+          {/* Try to recover from session storage if available */}
+          {loadingStage === 'session' && meal && (
+            <div className="mb-6 p-4 bg-blue-50 rounded-lg text-left">
+              <p className="text-blue-800 font-medium mb-2">Displaying cached data</p>
+              <p className="text-blue-700 text-sm mb-2">This meal analysis is available in your browser session but hasn't been saved to your account.</p>
+              <button
+                className="bg-blue-500 hover:bg-blue-600 text-white text-sm py-1 px-3 rounded transition-colors"
+                onClick={() => {
+                  // Logic for saving the meal would go here
+                  alert('This would save the meal to your account');
+                }}
+              >
+                Save to Account
+              </button>
+            </div>
+          )}
+          
           <Link 
             href="/history" 
             className="inline-block bg-primary hover:bg-secondary text-white font-medium py-2 px-4 rounded-md transition-colors"
@@ -343,6 +771,13 @@ export default function MealDetailPage() {
           </div>
         </div>
 
+        {/* Display session meal banner if needed */}
+        {loadingStage === 'session' && (
+          <div className="px-5 pt-5">
+            <SessionMealBanner />
+          </div>
+        )}
+
         {/* Meal image */}
         <div className="relative w-full h-72 bg-background">
           {meal.imageUrl ? (
@@ -373,18 +808,82 @@ export default function MealDetailPage() {
 
         {/* Analysis section */}
         <div className="p-5">
-          {meal.analysis.description && (
-            <div className="mb-6 animate-fade-in">
-              <h2 className="font-medium text-secondary mb-2 flex items-center">
-                <span className="inline-block w-6 h-6 rounded-full bg-accent bg-opacity-20 flex items-center justify-center mr-2">
-                  <svg xmlns="http://www.w3.org/2000/svg" className="h-3.5 w-3.5 text-accent" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                  </svg>
-                </span>
-                Nourishment Overview
-              </h2>
-              <p className="text-gray-700">{meal.analysis.description}</p>
-            </div>
+          {/* Confidence warning for the entire analysis */}
+          {(meal.analysis.lowConfidence || meal.analysis.fallback) && (
+            <AnalysisConfidenceWarning analysis={meal.analysis} />
+          )}
+          
+          {/* Display analysis content if available, otherwise fallback display */}
+          {isAnalysisEmpty(meal.analysis) ? (
+            <NoAnalysisData />
+          ) : (
+            <>
+              {/* Goal score display */}
+              {(meal.goalScore || meal.analysis.goalScore) && (
+                <div className="mb-4 animate-fade-in">
+                  <GoalScoreDisplay 
+                    score={meal.goalScore || meal.analysis.goalScore} 
+                    goalName={meal.goalType || meal.analysis.goalName}
+                    lowConfidence={meal.analysis.lowConfidence}
+                    fallback={meal.analysis.fallback}
+                  />
+                </div>
+              )}
+              
+              {meal.analysis.description && (
+                <div className="mb-6 animate-fade-in">
+                  <h2 className="font-medium text-secondary mb-2 flex items-center">
+                    <span className="inline-block w-6 h-6 rounded-full bg-accent bg-opacity-20 flex items-center justify-center mr-2">
+                      <svg xmlns="http://www.w3.org/2000/svg" className="h-3.5 w-3.5 text-accent" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                      </svg>
+                    </span>
+                    Nourishment Overview
+                  </h2>
+                  <p className="text-gray-700">{meal.analysis.description}</p>
+                </div>
+              )}
+              
+              {/* Positive and negative influences */}
+              {((meal.analysis.positiveFoodFactors && meal.analysis.positiveFoodFactors.length > 0) || 
+                (meal.analysis.negativeFoodFactors && meal.analysis.negativeFoodFactors.length > 0)) && (
+                <div className="grid grid-cols-1 gap-4 mb-6 animate-fade-in" style={{ animationDelay: '0.1s' }}>
+                  {meal.analysis.positiveFoodFactors && meal.analysis.positiveFoodFactors.length > 0 && (
+                    <div className="bg-leaf bg-opacity-10 rounded-md p-4 border border-leaf border-opacity-30">
+                      <h3 className="font-medium text-gray-800 mb-2 flex items-center">
+                        <span className="text-leaf mr-2">✨</span>
+                        Nourishing Elements
+                      </h3>
+                      <ul className="space-y-1">
+                        {meal.analysis.positiveFoodFactors.map((factor, index) => (
+                          <li key={index} className="text-sm text-gray-600 flex items-start">
+                            <span className="text-leaf text-xs mr-2 mt-1">●</span>
+                            {factor}
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                  
+                  {meal.analysis.negativeFoodFactors && meal.analysis.negativeFoodFactors.length > 0 && (
+                    <div className="bg-sand bg-opacity-10 rounded-md p-4 border border-sand border-opacity-30">
+                      <h3 className="font-medium text-gray-800 mb-2 flex items-center">
+                        <span className="text-sand mr-2">⚠️</span>
+                        Mindful Considerations
+                      </h3>
+                      <ul className="space-y-1">
+                        {meal.analysis.negativeFoodFactors.map((factor, index) => (
+                          <li key={index} className="text-sm text-gray-600 flex items-start">
+                            <span className="text-sand text-xs mr-2 mt-1">●</span>
+                            {factor}
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                </div>
+              )}
+            </>
           )}
         </div>
 
@@ -407,11 +906,40 @@ export default function MealDetailPage() {
                 scoreExplanation: meal.analysis.scoreExplanation,
                 positiveFoodFactors: meal.analysis.positiveFoodFactors || [],
                 negativeFoodFactors: meal.analysis.negativeFoodFactors || [],
-                rawGoal: meal.goal || meal.analysis.rawGoal
+                rawGoal: meal.goal || meal.analysis.rawGoal,
+                lowConfidence: meal.analysis.lowConfidence,
+                fallback: meal.analysis.fallback,
+                message: meal.analysis.message
               }}
               previewUrl={null}
               isLoading={loading && loadingStage !== 'complete'}
             />
+          </div>
+        )}
+        
+        {/* Ingredients with confidence */}
+        {meal.analysis.detailedIngredients && meal.analysis.detailedIngredients.length > 0 && (
+          <div className="border-t border-stone border-opacity-30 p-5 animate-slide-up" style={{ animationDelay: '0.15s' }}>
+            <IngredientsWithConfidence ingredients={meal.analysis.detailedIngredients} />
+          </div>
+        )}
+        
+        {/* Suggestions and Feedback */}
+        {((meal.analysis.suggestions && meal.analysis.suggestions.length > 0) || 
+          (meal.analysis.feedback && Array.isArray(meal.analysis.feedback) && meal.analysis.feedback.length > 0)) && (
+          <div className="border-t border-stone border-opacity-30 p-5 animate-slide-up" style={{ animationDelay: '0.2s' }}>
+            <SuggestionsAndFeedback 
+              suggestions={meal.analysis.suggestions} 
+              feedback={Array.isArray(meal.analysis.feedback) ? meal.analysis.feedback : 
+                meal.analysis.feedback ? [meal.analysis.feedback] : undefined}
+            />
+          </div>
+        )}
+        
+        {/* Reasoning logs for developers or advanced users */}
+        {meal.analysis.reasoningLogs && meal.analysis.reasoningLogs.length > 0 && (
+          <div className="border-t border-stone border-opacity-30 p-5 animate-slide-up" style={{ animationDelay: '0.25s' }}>
+            <ReasoningLogs logs={meal.analysis.reasoningLogs} />
           </div>
         )}
 
