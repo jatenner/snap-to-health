@@ -37,6 +37,8 @@ interface AnalysisResult {
   confidence?: number;
   detailedIngredients?: DetailedIngredient[];
   reasoningLogs?: any[];
+  fallback?: boolean;
+  lowConfidence?: boolean;
 }
 
 // Component to display ingredients with confidence levels
@@ -89,6 +91,105 @@ const IngredientsList = ({ ingredients }: { ingredients: DetailedIngredient[] })
   );
 };
 
+// SaveStatusBanner component to show when meal is not saved
+const SaveStatusBanner = ({ 
+  mealSaved, 
+  fallback = false,
+  lowConfidence = false,
+  saveError = null,
+  userId = null
+}: { 
+  mealSaved: boolean; 
+  fallback?: boolean;
+  lowConfidence?: boolean;
+  saveError?: string | null;
+  userId?: string | null;
+}) => {
+  if (mealSaved) return null;
+  
+  let message = '';
+  let icon: React.ReactNode = null;
+  let bgColor = '';
+  let borderColor = '';
+  let textColor = '';
+  let actionLink = null;
+  
+  if (fallback || lowConfidence) {
+    // Unable to save due to low confidence or fallback
+    message = "⚠️ Meal not saved due to low confidence or unclear image quality.";
+    icon = (
+      <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 mr-2 mt-0.5 flex-shrink-0" viewBox="0 0 20 20" fill="currentColor">
+        <path fillRule="evenodd" d="M8.485 2.495c.673-1.167 2.357-1.167 3.03 0l6.28 10.875c.673 1.167-.17 2.625-1.516 2.625H3.72c-1.347 0-2.189-1.458-1.515-2.625L8.485 2.495zM10 5a.75.75 0 01.75.75v4.5a.75.75 0 01-1.5 0v-4.5A.75.75 0 0110 5zm0 10a1 1 0 100-2 1 1 0 000 2z" clipRule="evenodd" />
+      </svg>
+    );
+    bgColor = "bg-amber-50";
+    borderColor = "border-amber-300";
+    textColor = "text-amber-800";
+    actionLink = (
+      <Link href="/upload" className="text-amber-800 font-medium underline">
+        Try another image
+      </Link>
+    );
+  } else if (saveError) {
+    // Save operation failed for a specific reason
+    message = saveError || "Failed to save meal. Please try again.";
+    icon = (
+      <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 mr-2 mt-0.5 flex-shrink-0" viewBox="0 0 20 20" fill="currentColor">
+        <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clipRule="evenodd" />
+      </svg>
+    );
+    bgColor = "bg-red-50";
+    borderColor = "border-red-300";
+    textColor = "text-red-800";
+    actionLink = (
+      <Link href="/upload" className="text-red-800 font-medium underline">
+        Try again
+      </Link>
+    );
+  } else if (!userId) {
+    // User not signed in
+    message = "🔒 Sign in to save this meal to your health history.";
+    icon = (
+      <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 mr-2 mt-0.5 flex-shrink-0" viewBox="0 0 20 20" fill="currentColor">
+        <path fillRule="evenodd" d="M5 9V7a5 5 0 0110 0v2a2 2 0 012 2v5a2 2 0 01-2 2H5a2 2 0 01-2-2v-5a2 2 0 012-2zm8-2v2H7V7a3 3 0 016 0z" clipRule="evenodd" />
+      </svg>
+    );
+    bgColor = "bg-blue-50";
+    borderColor = "border-blue-300";
+    textColor = "text-blue-800";
+    actionLink = (
+      <Link href="/login" className="text-blue-800 font-medium underline">
+        Sign in
+      </Link>
+    );
+  } else {
+    // Generic case - not saved for other reasons
+    message = "This meal analysis has not been saved to your history.";
+    icon = (
+      <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 mr-2 mt-0.5 flex-shrink-0" viewBox="0 0 20 20" fill="currentColor">
+        <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clipRule="evenodd" />
+      </svg>
+    );
+    bgColor = "bg-gray-50";
+    borderColor = "border-gray-300";
+    textColor = "text-gray-800";
+  }
+  
+  return (
+    <div className={`mb-4 ${bgColor} border ${borderColor} rounded-lg p-3 sm:p-4 text-sm sm:text-base ${textColor}`}>
+      <div className="flex items-start">
+        <div className="mr-2 mt-0.5 flex-shrink-0">
+          {icon}
+        </div>
+        <div>
+          <p>{message}</p>
+          {actionLink && <div className="mt-2">{actionLink}</div>}
+        </div>
+      </div>
+    </div>
+  );
+};
+
 export default function MealAnalysisPage() {
   const [analysisResult, setAnalysisResult] = useState<AnalysisResult | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
@@ -105,6 +206,9 @@ export default function MealAnalysisPage() {
   const [savedImageUrl, setSavedImageUrl] = useState<string>('');
   const [savedMealId, setSavedMealId] = useState<string>('');
   const [animationComplete, setAnimationComplete] = useState<boolean>(false);
+  
+  // Get save error if present
+  const [saveError, setSaveError] = useState<string | null>(null);
   
   useEffect(() => {
     // Get saved status from sessionStorage
@@ -174,6 +278,14 @@ export default function MealAnalysisPage() {
       router.push('/upload');
     }
   }, [router]);
+
+  useEffect(() => {
+    // Check for save error in sessionStorage
+    const savedError = sessionStorage.getItem('saveError');
+    if (savedError) {
+      setSaveError(savedError);
+    }
+  }, []);
 
   // Render loading skeleton
   if (loading && loadingStage !== 'complete') {
@@ -362,6 +474,15 @@ export default function MealAnalysisPage() {
         </div>
         
         <div className="p-6">
+          {/* Save Status Banner */}
+          <SaveStatusBanner 
+            mealSaved={mealSaved} 
+            fallback={!!analysisResult.fallback}
+            lowConfidence={!!analysisResult.lowConfidence}
+            saveError={saveError}
+            userId={currentUser?.uid || null}
+          />
+          
           {/* Header with Goal Context */}
           <div className="mb-6">
             <div className="flex items-center mb-2">
@@ -371,66 +492,6 @@ export default function MealAnalysisPage() {
                 <p className="text-slate text-sm">Goal: {rawGoal}</p>
               </div>
             </div>
-            
-            {/* Saved Status Indicator */}
-            {mealSaved ? (
-              <div className="bg-green-50 border border-green-100 rounded-lg p-3 mt-4 flex items-start">
-                <span className="text-green-600 mr-2">
-                  <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
-                    <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
-                  </svg>
-                </span>
-                <div>
-                  <p className="text-green-800 font-medium">
-                    Meal saved to your history
-                  </p>
-                  <Link 
-                    href={`/meals/${savedMealId}`}
-                    className="text-primary text-sm mt-1 inline-block hover:underline transition-colors"
-                  >
-                    View in meal history →
-                  </Link>
-                </div>
-              </div>
-            ) : currentUser ? (
-              <div className="bg-blue-50 border border-blue-100 rounded-lg p-3 mt-4 flex items-start">
-                <span className="text-blue-600 mr-2">
-                  <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
-                    <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clipRule="evenodd" />
-                  </svg>
-                </span>
-                <div>
-                  <p className="text-blue-800">
-                    Quick analysis only (not saved)
-                  </p>
-                  <Link 
-                    href="/upload"
-                    className="text-primary text-sm mt-1 inline-block hover:underline transition-colors"
-                  >
-                    Save meals to track your progress →
-                  </Link>
-                </div>
-              </div>
-            ) : (
-              <div className="bg-blue-50 border border-blue-100 rounded-lg p-3 mt-4 flex items-start">
-                <span className="text-blue-600 mr-2">
-                  <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
-                    <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clipRule="evenodd" />
-                  </svg>
-                </span>
-                <div>
-                  <p className="text-blue-800">
-                    Quick analysis only (not saved)
-                  </p>
-                  <Link 
-                    href="/login"
-                    className="text-primary text-sm mt-1 inline-block hover:underline transition-colors"
-                  >
-                    Sign in to save your analysis →
-                  </Link>
-                </div>
-              </div>
-            )}
           </div>
 
           {/* Score Card with Score Explanation */}

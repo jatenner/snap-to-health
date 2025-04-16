@@ -9,6 +9,12 @@ import { useAuth } from '@/contexts/AuthContext';
 import { uploadMealImage, saveMealToFirestore } from '@/lib/mealUtils';
 import { getUserHealthGoal } from '@/utils/userUtils';
 import { toast } from 'react-hot-toast';
+import { useLoading } from '@/contexts/LoadingContext';
+
+interface OptimisticResult {
+  description: string;
+  ingredients: string[];
+}
 
 export default function UploadPage() {
   const [file, setFile] = useState<File | null>(null);
@@ -25,6 +31,7 @@ export default function UploadPage() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const router = useRouter();
   const { currentUser, loading: authLoading, authInitialized } = useAuth();
+  const { setLoading } = useLoading();
   const [showOptions, setShowOptions] = useState(false);
   const [imagePreview, setImagePreview] = useState<string | null>(null);
   const [imageValidated, setImageValidated] = useState(true);
@@ -203,7 +210,7 @@ export default function UploadPage() {
 
   const [isCompressingImage, setIsCompressingImage] = useState<boolean>(false);
   const [analysisStage, setAnalysisStage] = useState<string>('');
-  const [optimisticResult, setOptimisticResult] = useState<any>(null);
+  const [optimisticResult, setOptimisticResult] = useState<OptimisticResult | null>(null);
   const cancelTokenRef = useRef<CancelTokenSource | null>(null);
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -242,8 +249,8 @@ export default function UploadPage() {
       // Create optimistic UI state
       setOptimisticResult({
         description: 'Analyzing your meal...',
-        nutrients: [],
-        feedback: ['Loading nutritional assessment...'],
+        ingredients: ['Loading nutritional assessment...'],
+        feedback: ['Loading meal suggestions...'],
         suggestions: ['Loading meal suggestions...'],
         goalScore: 0, // Will animate in when real data arrives
         goalName: healthGoal,
@@ -430,6 +437,14 @@ export default function UploadPage() {
         sessionStorage.setItem('analysisResult', JSON.stringify(response.data));
         sessionStorage.setItem('previewUrl', previewUrl || '');
         sessionStorage.setItem('mealSaved', response.data.saved ? 'true' : 'false');
+        
+        // Store save error if present
+        if (response.data.saveError) {
+          sessionStorage.setItem('saveError', response.data.saveError);
+        } else {
+          // Clear any previous save errors
+          sessionStorage.removeItem('saveError');
+        }
         
         if (response.data.saved) {
           sessionStorage.setItem('savedImageUrl', response.data.imageUrl);

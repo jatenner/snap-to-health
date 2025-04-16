@@ -56,7 +56,6 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
       auth, 
       (user) => {
         if (isMounted) {
-          console.log("Auth state changed:", user ? "User logged in" : "No user");
           setCurrentUser(user);
           setLoading(false);
           setAuthInitialized(true);

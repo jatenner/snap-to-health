@@ -37,7 +37,6 @@ export const getUserProfile = async (userId: string) => {
       // Create a default profile if none exists
       const defaultProfile = createDefaultProfile(userId);
       await setDoc(userRef, defaultProfile);
-      console.log('Created default profile for user', userId);
       return defaultProfile;
     }
   } catch (error) {

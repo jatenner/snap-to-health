@@ -6,276 +6,248 @@ const FIRESTORE_BASE_URL = 'https://firestore.googleapis.com/v1';
 const PROJECT_ID = process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID || 'snaphealth-39b14';
 
 /**
- * GET method to handle Firestore document retrieval
+ * Handles the GET request to proxy Firestore requests
  */
 export async function GET(request: NextRequest) {
-  console.log('Firestore proxy: Received GET request');
-  
-  // Extract path and options from query parameters
-  const path = request.nextUrl.searchParams.get('path');
-  const options = request.nextUrl.searchParams.get('options') || '{}';
-  
-  if (!path) {
-    console.error('Firestore proxy: Missing path parameter');
-    return NextResponse.json({ error: 'Missing path parameter' }, { status: 400 });
-  }
-  
-  // Build the Firestore API URL
-  const targetUrl = `${FIRESTORE_BASE_URL}/projects/${PROJECT_ID}/databases/(default)/documents/${path}`;
-  console.log(`Firestore proxy: Forwarding GET request to: ${targetUrl}`);
-  
   try {
-    // Parse options if provided
-    const parsedOptions = JSON.parse(options);
-    const queryParams = new URLSearchParams();
+    // Get the path and method from the query parameters
+    const url = new URL(request.url);
+    const path = url.searchParams.get('path');
+    const method = url.searchParams.get('method') || 'GET';
     
-    // Add any additional query parameters from options
-    for (const [key, value] of Object.entries(parsedOptions)) {
-      if (typeof value === 'string') {
-        queryParams.append(key, value);
-      } else {
-        queryParams.append(key, JSON.stringify(value));
-      }
+    if (!path) {
+      return NextResponse.json({ error: 'Missing path parameter' }, { status: 400 });
     }
     
-    // Build the final URL with query parameters
-    const finalUrl = `${targetUrl}${queryParams.toString() ? `?${queryParams.toString()}` : ''}`;
+    // Calculate the URL for the Firestore API
+    const projectId = process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID;
+    if (!projectId) {
+      return NextResponse.json({ error: 'Firebase project ID not configured' }, { status: 500 });
+    }
     
-    // Get authorization token from request headers
+    // Construct the Firestore API URL
+    const targetUrl = `https://firestore.googleapis.com/v1/projects/${projectId}/databases/(default)/documents/${path}`;
+    
+    // Get the authorization header from the request
     const authHeader = request.headers.get('authorization');
     
-    // Forward the request to Firestore API
-    const response = await fetch(finalUrl, {
-      method: 'GET',
+    // Forward the request to the Firestore API
+    const response = await fetch(targetUrl, {
+      method: method,
       headers: {
-        // Pass through auth headers if provided
         ...(authHeader ? { 'Authorization': authHeader } : {}),
         'Content-Type': 'application/json',
+        'X-Goog-Api-Key': process.env.NEXT_PUBLIC_FIREBASE_API_KEY || '',
       },
     });
     
-    if (!response.ok) {
-      console.error(`Firestore proxy: Upstream server returned ${response.status} ${response.statusText}`);
-      const errorData = await response.json().catch(() => ({ error: 'Unknown error' }));
-      return NextResponse.json(
-        { 
-          error: `Upstream server error: ${response.status} ${response.statusText}`,
-          details: errorData
-        }, 
-        { status: response.status }
-      );
-    }
+    // Read the response data
+    const responseData = await response.json();
     
-    const data = await response.json();
-    console.log(`Firestore proxy: Successfully retrieved data`);
-    
-    // Return the data from Firestore
-    return NextResponse.json(data);
-  } catch (error) {
-    console.error('Firestore proxy error:', error);
-    return NextResponse.json({ 
-      error: 'Failed to proxy request',
-      details: error instanceof Error ? error.message : 'Unknown error'
-    }, { status: 500 });
+    // Return the response data with CORS headers
+    return NextResponse.json(responseData, {
+      status: response.status,
+      headers: {
+        'Access-Control-Allow-Origin': '*',
+        'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
+        'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+      },
+    });
+  } catch (error: any) {
+    return NextResponse.json(
+      { error: error.message || 'Failed to proxy Firestore request' },
+      { status: 500 }
+    );
   }
 }
 
 /**
- * POST method to create or add documents to Firestore
+ * Handles the POST request to proxy Firestore requests
  */
 export async function POST(request: NextRequest) {
-  console.log('Firestore proxy: Received POST request');
-  
-  // Extract path from query parameters
-  const path = request.nextUrl.searchParams.get('path');
-  
-  if (!path) {
-    console.error('Firestore proxy: Missing path parameter');
-    return NextResponse.json({ error: 'Missing path parameter' }, { status: 400 });
-  }
-  
-  // Build the Firestore API URL
-  const targetUrl = `${FIRESTORE_BASE_URL}/projects/${PROJECT_ID}/databases/(default)/documents/${path}`;
-  console.log(`Firestore proxy: Forwarding POST request to: ${targetUrl}`);
-  
   try {
-    // Parse request body
-    const requestBody = await request.json();
+    // Get the path and method from the query parameters
+    const url = new URL(request.url);
+    const path = url.searchParams.get('path');
+    const method = url.searchParams.get('method') || 'POST';
     
-    // Get authorization token from request headers
-    const authHeader = request.headers.get('authorization');
-    
-    // Forward the request to Firestore API
-    const response = await fetch(targetUrl, {
-      method: 'POST',
-      headers: {
-        // Pass through auth headers if provided
-        ...(authHeader ? { 'Authorization': authHeader } : {}),
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(requestBody),
-    });
-    
-    if (!response.ok) {
-      console.error(`Firestore proxy: Upstream server returned ${response.status} ${response.statusText}`);
-      const errorData = await response.json().catch(() => ({ error: 'Unknown error' }));
-      return NextResponse.json(
-        { 
-          error: `Upstream server error: ${response.status} ${response.statusText}`,
-          details: errorData
-        }, 
-        { status: response.status }
-      );
+    if (!path) {
+      return NextResponse.json({ error: 'Missing path parameter' }, { status: 400 });
     }
     
-    const data = await response.json();
-    console.log(`Firestore proxy: Successfully created document`);
+    // Calculate the URL for the Firestore API
+    const projectId = process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID;
+    if (!projectId) {
+      return NextResponse.json({ error: 'Firebase project ID not configured' }, { status: 500 });
+    }
     
-    // Return the response from Firestore
-    return NextResponse.json(data);
-  } catch (error) {
-    console.error('Firestore proxy POST error:', error);
-    return NextResponse.json({ 
-      error: 'Failed to proxy POST request',
-      details: error instanceof Error ? error.message : 'Unknown error'
-    }, { status: 500 });
+    // Construct the Firestore API URL
+    const targetUrl = `https://firestore.googleapis.com/v1/projects/${projectId}/databases/(default)/documents/${path}`;
+    
+    // Get the request body as JSON
+    const body = await request.json();
+    
+    // Get the authorization header from the request
+    const authHeader = request.headers.get('authorization');
+    
+    // Forward the request to the Firestore API
+    const response = await fetch(targetUrl, {
+      method: method,
+      headers: {
+        ...(authHeader ? { 'Authorization': authHeader } : {}),
+        'Content-Type': 'application/json',
+        'X-Goog-Api-Key': process.env.NEXT_PUBLIC_FIREBASE_API_KEY || '',
+      },
+      body: JSON.stringify(body),
+    });
+    
+    // Read the response data
+    const responseData = await response.json();
+    
+    // Return the response data with CORS headers
+    return NextResponse.json(responseData, {
+      status: response.status,
+      headers: {
+        'Access-Control-Allow-Origin': '*',
+        'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
+        'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+      },
+    });
+  } catch (error: any) {
+    return NextResponse.json(
+      { error: error.message || 'Failed to proxy Firestore request' },
+      { status: 500 }
+    );
   }
 }
 
 /**
- * PUT method to update documents in Firestore
+ * Handles the PUT request to proxy Firestore requests
  */
 export async function PUT(request: NextRequest) {
-  console.log('Firestore proxy: Received PUT request');
-  
-  // Extract path from query parameters
-  const path = request.nextUrl.searchParams.get('path');
-  
-  if (!path) {
-    console.error('Firestore proxy: Missing path parameter');
-    return NextResponse.json({ error: 'Missing path parameter' }, { status: 400 });
-  }
-  
-  // Build the Firestore API URL
-  const targetUrl = `${FIRESTORE_BASE_URL}/projects/${PROJECT_ID}/databases/(default)/documents/${path}`;
-  console.log(`Firestore proxy: Forwarding PUT request to: ${targetUrl}`);
-  
   try {
-    // Parse request body
-    const requestBody = await request.json();
+    // Get the path and method from the query parameters
+    const url = new URL(request.url);
+    const path = url.searchParams.get('path');
+    const method = url.searchParams.get('method') || 'PUT';
     
-    // Get authorization token from request headers
-    const authHeader = request.headers.get('authorization');
-    
-    // Forward the request to Firestore API
-    const response = await fetch(targetUrl, {
-      method: 'PATCH', // Firestore REST API uses PATCH for updates
-      headers: {
-        // Pass through auth headers if provided
-        ...(authHeader ? { 'Authorization': authHeader } : {}),
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(requestBody),
-    });
-    
-    if (!response.ok) {
-      console.error(`Firestore proxy: Upstream server returned ${response.status} ${response.statusText}`);
-      const errorData = await response.json().catch(() => ({ error: 'Unknown error' }));
-      return NextResponse.json(
-        { 
-          error: `Upstream server error: ${response.status} ${response.statusText}`,
-          details: errorData
-        }, 
-        { status: response.status }
-      );
+    if (!path) {
+      return NextResponse.json({ error: 'Missing path parameter' }, { status: 400 });
     }
     
-    const data = await response.json();
-    console.log(`Firestore proxy: Successfully updated document`);
+    // Calculate the URL for the Firestore API
+    const projectId = process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID;
+    if (!projectId) {
+      return NextResponse.json({ error: 'Firebase project ID not configured' }, { status: 500 });
+    }
     
-    // Return the response from Firestore
-    return NextResponse.json(data);
-  } catch (error) {
-    console.error('Firestore proxy PUT error:', error);
-    return NextResponse.json({ 
-      error: 'Failed to proxy PUT request',
-      details: error instanceof Error ? error.message : 'Unknown error'
-    }, { status: 500 });
+    // Construct the Firestore API URL
+    const targetUrl = `https://firestore.googleapis.com/v1/projects/${projectId}/databases/(default)/documents/${path}`;
+    
+    // Get the request body as JSON
+    const body = await request.json();
+    
+    // Get the authorization header from the request
+    const authHeader = request.headers.get('authorization');
+    
+    // Forward the request to the Firestore API
+    const response = await fetch(targetUrl, {
+      method: method,
+      headers: {
+        ...(authHeader ? { 'Authorization': authHeader } : {}),
+        'Content-Type': 'application/json',
+        'X-Goog-Api-Key': process.env.NEXT_PUBLIC_FIREBASE_API_KEY || '',
+      },
+      body: JSON.stringify(body),
+    });
+    
+    // Read the response data
+    const responseData = await response.json();
+    
+    // Return the response data with CORS headers
+    return NextResponse.json(responseData, {
+      status: response.status,
+      headers: {
+        'Access-Control-Allow-Origin': '*',
+        'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
+        'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+      },
+    });
+  } catch (error: any) {
+    return NextResponse.json(
+      { error: error.message || 'Failed to proxy Firestore request' },
+      { status: 500 }
+    );
   }
 }
 
 /**
- * DELETE method to delete documents from Firestore
+ * Handles the DELETE request to proxy Firestore requests
  */
 export async function DELETE(request: NextRequest) {
-  console.log('Firestore proxy: Received DELETE request');
-  
-  // Extract path from query parameters
-  const path = request.nextUrl.searchParams.get('path');
-  
-  if (!path) {
-    console.error('Firestore proxy: Missing path parameter');
-    return NextResponse.json({ error: 'Missing path parameter' }, { status: 400 });
-  }
-  
-  // Build the Firestore API URL
-  const targetUrl = `${FIRESTORE_BASE_URL}/projects/${PROJECT_ID}/databases/(default)/documents/${path}`;
-  console.log(`Firestore proxy: Forwarding DELETE request to: ${targetUrl}`);
-  
   try {
-    // Get authorization token from request headers
+    // Get the path and method from the query parameters
+    const url = new URL(request.url);
+    const path = url.searchParams.get('path');
+    const method = url.searchParams.get('method') || 'DELETE';
+    
+    if (!path) {
+      return NextResponse.json({ error: 'Missing path parameter' }, { status: 400 });
+    }
+    
+    // Calculate the URL for the Firestore API
+    const projectId = process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID;
+    if (!projectId) {
+      return NextResponse.json({ error: 'Firebase project ID not configured' }, { status: 500 });
+    }
+    
+    // Construct the Firestore API URL
+    const targetUrl = `https://firestore.googleapis.com/v1/projects/${projectId}/databases/(default)/documents/${path}`;
+    
+    // Get the authorization header from the request
     const authHeader = request.headers.get('authorization');
     
-    // Forward the request to Firestore API
+    // Forward the request to the Firestore API
     const response = await fetch(targetUrl, {
-      method: 'DELETE',
+      method: method,
       headers: {
-        // Pass through auth headers if provided
         ...(authHeader ? { 'Authorization': authHeader } : {}),
         'Content-Type': 'application/json',
+        'X-Goog-Api-Key': process.env.NEXT_PUBLIC_FIREBASE_API_KEY || '',
       },
     });
     
-    if (!response.ok) {
-      console.error(`Firestore proxy: Upstream server returned ${response.status} ${response.statusText}`);
-      const errorData = await response.json().catch(() => ({ error: 'Unknown error' }));
-      return NextResponse.json(
-        { 
-          error: `Upstream server error: ${response.status} ${response.statusText}`,
-          details: errorData
-        }, 
-        { status: response.status }
-      );
-    }
+    // Read the response data if available
+    const responseData = response.status !== 204 ? await response.json() : {};
     
-    console.log(`Firestore proxy: Successfully deleted document`);
-    
-    // Return success response
-    return NextResponse.json({ success: true });
-  } catch (error) {
-    console.error('Firestore proxy DELETE error:', error);
-    return NextResponse.json({ 
-      error: 'Failed to proxy DELETE request',
-      details: error instanceof Error ? error.message : 'Unknown error'
-    }, { status: 500 });
+    // Return the response data with CORS headers
+    return NextResponse.json(responseData, {
+      status: response.status,
+      headers: {
+        'Access-Control-Allow-Origin': '*',
+        'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
+        'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+      },
+    });
+  } catch (error: any) {
+    return NextResponse.json(
+      { error: error.message || 'Failed to proxy Firestore request' },
+      { status: 500 }
+    );
   }
 }
 
 /**
- * OPTIONS method to handle CORS preflight requests
+ * Handles the OPTIONS request for CORS preflight
  */
-export async function OPTIONS(request: NextRequest) {
-  console.log('Firestore proxy: Received OPTIONS request (preflight)');
-  
-  // Handle preflight requests
-  const newResponse = new NextResponse(null, { status: 200 });
-  
-  // Add CORS headers
-  newResponse.headers.set('Access-Control-Allow-Origin', '*');
-  newResponse.headers.set('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
-  newResponse.headers.set('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With');
-  newResponse.headers.set('Access-Control-Max-Age', '86400'); // 24 hours
-  
-  console.log('Firestore proxy: Responding to preflight request');
-  return newResponse;
+export async function OPTIONS() {
+  return new NextResponse(null, {
+    status: 204,
+    headers: {
+      'Access-Control-Allow-Origin': '*',
+      'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
+      'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+      'Access-Control-Max-Age': '86400',
+    },
+  });
 } 
