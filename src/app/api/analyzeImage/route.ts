@@ -326,15 +326,23 @@ async function analyzeImageWithGPT4V(
   // ✅ Check if the raw analysis result is valid
   if (!isValidAnalysis(rawAnalysisResult)) {
     console.warn(`[${requestId}] GPT/Nutritionix analysis result is invalid, returning structured fallback.`);
-    // Return the structured fallback object
+    
+    // Simulate asking GPT for a reason (Step 3)
+    const simulatedFailureReason = "Photo may be blurry, cropped, or too dark."; // Placeholder
+
+    // ✅ 1. Return the structured soft fallback object
     return {
       result: {
         fallback: true,
         success: false,
-        message: "Unable to analyze the image",
-        description: "Analysis failed due to unclear image or missing data.",
+        // Use a more user-friendly description
+        description: "We could not fully identify the food items in this image.",
         nutrients: [],
-        insight: null
+        // Add insight/tip
+        insight: "Try uploading a photo with clear lighting, all food items visible, and taken from above.",
+        // Add the (simulated) GPT failure reason
+        failureReason: simulatedFailureReason,
+        fallbackType: "missing_fields" // Optional debug key
       }
     };
   }

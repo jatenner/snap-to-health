@@ -41,6 +41,8 @@ interface AnalysisResult {
   reasoningLogs?: any[];
   fallback?: boolean;
   lowConfidence?: boolean;
+  failureReason?: string;
+  insight?: string;
 }
 
 // Component to display ingredients with confidence levels
@@ -200,6 +202,7 @@ export default function MealAnalysisPage() {
   const [error, setError] = useState<string | null>(null);
   const [isPartialResult, setIsPartialResult] = useState(false);
   const [missingDataType, setMissingDataType] = useState<string | null>(null);
+  const [fallbackInfo, setFallbackInfo] = useState<AnalysisResult | null>(null);
   const router = useRouter();
   const { currentUser } = useAuth();
 
@@ -250,13 +253,12 @@ export default function MealAnalysisPage() {
 
         if (isInvalid || isFallback) {
           const fallbackReason = isFallback ? "structured_fallback" : "validation_failed";
-          // ✅ 3. Logging
           console.warn(`Fallback response (${fallbackReason}):`, parsedResult);
-          // Use a more specific error message based on the type of failure
-          setError(
-            "We couldn't analyze this meal. Try again with a clearer image. " + 
-            "Tip: Ensure your plate is fully visible with all food items clear and distinct."
-          );
+
+          // ✅ Set fallbackInfo state instead of just an error string
+          setFallbackInfo(parsedResult);
+          setError("Analysis Failed"); // Set a generic error flag
+          
           setLoading(false);
           setLoadingStage('error');
           sessionStorage.removeItem('analysisResult');
@@ -368,25 +370,57 @@ export default function MealAnalysisPage() {
 
   // Display an error message if something went wrong
   if (error) {
-    return (
-      <div className="min-h-[60vh] flex items-center justify-center">
-        <div className="text-center max-w-sm mx-auto bg-white shadow-lab rounded-xl p-6 border border-red-200">
-          <svg xmlns="http://www.w3.org/2000/svg" className="h-12 w-12 text-red-500 mx-auto mb-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
-          </svg>
-          <h2 className="text-xl font-semibold text-gray-800 mb-2">We couldn't analyze this meal.</h2>
-          <p className="text-gray-600 mb-6">
-            Try uploading a photo where the plate and food items are clearly visible.
-          </p>
-          <Link 
-            href="/upload" 
-            className="inline-block bg-primary hover:bg-secondary text-white font-medium py-2 px-4 rounded-lg transition-colors"
-          >
-            Try Again
-          </Link>
+    // ✅ 2. Improved Frontend Error UI
+    // Check if we have structured fallback info
+    if (fallbackInfo) {
+      return (
+        <div className="min-h-[60vh] flex items-center justify-center">
+          <div className="text-center max-w-sm mx-auto bg-white shadow-lab rounded-xl p-6 border border-red-200">
+            <svg xmlns="http://www.w3.org/2000/svg" className="h-12 w-12 text-red-500 mx-auto mb-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+            </svg>
+            {/* ❌ Heading */}
+            <h2 className="text-xl font-semibold text-gray-800 mb-2">We couldn't analyze this meal.</h2>
+            {/* 📸 Reason */} 
+            {fallbackInfo.failureReason && (
+              <p className="text-gray-600 mb-2">
+                Reason: {fallbackInfo.failureReason}
+              </p>
+            )}
+            {/* 💡 Tip */} 
+            <p className="text-gray-600 mb-6">
+              Tip: {fallbackInfo.insight || "Use good lighting, avoid blur, and show the full plate."}
+            </p>
+            {/* 🔁 Button */} 
+            <Link 
+              href="/upload" 
+              className="inline-block bg-primary hover:bg-secondary text-white font-medium py-2 px-4 rounded-lg transition-colors"
+            >
+              Try Again
+            </Link>
+          </div>
         </div>
-      </div>
-    );
+      );
+    } else {
+      // Render generic error if no specific fallback info
+      return (
+        <div className="min-h-[60vh] flex items-center justify-center">
+          <div className="text-center max-w-sm mx-auto bg-white shadow-lab rounded-xl p-6 border border-red-200">
+            <svg xmlns="http://www.w3.org/2000/svg" className="h-12 w-12 text-red-500 mx-auto mb-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+            </svg>
+            <h2 className="text-xl font-semibold text-gray-800 mb-2">Analysis Error</h2>
+            <p className="text-gray-600 mb-6">{error}</p> {/* Display the generic error message */}
+            <Link 
+              href="/upload" 
+              className="inline-block bg-primary hover:bg-secondary text-white font-medium py-2 px-4 rounded-lg transition-colors"
+            >
+              Try Again
+            </Link>
+          </div>
+        </div>
+      );
+    }
   }
 
   if (!analysisResult) {
