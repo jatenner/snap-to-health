@@ -660,11 +660,12 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
         analysis.nutrients.length === 0
       ) {
         console.warn("⚠️ GPT result incomplete — fallback triggered", analysis);
-        return NextResponse.json({
+        return createAnalysisResponse({
+          ...responseData,
           success: false,
           fallback: true,
           message: "Fallback: missing description or nutrients",
-          analysis, // Include the potentially incomplete analysis
+          analysis: analysis || createEmptyFallbackAnalysis() // Use the incomplete analysis or fallback if null
         });
       }
       
