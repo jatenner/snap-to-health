@@ -5,6 +5,8 @@ import { useRouter } from 'next/navigation';
 import Image from 'next/image';
 import Link from 'next/link';
 import { useAuth } from '@/contexts/AuthContext';
+import { trySaveMeal } from '@/lib/mealUtils';
+import { isValidAnalysis, createFallbackAnalysis } from '@/lib/utils/analysisValidator';
 
 interface Nutrient {
   name: string;
@@ -233,43 +235,23 @@ export default function MealAnalysisPage() {
         // Log the raw response for debugging
         console.log("Raw analysis result:", storedResult);
         
-        const parsedResult = JSON.parse(storedResult);
-        
-        // More comprehensive validation of the analysis data structure
-        if (!parsedResult || typeof parsedResult !== 'object') {
-          throw new Error('Invalid analysis data: not an object');
+        let parsedResult;
+        try {
+          parsedResult = JSON.parse(storedResult);
+        } catch (parseError) {
+          console.warn("Invalid analysis data (parse error):", storedResult);
+          console.error('Failed to parse JSON:', parseError);
+          throw new Error('Invalid analysis data: failed to parse JSON');
         }
         
-        // TODO: Refine structure assumptions - add more specific type checking for complex nested objects
-        // Check for required top-level fields
-        const requiredFields = ['description', 'nutrients'];
-        const missingFields = requiredFields.filter(field => !(field in parsedResult));
-        
-        if (missingFields.length > 0) {
-          console.error("Missing required fields in analysis:", missingFields);
-          throw new Error(`Invalid analysis data: missing ${missingFields.join(', ')}`);
-        }
-        
-        // Validate nutrients array structure
-        if (!Array.isArray(parsedResult.nutrients)) {
-          console.error("nutrients is not an array:", parsedResult.nutrients);
-          throw new Error('Invalid analysis data: nutrients must be an array');
-        }
-        
-        // Validate other array fields if they exist
-        if (parsedResult.feedback && !Array.isArray(parsedResult.feedback)) {
-          console.error("feedback is not an array:", parsedResult.feedback);
-          throw new Error('Invalid analysis data: feedback must be an array');
-        }
-        
-        if (parsedResult.suggestions && !Array.isArray(parsedResult.suggestions)) {
-          console.error("suggestions is not an array:", parsedResult.suggestions);
-          throw new Error('Invalid analysis data: suggestions must be an array');
-        }
-        
-        if (parsedResult.detailedIngredients && !Array.isArray(parsedResult.detailedIngredients)) {
-          console.error("detailedIngredients is not an array:", parsedResult.detailedIngredients);
-          throw new Error('Invalid analysis data: detailedIngredients must be an array');
+        if (!isValidAnalysis(parsedResult)) {
+          console.warn("Invalid analysis data (validation failed):", parsedResult);
+          setError("We couldn't analyze this meal. Please try again with a clearer photo.");
+          setLoading(false);
+          setLoadingStage('error');
+          sessionStorage.removeItem('analysisResult');
+          sessionStorage.removeItem('previewUrl');
+          return;
         }
         
         // Check if this is a partial result
@@ -300,7 +282,7 @@ export default function MealAnalysisPage() {
           }, 100);
         }, 300);
       } catch (err: any) {
-        console.error('Failed to parse stored analysis result:', err);
+        console.error('Failed to process stored analysis result:', err);
         
         // Create a user-friendly error message
         const errorMessage = err.message && err.message.includes('Invalid analysis data') 

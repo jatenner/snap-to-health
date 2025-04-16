@@ -9,6 +9,7 @@ import { useAuth } from '@/contexts/AuthContext';
 import { uploadMealImage, saveMealToFirestore } from '@/lib/mealUtils';
 import { getUserHealthGoal } from '@/utils/userUtils';
 import { toast } from 'react-hot-toast';
+import { validateImage, VALID_IMAGE_TYPES, MAX_FILE_SIZE } from '@/lib/imageProcessing/validateImage';
 
 interface OptimisticResult {
   description: string;
@@ -124,9 +125,10 @@ export default function UploadPage() {
     setImageValidated(true);
     
     if (selectedFile) {
-      // Check file type
-      if (!selectedFile.type.startsWith('image/')) {
-        setError('Please select a valid image file.');
+      // Use the validateImage utility
+      const validationResult = validateImage(selectedFile);
+      if (!validationResult.valid) {
+        setError(validationResult.error || 'Invalid image file');
         setFile(null);
         setImagePreview(null);
         setImageValidated(false);
@@ -195,15 +197,10 @@ export default function UploadPage() {
     if (e.dataTransfer.files && e.dataTransfer.files[0]) {
       const droppedFile = e.dataTransfer.files[0];
       
-      // Check file type
-      if (!['image/jpeg', 'image/jpg', 'image/png'].includes(droppedFile.type)) {
-        setError('Please select a JPG or PNG image');
-        return;
-      }
-      
-      // Check file size
-      if (droppedFile.size > 5 * 1024 * 1024) {
-        setError('File is too large. Please select an image under 5MB');
+      // Use the validateImage utility
+      const validationResult = validateImage(droppedFile);
+      if (!validationResult.valid) {
+        setError(validationResult.error || 'Invalid image file');
         return;
       }
       
@@ -231,6 +228,15 @@ export default function UploadPage() {
     if (!imageValidated) {
       setError("Please select a valid image file");
       return;
+    }
+    
+    // Validate the image again just to be sure
+    if (file) {
+      const validationResult = validateImage(file);
+      if (!validationResult.valid) {
+        setError(validationResult.error || 'Invalid image file');
+        return;
+      }
     }
     
     if (!healthGoal) {
