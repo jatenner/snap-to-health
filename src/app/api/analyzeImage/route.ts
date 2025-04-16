@@ -651,23 +651,21 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       const analysis = analysisResult.result;
 
       // Add console log for raw response
-      console.log("🔍 RAW GPT ANALYSIS:", JSON.stringify(analysis, null, 2));
-
-      // Log before defensive guard
-      console.log(`⚠️ [${requestId}] Checking if analysis is complete...`);
+      console.log("🔍 RAW GPT RESULT:", JSON.stringify(analysis, null, 2));
       
-      // Defensive Guard as provided by user
+      // 🚨 GPT fallback guard to block invalid saves
       if (
         !analysis?.description ||
         !Array.isArray(analysis?.nutrients) ||
         analysis.nutrients.length === 0
       ) {
-        console.warn("🚫 Fallback triggered: GPT returned incomplete result", analysis);
+        console.warn("🚫 Fallback triggered — GPT returned incomplete result. Skipping save.", analysis);
+        
         return createAnalysisResponse({
           ...responseData,
           success: false,
           fallback: true,
-          message: "Fallback: GPT result incomplete",
+          message: "GPT result incomplete — fallback triggered",
           analysis: analysis || createEmptyFallbackAnalysis() // Use the incomplete analysis or fallback if null
         });
       }

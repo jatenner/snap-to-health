@@ -230,6 +230,24 @@ export default function MealAnalysisPage() {
     const storedResult = sessionStorage.getItem('analysisResult');
     const storedPreviewUrl = sessionStorage.getItem('previewUrl');
     
+    // Check for stored fallback result from the upload page
+    const storedFallbackResult = sessionStorage.getItem('fallbackResult');
+    if (storedFallbackResult) {
+      try {
+        const fallbackData = JSON.parse(storedFallbackResult);
+        console.warn("Fallback data detected from upload page:", fallbackData);
+        setFallbackInfo(fallbackData);
+        setError("Analysis Fallback");
+        setLoading(false);
+        setLoadingStage('error');
+        // Clear the fallback data to prevent showing it again on refresh
+        sessionStorage.removeItem('fallbackResult');
+        return;
+      } catch (parseError) {
+        console.error("Failed to parse fallback result:", parseError);
+      }
+    }
+    
     if (storedResult) {
       try {
         setLoadingStage('parsing');
