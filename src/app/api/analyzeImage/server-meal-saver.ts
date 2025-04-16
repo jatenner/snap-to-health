@@ -43,11 +43,18 @@ export async function saveMealToFirestore(params: {
     !Array.isArray(analysis.nutrients) ||
     analysis.nutrients.length === 0
   ) {
-    console.warn(`❌ Blocked save inside server-meal-saver.ts due to invalid analysis`);
+    console.warn(`❌ Blocked Firestore save in server-meal-saver due to invalid analysis`);
+    
+    // Log detailed information about what's missing
+    const missingParts = [];
+    if (!analysis?.description) missingParts.push('description');
+    if (!Array.isArray(analysis?.nutrients)) missingParts.push('nutrients array');
+    else if (analysis.nutrients.length === 0) missingParts.push('non-empty nutrients');
+    
     return { 
       success: false, 
-      message: "Invalid analysis – not saved",
-      error: "Missing required fields: description or nutrients"
+      message: "Invalid analysis – save blocked",
+      error: `Missing required fields: ${missingParts.join(', ')}`
     };
   }
   
