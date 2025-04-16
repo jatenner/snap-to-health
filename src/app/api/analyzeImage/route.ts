@@ -2364,7 +2364,7 @@ export async function POST(request: NextRequest) {
       // If we still don't have a valid image URL after upload attempt, use a placeholder
       if (!finalImageUrl) {
         console.log(`⚠️ [${requestId}] No image URL available, using placeholder`);
-        finalImageUrl = `https://storage.googleapis.com/snaphealth-39b14.firebasestorage.app/placeholder-meal-${Date.now()}.jpg`;
+        finalImageUrl = `https://storage.googleapis.com/snaphealth-39b14.appspot.com/placeholder-meal.jpg`;
         responseWithSave._meta.imageUrlWarning = 'Using placeholder image - real image URL was not available';
       }
       

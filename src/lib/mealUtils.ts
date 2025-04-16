@@ -512,7 +512,7 @@ export async function trySaveMeal({
     // If no imageUrl was provided, use a placeholder with timestamp
     if (!finalImageUrl) {
       console.log(`⚠️ [${requestId}] No image URL provided for save operation`);
-      finalImageUrl = `https://storage.googleapis.com/snaphealth-39b14.firebasestorage.app/placeholder-meal-${Date.now()}.jpg`;
+      finalImageUrl = `https://storage.googleapis.com/snaphealth-39b14.appspot.com/placeholder-meal.jpg`;
     }
     
     // Validate minimum required data before saving
