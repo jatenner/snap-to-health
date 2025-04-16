@@ -452,4 +452,120 @@ const useCorsProxy =
     window.location.origin.includes('localhost:3009')
   );
 
-console.log('Using CORS proxy for meal uploads:', useCorsProxy); 
+console.log('Using CORS proxy for meal uploads:', useCorsProxy);
+
+/**
+ * Tries to save meal data to Firestore with timeout handling
+ * 
+ * @param {Object} options - Save options
+ * @param {string} options.userId - User ID
+ * @param {any} options.analysis - Analysis result
+ * @param {string} options.imageUrl - URL of the meal image
+ * @param {string} [options.mealName] - Optional name for the meal
+ * @param {string} [options.requestId] - Optional request ID for logging
+ * @param {number} [options.timeout=5000] - Timeout in milliseconds for the save operation
+ * @returns {Promise<{ success: boolean, savedMealId?: string, error?: Error, timeoutTriggered?: boolean }>}
+ */
+export async function trySaveMeal({ 
+  userId, 
+  analysis, 
+  imageUrl, 
+  mealName = '',
+  requestId = '',
+  timeout = 5000 
+}: { 
+  userId: string; 
+  analysis: any; 
+  imageUrl: string; 
+  mealName?: string;
+  requestId?: string;
+  timeout?: number;
+}): Promise<{ 
+  success: boolean; 
+  savedMealId?: string; 
+  error?: Error; 
+  timeoutTriggered?: boolean;
+}> {
+  // Validate input parameters
+  if (!userId) {
+    console.warn(`⚠️ [${requestId}] Save to account requested but no userId provided`);
+    return { 
+      success: false, 
+      error: new Error('Authentication required to save meals')
+    };
+  }
+
+  // Only save if we have valid analysis and not a complete failure
+  if (!analysis.success || analysis.fallback) {
+    console.warn(`⚠️ [${requestId}] Not saving meal due to analysis issues: success=${analysis.success}, fallback=${analysis.fallback}`);
+    return { 
+      success: false, 
+      error: new Error('Cannot save insufficient analysis results')
+    };
+  }
+
+  // Create a promise that resolves with either the save operation or a timeout
+  try {
+    // Check if we have a valid imageUrl
+    let finalImageUrl = imageUrl;
+    
+    // If no imageUrl was provided, use a placeholder with timestamp
+    if (!finalImageUrl) {
+      console.log(`⚠️ [${requestId}] No image URL provided for save operation`);
+      finalImageUrl = `https://storage.googleapis.com/snaphealth-39b14.firebasestorage.app/placeholder-meal-${Date.now()}.jpg`;
+    }
+    
+    // Validate minimum required data before saving
+    if (!finalImageUrl) {
+      throw new Error('Cannot save meal without an image URL');
+    }
+
+    if (!analysis || typeof analysis !== 'object') {
+      throw new Error('Cannot save meal with invalid analysis data');
+    }
+    
+    // Create a promise race between the save operation and a timeout
+    const savePromise = Promise.race([
+      // Save operation
+      (async () => {
+        try {
+          // Save the meal data to Firestore
+          const savedMealId = await saveMealToFirestore(userId, finalImageUrl, analysis, mealName);
+          
+          console.log(`✅ [${requestId}] Meal saved successfully with ID: ${savedMealId}`);
+          return { 
+            success: true, 
+            savedMealId,
+            finalImageUrl
+          };
+        } catch (saveError: any) {
+          console.error(`❌ [${requestId}] Error saving meal to Firestore:`, saveError);
+          return { 
+            success: false, 
+            error: saveError instanceof Error ? saveError : new Error(saveError?.message || 'Unknown save error')
+          };
+        }
+      })(),
+      
+      // Timeout promise
+      new Promise<{ success: false; error: Error; timeoutTriggered: true }>((resolve) => 
+        setTimeout(() => {
+          resolve({ 
+            success: false, 
+            error: new Error(`Firestore save operation timed out after ${timeout}ms`),
+            timeoutTriggered: true
+          });
+        }, timeout)
+      )
+    ]);
+    
+    // Wait for either the save to complete or timeout
+    return await savePromise;
+  } catch (error: any) {
+    console.error(`❌ [${requestId}] Error in save processing:`, error);
+    return { 
+      success: false, 
+      error: error instanceof Error ? error : new Error(error?.message || 'Unknown error in save processing')
+    };
+  }
+} 

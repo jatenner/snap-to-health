@@ -1,6 +1,7 @@
 // src/utils/storageUtils.ts
-import { getStorage, ref, uploadBytes, getDownloadURL } from "firebase/storage";
+import { getStorage, ref, uploadBytes, getDownloadURL, UploadMetadata } from "firebase/storage";
 import { app } from "@/lib/firebase";
+import axios from 'axios';
 
 // Initialize Firebase Storage
 const storage = getStorage(app);
@@ -13,122 +14,83 @@ const storage = getStorage(app);
  * @returns The download URL for the uploaded file
  */
 export async function uploadFileWithCors(file: File | Blob, path: string, progressCallback?: (progress: number) => void) {
+  if (!file || !path) {
+    throw new Error('File and path are required');
+  }
+  
+  if (!storage) {
+    throw new Error('Firebase Storage is not initialized');
+  }
+  
+  // Create a storage reference
+  const storageRef = ref(storage, path);
+  
+  // Set default metadata if not provided
+  const finalMetadata = {
+    contentType: file.type || 'application/octet-stream',
+    cacheControl: 'public, max-age=3600'
+  };
+  
   try {
-    console.log('uploadFileWithCors: Starting upload process via CORS proxy helper');
-    console.log(`File type: ${file.type}, size: ${file.size} bytes, path: ${path}`);
-    
-    // Let the caller know we're starting
-    if (progressCallback) {
-      progressCallback(10);
-    }
-    
-    // Log storage bucket information
-    console.log('Storage bucket from env:', process.env.NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET);
-    console.log('Storage bucket in use:', storage.app.options.storageBucket);
-    
-    // Check if bucket is correctly set
-    const expectedBucket = process.env.NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET || 'snaphealth-39b14.firebasestorage.app';
-    if (storage.app.options.storageBucket !== expectedBucket) {
-      console.error('⚠️ STORAGE BUCKET MISMATCH in uploadFileWithCors');
-      console.error(`Expected: ${expectedBucket}`);
-      console.error(`Actual: ${storage.app.options.storageBucket}`);
-    } else {
-      console.log('✅ Storage bucket verified for CORS upload:', storage.app.options.storageBucket);
-    }
-    
-    // Create a storage reference
-    const storageRef = ref(storage, path);
-    console.log('Storage reference created for CORS upload:', storageRef.toString());
-    console.log('Full path:', storageRef.fullPath);
-    console.log('Bucket:', storageRef.bucket);
-    
-    // Set proper metadata
-    const metadata = {
-      contentType: file.type || 'image/jpeg',
-      cacheControl: 'public, max-age=3600'
-    };
-    console.log('Metadata:', metadata);
-    
-    // Let the caller know we're uploading
-    if (progressCallback) {
-      progressCallback(30);
-    }
-    
-    // Upload the file
-    console.log('Uploading file to Firebase Storage...');
-    const snapshot = await uploadBytes(storageRef, file, metadata);
-    console.log('Upload successful, getting download URL...');
-    
-    // Let the caller know we're finishing up
-    if (progressCallback) {
-      progressCallback(80);
-    }
+    // Upload the file to Firebase Storage
+    const snapshot = await uploadBytes(storageRef, file, finalMetadata);
     
     // Get the download URL
-    let downloadUrl = await getDownloadURL(snapshot.ref);
-    console.log('Download URL obtained:', downloadUrl);
-    
-    // Use CORS proxy for local development
-    const useCorsProxy =
-      typeof window !== 'undefined' &&
-      (window.location.origin.includes('localhost:3000') ||
-        window.location.origin.includes('localhost:3006') ||
-        window.location.origin.includes('localhost:3007') ||
-        window.location.origin.includes('localhost:3009'));
-
-    console.log('Using CORS proxy for file upload:', useCorsProxy);
-    
-    // In development on localhost ports, use the proxy
-    if (process.env.NODE_ENV === 'development' && typeof window !== 'undefined') {
-      const origin = window.location.origin;
-      const isLocalhost = 
-        origin.includes('localhost:3000') || 
-        origin.includes('localhost:3001') || 
-        origin.includes('localhost:3002') || 
-        origin.includes('localhost:3003') || 
-        origin.includes('localhost:3004') || 
-        origin.includes('localhost:3005') || 
-        origin.includes('localhost:3006') || 
-        origin.includes('localhost:3007') || 
-        origin.includes('localhost:3008') || 
-        origin.includes('localhost:3009') || 
-        origin.includes('localhost:3010');
-        
-      if (isLocalhost) {
-        // Replace the Firebase Storage URL with our proxy URL
-        const originalUrl = downloadUrl;
-        downloadUrl = `/api/proxy/storage?url=${encodeURIComponent(downloadUrl)}`;
-        console.log(`Proxied URL: Original: ${originalUrl} -> Proxied: ${downloadUrl}`);
+    const downloadUrl = await getDownloadURL(snapshot.ref);
+    return downloadUrl;
+  } catch (error: any) {
+    // Check for CORS error
+    if (error.code === 'storage/unauthorized' || 
+        (error.message && error.message.includes('CORS'))) {
+      console.error('CORS error detected while uploading to Firebase Storage:', error);
+      
+      // Use CORS proxy for local development
+      try {
+        // In development on localhost ports, use the proxy
+        if (process.env.NODE_ENV === 'development' && typeof window !== 'undefined') {
+          const origin = window.location.origin;
+          const isLocalhost = 
+            origin.includes('localhost:3000') || 
+            origin.includes('localhost:3001') || 
+            origin.includes('localhost:3002') || 
+            origin.includes('localhost:3003') || 
+            origin.includes('localhost:3004') || 
+            origin.includes('localhost:3005') || 
+            origin.includes('localhost:3006') || 
+            origin.includes('localhost:3007') || 
+            origin.includes('localhost:3008') || 
+            origin.includes('localhost:3009') || 
+            origin.includes('localhost:3010');
+          
+          if (isLocalhost) {
+            console.warn('Using CORS proxy for Firebase Storage upload');
+            const formData = new FormData();
+            formData.append('file', file);
+            formData.append('path', path);
+            
+            if (finalMetadata) {
+              formData.append('metadata', JSON.stringify(finalMetadata));
+            }
+            
+            const proxyResponse = await axios.post('/api/proxy/storage', formData, {
+              headers: {
+                'Content-Type': 'multipart/form-data',
+              },
+            });
+            
+            if (proxyResponse.data && proxyResponse.data.downloadUrl) {
+              return proxyResponse.data.downloadUrl;
+            } else {
+              throw new Error('Proxy upload failed: No download URL returned');
+            }
+          }
+        }
+      } catch (proxyError) {
+        console.error('CORS proxy upload failed:', proxyError);
       }
     }
     
-    // Let the caller know we're done
-    if (progressCallback) {
-      progressCallback(100);
-    }
-    
-    console.log('CORS proxy upload completed successfully');
-    return downloadUrl;
-  } catch (error: any) {
-    console.error('Error in uploadFileWithCors:', error);
-    if (error.code) console.error('Error code:', error.code);
-    
-    // Try to detect common error patterns
-    if (error.message && error.message.includes('CORS')) {
-      console.error('CORS error detected in upload helper');
-    } else if (error.code === 'storage/unauthorized') {
-      console.error('Storage permission error - check Firebase storage rules');
-    } else if (error.code === 'storage/canceled') {
-      console.error('Upload was canceled');
-    } else if (error.code === 'storage/unknown') {
-      console.error('Unknown storage error - check browser console for more details');
-    }
-    
-    // Inform caller of failure
-    if (progressCallback) {
-      progressCallback(-1); // Use -1 to indicate failure as in uploadMealImage
-    }
-    
+    // Re-throw the original error if proxy failed or not applicable
     throw error;
   }
 }
@@ -139,79 +101,61 @@ export async function uploadFileWithCors(file: File | Blob, path: string, progre
  * @returns The download URL for the file
  */
 export async function getFileUrlWithCors(path: string) {
+  if (!path) {
+    throw new Error('Path is required');
+  }
+  
+  if (!storage) {
+    throw new Error('Firebase Storage is not initialized');
+  }
+  
+  // Create a storage reference
+  const storageRef = ref(storage, path);
+  
   try {
-    console.log('getFileUrlWithCors: Retrieving file URL with CORS proxy support');
-    console.log(`Path: ${path}`);
-    
-    // Log storage bucket information
-    console.log('Storage bucket from env:', process.env.NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET);
-    console.log('Storage bucket in use:', storage.app.options.storageBucket);
-    
-    // Check if bucket is correctly set
-    const expectedBucket = process.env.NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET || 'snaphealth-39b14.firebasestorage.app';
-    if (storage.app.options.storageBucket !== expectedBucket) {
-      console.error('⚠️ STORAGE BUCKET MISMATCH in getFileUrlWithCors');
-      console.error(`Expected: ${expectedBucket}`);
-      console.error(`Actual: ${storage.app.options.storageBucket}`);
-    } else {
-      console.log('✅ Storage bucket verified for URL retrieval:', storage.app.options.storageBucket);
-    }
-    
-    // Create a storage reference
-    const storageRef = ref(storage, path);
-    console.log('Storage reference created for URL retrieval:', storageRef.toString());
-    console.log('Full path:', storageRef.fullPath);
-    console.log('Bucket:', storageRef.bucket);
-    
     // Get the download URL
-    let downloadUrl = await getDownloadURL(storageRef);
-    console.log('Original download URL:', downloadUrl);
-    
-    // Use CORS proxy for local development
-    const useCorsProxy =
-      typeof window !== 'undefined' &&
-      (window.location.origin.includes('localhost:3000') ||
-        window.location.origin.includes('localhost:3006') ||
-        window.location.origin.includes('localhost:3007') ||
-        window.location.origin.includes('localhost:3009'));
-
-    console.log('Using CORS proxy for URL retrieval:', useCorsProxy);
-    
-    // In development on localhost ports, use the proxy
-    if (process.env.NODE_ENV === 'development' && typeof window !== 'undefined') {
-      const origin = window.location.origin;
-      const isLocalhost = 
-        origin.includes('localhost:3000') || 
-        origin.includes('localhost:3001') || 
-        origin.includes('localhost:3002') || 
-        origin.includes('localhost:3003') || 
-        origin.includes('localhost:3004') || 
-        origin.includes('localhost:3005') || 
-        origin.includes('localhost:3006') || 
-        origin.includes('localhost:3007') || 
-        origin.includes('localhost:3008') || 
-        origin.includes('localhost:3009') || 
-        origin.includes('localhost:3010');
-        
-      if (isLocalhost) {
-        // Replace the Firebase Storage URL with our proxy URL
-        const originalUrl = downloadUrl;
-        downloadUrl = `/api/proxy/storage?url=${encodeURIComponent(downloadUrl)}`;
-        console.log(`Proxied URL: Original: ${originalUrl} -> Proxied: ${downloadUrl}`);
+    return await getDownloadURL(storageRef);
+  } catch (error: any) {
+    // Check for CORS error
+    if (error.code === 'storage/unauthorized' || 
+        (error.message && error.message.includes('CORS'))) {
+      console.error('CORS error detected while getting file URL:', error);
+      
+      // Use CORS proxy for local development
+      try {
+        // In development on localhost ports, use the proxy
+        if (process.env.NODE_ENV === 'development' && typeof window !== 'undefined') {
+          const origin = window.location.origin;
+          const isLocalhost = 
+            origin.includes('localhost:3000') || 
+            origin.includes('localhost:3001') || 
+            origin.includes('localhost:3002') || 
+            origin.includes('localhost:3003') || 
+            origin.includes('localhost:3004') || 
+            origin.includes('localhost:3005') || 
+            origin.includes('localhost:3006') || 
+            origin.includes('localhost:3007') || 
+            origin.includes('localhost:3008') || 
+            origin.includes('localhost:3009') || 
+            origin.includes('localhost:3010');
+          
+          if (isLocalhost) {
+            console.warn('Using CORS proxy for Firebase Storage URL');
+            const proxyResponse = await axios.get(`/api/proxy/storage?path=${encodeURIComponent(path)}`);
+            
+            if (proxyResponse.data && proxyResponse.data.downloadUrl) {
+              return proxyResponse.data.downloadUrl;
+            } else {
+              throw new Error('Proxy URL retrieval failed: No download URL returned');
+            }
+          }
+        }
+      } catch (proxyError) {
+        console.error('CORS proxy URL retrieval failed:', proxyError);
       }
     }
     
-    return downloadUrl;
-  } catch (error: any) {
-    console.error('Error in getFileUrlWithCors:', error);
-    if (error.code) console.error('Error code:', error.code);
-    
-    if (error.code === 'storage/object-not-found') {
-      console.error('File not found in storage');
-    } else if (error.code === 'storage/unauthorized') {
-      console.error('Not authorized to access file');
-    }
-    
+    // Re-throw the original error if proxy failed or not applicable
     throw error;
   }
 }

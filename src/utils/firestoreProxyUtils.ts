@@ -9,10 +9,19 @@ export const shouldUseFirestoreProxy = (): boolean => {
   return (
     process.env.NODE_ENV === 'development' &&
     typeof window !== 'undefined' &&
-    (window.location.origin.includes('localhost:3000') ||
-     window.location.origin.includes('localhost:3006') ||
-     window.location.origin.includes('localhost:3007') ||
-     window.location.origin.includes('localhost:3009'))
+    (
+      window.location.origin.includes('localhost:3000') ||
+      window.location.origin.includes('localhost:3001') ||
+      window.location.origin.includes('localhost:3002') ||
+      window.location.origin.includes('localhost:3003') ||
+      window.location.origin.includes('localhost:3004') ||
+      window.location.origin.includes('localhost:3005') ||
+      window.location.origin.includes('localhost:3006') ||
+      window.location.origin.includes('localhost:3007') ||
+      window.location.origin.includes('localhost:3008') ||
+      window.location.origin.includes('localhost:3009') ||
+      window.location.origin.includes('localhost:3010')
+    )
   );
 };
 
@@ -22,7 +31,6 @@ export const shouldUseFirestoreProxy = (): boolean => {
  */
 export const getFirestoreBaseUrl = (): string => {
   if (shouldUseFirestoreProxy()) {
-    console.log('Using Firestore proxy for local development');
     return '/api/proxy/firestore';
   }
   
@@ -407,4 +415,16 @@ const convertValueToFirestoreValue = (value: any): any => {
   
   // Default to string if unknown type
   return { stringValue: String(value) };
+};
+
+// Helper to create a Firestore proxy URL
+export const getFirestoreProxyUrl = (path: string, method: string = 'GET'): string => {
+  if (!shouldUseFirestoreProxy()) {
+    // Default Firebase URL format
+    const projectId = process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID;
+    return `https://firestore.googleapis.com/v1/projects/${projectId}/databases/(default)/documents/${path}`;
+  }
+
+  // For development: Use our own proxy endpoint
+  return `/api/proxy/firestore?path=${encodeURIComponent(path)}&method=${method}`;
 }; 

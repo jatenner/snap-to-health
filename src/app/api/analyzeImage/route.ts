@@ -1,7 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
 import axios from 'axios';
 import crypto from 'crypto';
-import { saveMealToFirestore } from '@/lib/mealUtils';
+import { saveMealToFirestore, trySaveMeal } from '@/lib/mealUtils';
+import { storage } from '@/lib/firebase';
+import { ref, uploadBytes, getDownloadURL, UploadResult } from 'firebase/storage';
+import { adminStorage } from '@/lib/firebaseAdmin';
 
 // Trigger new Vercel deployment - 15 Apr 2025
 // Request concurrency tracking
@@ -1805,6 +1808,139 @@ function createFallbackResponse(reason: string, healthGoal: string, requestId: s
   };
 }
 
+// Add this function to upload image to Firebase Storage
+/**
+ * Uploads an image to Firebase Storage with timeout protection
+ * 
+ * @param file The file to upload
+ * @param userId User ID for storage path
+ * @param requestId Request ID for logging
+ * @param timeoutMs Maximum time to wait for upload
+ * @returns Download URL for the uploaded file or null if failed
+ */
+async function uploadImageToFirebase(
+  file: File | Buffer | ArrayBuffer, 
+  userId: string, 
+  requestId: string,
+  timeoutMs: number = 5000
+): Promise<string | null> {
+  console.time(`⏱️ [${requestId}] uploadImageToFirebase`);
+  console.log(`🖼️ [${requestId}] Starting image upload to Firebase Storage for user ${userId}`);
+  
+  try {
+    const fileExtension = 'jpg'; // Default to jpg for consistency
+    const timestamp = Date.now();
+    const randomId = Math.random().toString(36).substring(2, 10);
+    const filename = `${timestamp}-${randomId}.${fileExtension}`;
+    const storagePath = `users/${userId}/meals/${filename}`;
+    
+    console.log(`📁 [${requestId}] Upload path: ${storagePath}`);
+
+    // Create storage ref based on whether we have a Buffer or File
+    let storageRef;
+    let uploadTask;
+    let isUsingAdminSDK = false;
+    
+    try {
+      // Attempt to use client-side storage first
+      if (storage) {
+        storageRef = ref(storage, storagePath);
+        console.log(`🔗 [${requestId}] Created storage reference using client SDK`);
+      } else if (adminStorage) {
+        // Fall back to admin SDK if client SDK is not available
+        isUsingAdminSDK = true;
+        console.log(`🔗 [${requestId}] Using admin SDK fallback for storage operation`);
+        
+        // Convert File to Buffer if needed
+        let fileBuffer: Buffer;
+        if (file instanceof File) {
+          const arrayBuffer = await file.arrayBuffer();
+          fileBuffer = Buffer.from(arrayBuffer);
+        } else if (file instanceof ArrayBuffer) {
+          fileBuffer = Buffer.from(file);
+        } else {
+          fileBuffer = file as Buffer;
+        }
+        
+        // Create a promise race to handle timeout
+        const uploadPromise = Promise.race([
+          adminStorage.bucket().file(storagePath).save(fileBuffer, {
+            metadata: {
+              contentType: 'image/jpeg',
+            }
+          }),
+          new Promise((_resolve, reject) => 
+            setTimeout(() => reject(new Error(`Admin SDK upload timed out after ${timeoutMs}ms`)), timeoutMs)
+          )
+        ]);
+        
+        await uploadPromise;
+        
+        // Get download URL from admin SDK
+        const [url] = await adminStorage.bucket().file(storagePath).getSignedUrl({
+          action: 'read',
+          expires: '03-01-2500', // Far future expiration
+        });
+        
+        console.log(`✅ [${requestId}] Image uploaded successfully via Admin SDK`);
+        console.timeEnd(`⏱️ [${requestId}] uploadImageToFirebase`);
+        return url;
+      } else {
+        throw new Error('Neither client nor admin Firebase Storage is initialized');
+      }
+    } catch (initError) {
+      console.error(`❌ [${requestId}] Storage initialization error:`, initError);
+      throw initError;
+    }
+    
+    // Skip the rest if we already used admin SDK
+    if (isUsingAdminSDK) return null;
+    
+    // Prepare the file for upload with client SDK
+    let fileToUpload: Blob | Uint8Array | ArrayBuffer;
+    if (file instanceof File) {
+      fileToUpload = file;
+    } else if (file instanceof ArrayBuffer) {
+      fileToUpload = file;
+    } else {
+      // Assume it's a Buffer
+      fileToUpload = new Uint8Array(file as Buffer);
+    }
+    
+    // Create a promise race to handle timeout
+    const uploadWithTimeout: Promise<UploadResult> = Promise.race([
+      uploadBytes(storageRef, fileToUpload, {
+        contentType: 'image/jpeg'
+      }),
+      new Promise<never>((_resolve, reject) => 
+        setTimeout(() => reject(new Error(`Upload timed out after ${timeoutMs}ms`)), timeoutMs)
+      )
+    ]);
+    
+    // Execute the upload
+    const uploadResult = await uploadWithTimeout;
+    console.log(`✅ [${requestId}] Image uploaded successfully to path: ${uploadResult.ref.fullPath}`);
+    
+    // Get the download URL with timeout
+    const urlWithTimeout: Promise<string> = Promise.race([
+      getDownloadURL(uploadResult.ref),
+      new Promise<never>((_resolve, reject) => 
+        setTimeout(() => reject(new Error(`Get download URL timed out after ${timeoutMs}ms`)), timeoutMs)
+      )
+    ]);
+    
+    const downloadUrl = await urlWithTimeout;
+    console.log(`🔗 [${requestId}] Download URL generated: ${downloadUrl.substring(0, 50)}...`);
+    
+    console.timeEnd(`⏱️ [${requestId}] uploadImageToFirebase`);
+    return downloadUrl;
+  } catch (error: any) {
+    console.error(`❌ [${requestId}] Failed to upload image to Firebase:`, error);
+    console.timeEnd(`⏱️ [${requestId}] uploadImageToFirebase`);
+    return null;
+  }
+}
+
 export async function POST(request: NextRequest) {
   // Generate a unique request ID for tracking
   const requestId = crypto.randomUUID().substring(0, 8);
@@ -2130,23 +2266,26 @@ export async function POST(request: NextRequest) {
     
     // Handle saving meal to Firestore if requested
     try {
-      // Extract save-related parameters from formData
+      // Extract the remaining parameters
       const saveToAccount = formData.get('saveToAccount') === 'true';
       const userId = formData.get('userId') as string || '';
       const mealName = formData.get('mealName') as string || '';
       const imageUrl = formData.get('imageUrl') as string || '';
-
-      // Use type assertion to work with the response object
+      
+      if (saveToAccount && userId) {
+        console.log(`👤 [${requestId}] Save requested for user ${userId}`);
+      } else if (saveToAccount) {
+        console.log(`⚠️ [${requestId}] Save requested but no userId provided`);
+      } else {
+        console.log(`ℹ️ [${requestId}] No save requested, proceeding with analysis only`);
+      }
+      
+      // Process the save request if this was requested
       const responseWithSave = response as Record<string, any>;
-      
-      // Initialize save-related properties
-      responseWithSave.saved = false;
-      
-      // Ensure _meta exists to avoid errors
       if (!responseWithSave._meta) {
         responseWithSave._meta = { requestId };
       }
-
+      
       // Only attempt to save if explicitly requested
       if (!saveToAccount) {
         console.log(`ℹ️ [${requestId}] Save to account not requested, skipping Firestore save`);
@@ -2169,67 +2308,100 @@ export async function POST(request: NextRequest) {
         return;
       }
 
-      // Implement save with a timeout to prevent Vercel function hang
-      const saveTimeout = 5000; // 5 seconds max for saving to Firestore
+      // Image processing for Firebase Storage
+      console.log(`🖼️ [${requestId}] Starting image processing for storage...`);
       
-      // Create a promise that resolves with either the save operation or a timeout
-      const savePromise = Promise.race([
-        (async () => {
-          try {
-            // Check if we have a valid imageUrl
-            let finalImageUrl = imageUrl;
-            
-            // If no imageUrl was provided, use a placeholder with timestamp
-            if (!finalImageUrl) {
-              console.log(`⚠️ [${requestId}] No image URL provided for save operation`);
-              finalImageUrl = `https://storage.googleapis.com/snaphealth-39b14.firebasestorage.app/placeholder-meal-${Date.now()}.jpg`;
-              responseWithSave._meta.imageUrlWarning = 'Using placeholder image - real image URL was not provided';
-            }
-            
-            // Validate minimum required data before saving
-            if (!finalImageUrl) {
-              throw new Error('Cannot save meal without an image URL');
-            }
-
-            if (!responseWithSave || typeof responseWithSave !== 'object') {
-              throw new Error('Cannot save meal with invalid analysis data');
-            }
-            
-            // Save the meal data to Firestore
-            const savedMealId = await saveMealToFirestore(userId, finalImageUrl, responseWithSave, mealName);
-            
-            // Update response with saved status
-            responseWithSave.saved = true;
-            responseWithSave.mealId = savedMealId;
-            responseWithSave.mealName = mealName || 'Unnamed Meal';
-            responseWithSave.imageUrl = finalImageUrl;
-            
-            console.log(`✅ [${requestId}] Meal saved successfully with ID: ${savedMealId}`);
-            return { success: true, savedMealId };
-          } catch (saveError: any) {
-            console.error(`❌ [${requestId}] Error saving meal to Firestore:`, saveError);
-            responseWithSave.saveError = 'Failed to save meal to your account';
-            responseWithSave._meta.saveErrorDetails = saveError?.message || 'Unknown save error';
-            return { success: false, error: saveError };
+      // Get the original image file from formData
+      const imageFile = formData.get('image') as File | null;
+      
+      // Storage for the final image URL we'll use in Firestore
+      let finalImageUrl = imageUrl;
+      let storageUploadSuccess = false;
+      
+      if (imageFile && userId) {
+        try {
+          console.log(`📤 [${requestId}] Uploading original image to Firebase Storage...`);
+          responseWithSave._meta.imageProcessingStart = Date.now();
+          
+          // Upload the image with a timeout to prevent Vercel function hang
+          const uploadedUrl = await uploadImageToFirebase(
+            imageFile, 
+            userId, 
+            requestId,
+            5000 // 5 second timeout
+          );
+          
+          if (uploadedUrl) {
+            console.log(`✅ [${requestId}] Firebase Storage upload successful`);
+            finalImageUrl = uploadedUrl;
+            storageUploadSuccess = true;
+            responseWithSave._meta.imageStorageUrl = uploadedUrl;
+          } else {
+            console.warn(`⚠️ [${requestId}] Firebase Storage upload failed, using original URL as fallback`);
+            responseWithSave._meta.imageStorageError = 'Upload failed, using original URL';
           }
-        })(),
-        new Promise<{ success: false; error: Error }>((resolve) => 
-          setTimeout(() => {
-            resolve({ 
-              success: false, 
-              error: new Error(`Firestore save operation timed out after ${saveTimeout}ms`) 
-            });
-          }, saveTimeout)
-        )
-      ]);
+          
+          responseWithSave._meta.imageProcessingEnd = Date.now();
+          responseWithSave._meta.imageProcessingDuration = 
+            responseWithSave._meta.imageProcessingEnd - responseWithSave._meta.imageProcessingStart;
+        } catch (uploadError: any) {
+          console.error(`❌ [${requestId}] Error during image upload:`, uploadError);
+          responseWithSave._meta.imageStorageError = uploadError.message || 'Unknown error during upload';
+          // Continue with the original imageUrl if the upload fails
+        }
+      } else {
+        // Log reason why we're not uploading
+        if (!imageFile) {
+          console.warn(`⚠️ [${requestId}] No image file available for storage upload`);
+          responseWithSave._meta.imageStorageSkipReason = 'No image file available';
+        }
+        if (!userId) {
+          console.warn(`⚠️ [${requestId}] No userId available for storage path`);
+          responseWithSave._meta.imageStorageSkipReason = 'No userId available';
+        }
+      }
       
-      // Wait for either the save to complete or timeout
-      const result = await savePromise;
+      // If we still don't have a valid image URL after upload attempt, use a placeholder
+      if (!finalImageUrl) {
+        console.log(`⚠️ [${requestId}] No image URL available, using placeholder`);
+        finalImageUrl = `https://storage.googleapis.com/snaphealth-39b14.firebasestorage.app/placeholder-meal-${Date.now()}.jpg`;
+        responseWithSave._meta.imageUrlWarning = 'Using placeholder image - real image URL was not available';
+      }
       
-      if (!result.success) {
-        console.warn(`⚠️ [${requestId}] Firestore save timed out or failed`);
-        responseWithSave.saveError = 'Save operation timed out - please try again';
-        responseWithSave._meta.saveTimedOut = true;
+      // Use our centralized trySaveMeal utility function
+      const saveResult = await trySaveMeal({
+        userId,
+        analysis: responseWithSave,
+        imageUrl: finalImageUrl, // Use the uploaded URL or fallback
+        mealName,
+        requestId,
+        timeout: 5000
+      });
+      
+      if (saveResult.success && saveResult.savedMealId) {
+        // Update response with saved status
+        responseWithSave.saved = true;
+        responseWithSave.mealId = saveResult.savedMealId;
+        responseWithSave.mealName = mealName || 'Unnamed Meal';
+        responseWithSave.imageUrl = finalImageUrl; // Use the final image URL
+        console.log(`✅ [${requestId}] Meal saved successfully with ID: ${saveResult.savedMealId}`);
+        
+        if (storageUploadSuccess) {
+          console.log(`🏆 [${requestId}] Complete flow successful: Image uploaded and meal saved`);
+        } else {
+          console.log(`⚠️ [${requestId}] Partial success: Meal saved but using original/fallback image URL`);
+        }
+      } else {
+        // Handle save failure
+        console.warn(`⚠️ [${requestId}] Firestore save failed: ${saveResult.error?.message}`);
+        responseWithSave.saveError = saveResult.timeoutTriggered 
+          ? 'Save operation timed out - please try again' 
+          : 'Failed to save meal to your account';
+        
+        responseWithSave._meta.saveErrorDetails = saveResult.error?.message || 'Unknown save error';
+        if (saveResult.timeoutTriggered) {
+          responseWithSave._meta.saveTimedOut = true;
+        }
       }
     } catch (saveProcessError: any) {
       console.error(`❌ [${requestId}] Error in save processing:`, saveProcessError);
