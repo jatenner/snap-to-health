@@ -31,16 +31,34 @@ if (!apps.length) {
       // Decode the base64 encoded private key
       let decodedPrivateKey: string;
       try {
+        // Add diagnostic logging for the base64 key (without revealing the full key)
+        const keyLength = privateKeyBase64?.length || 0;
+        console.log(`Processing Firebase private key (base64 length: ${keyLength} chars)`);
+        
+        if (keyLength < 100) {
+          console.warn('⚠️ WARNING: The base64 private key seems unusually short');
+        }
+        
         decodedPrivateKey = Buffer.from(privateKeyBase64!, 'base64').toString('utf8');
         
-        // Basic validation of the decoded key format
-        if (!decodedPrivateKey.includes('-----BEGIN PRIVATE KEY-----') || 
-            !decodedPrivateKey.includes('-----END PRIVATE KEY-----') || 
-            !decodedPrivateKey.includes('\n')) {
+        // Enhanced validation of the decoded key format
+        const hasPemHeader = decodedPrivateKey.includes('-----BEGIN PRIVATE KEY-----');
+        const hasPemFooter = decodedPrivateKey.includes('-----END PRIVATE KEY-----');
+        const hasNewlines = decodedPrivateKey.includes('\n');
+        const newlineCount = (decodedPrivateKey.match(/\n/g) || []).length;
+        
+        console.log(`Decoded private key validation:
+          - Contains PEM header: ${hasPemHeader ? '✅' : '❌'}
+          - Contains PEM footer: ${hasPemFooter ? '✅' : '❌'}
+          - Contains newlines: ${hasNewlines ? `✅ (${newlineCount} found)` : '❌'}
+          - Decoded length: ${decodedPrivateKey.length} characters
+        `);
+        
+        if (!hasPemHeader || !hasPemFooter || !hasNewlines) {
           throw new Error('Decoded private key is not in valid PEM format');
         }
         
-        console.log('Successfully decoded base64 private key');
+        console.log('✅ Successfully decoded base64 private key');
       } catch (error: any) {
         const errorMessage = `Failed to decode Firebase private key from base64: ${error?.message || 'Unknown error'}`;
         console.error(errorMessage);
@@ -78,7 +96,7 @@ if (!apps.length) {
         console.error('Please check that your FIREBASE_PRIVATE_KEY_BASE64 environment variable:');
         console.error('1. Contains a valid base64-encoded Firebase service account private key');
         console.error('2. Is complete (not truncated)');
-        console.error('3. Was generated with: node src/scripts/encodePrivateKey.js');
+        console.error('3. Was generated with: node src/scripts/convertServiceAccountToEnv.js');
       }
     }
   }
