@@ -369,18 +369,24 @@ export default function UploadPage() {
           toast.dismiss(analyzeToast);
           
           // Structured logging for debugging
-          console.warn("📊 Fallback analysis data:", {
+          console.warn("📊 CRITICAL: Fallback analysis detected - BLOCKING ALL SAVE ATTEMPTS", {
             message: response.data.message,
             success: response.data.success,
             fallback: response.data.fallback,
-            mealSaved: response.data.mealSaved || false
+            mealSaved: false, // Explicitly marked as not saved
+            missingFields: response.data.payload?.missingFields || ['unknown'],
+            requestId: response.data.payload?.requestId || 'unknown'
           });
+          
+          // Show prominent error toast to user
+          toast.error("❌ AI could not analyze this image. Try again with better lighting or clearer food items.", 
+            { duration: 7000, position: 'top-center' });
           
           // Store fallback data for display on meal-analysis page
           const fallbackResult = response.data;
           sessionStorage.setItem('fallbackResult', JSON.stringify(fallbackResult));
           
-          // Show helpful message to the user
+          // Show helpful message to the user with more details
           const fallbackMessage = response.data.message || 
             "We couldn't clearly identify your meal. Try a photo with better lighting and clearer food separation.";
           
@@ -391,7 +397,7 @@ export default function UploadPage() {
           
           // Immediately redirect to meal-analysis page where the ErrorCard will be displayed
           router.push('/meal-analysis');
-          return;
+          return; // do not proceed to any save attempt
         }
         
         // Handle low confidence results differently from errors

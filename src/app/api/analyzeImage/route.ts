@@ -659,14 +659,27 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
         analysis.nutrients.length === 0;
 
       if (isInvalidAnalysis) {
-        console.warn("❌ Skipping meal save due to incomplete GPT result");
+        console.warn("🔥 Skipping save — invalid GPT result", analysis);
         
-        // Block all further processing and exit immediately
+        // Log what's missing for debugging
+        const missingFields = [];
+        if (!analysis?.description) missingFields.push('description');
+        if (!Array.isArray(analysis.nutrients)) missingFields.push('nutrients array');
+        else if (analysis.nutrients.length === 0) missingFields.push('non-empty nutrients');
+        
+        console.error(`❌ [${requestId}] BLOCKING ALL FIRESTORE SAVE ATTEMPTS - Missing required fields:`, missingFields);
+        
+        // Return early with complete response - nothing after this runs
         return NextResponse.json({
           success: false,
           fallback: true,
-          message: "GPT fallback – description or nutrients missing",
+          message: "GPT fallback — missing description or nutrients",
           analysis: createEmptyFallbackAnalysis(),
+          payload: {
+            originalAnalysis: analysis, // Include original for debugging
+            missingFields,
+            requestId
+          },
           mealSaved: false
         });
       }

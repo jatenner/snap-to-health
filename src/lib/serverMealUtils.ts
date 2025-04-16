@@ -110,6 +110,24 @@ export async function trySaveMealServer({
   error?: Error; 
   timeoutTriggered?: boolean;
 }> {
+  // CRITICAL SAFEGUARD: Block any attempt to save with invalid analysis
+  if (!analysis?.description || !Array.isArray(analysis.nutrients) || analysis.nutrients.length === 0) {
+    console.warn("❌ BLOCKED: Attempted save with incomplete analysis data");
+    
+    // Log what's missing for debugging
+    const missingFields = [];
+    if (!analysis?.description) missingFields.push('description');
+    if (!Array.isArray(analysis.nutrients)) missingFields.push('nutrients array');
+    else if (analysis.nutrients.length === 0) missingFields.push('non-empty nutrients');
+    
+    console.error(`🚫 [${requestId}] BLOCKING FIRESTORE SAVE in trySaveMealServer - Missing fields:`, missingFields);
+    
+    return {
+      success: false,
+      error: new Error(`Save blocked due to invalid GPT result: missing ${missingFields.join(', ')}`)
+    };
+  }
+  
   // Validate input parameters
   if (!userId) {
     console.warn(`⚠️ [${requestId}] Save to account requested but no userId provided`);
