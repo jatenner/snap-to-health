@@ -650,18 +650,20 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       
       const analysis = analysisResult.result;
 
-      // Replace previous guard with user-provided snippet
+      // Add console log for raw response
+      console.log("🔍 GPT RAW:", JSON.stringify(analysis, null, 2));
+
+      // Defensive Guard as provided by user
       if (
         !analysis?.description ||
         !Array.isArray(analysis?.nutrients) ||
         analysis.nutrients.length === 0
       ) {
-        console.warn("⛔ Skipping save: invalid GPT result", analysis);
-        // Return NextResponse directly as requested
+        console.warn("⚠️ GPT result incomplete — fallback triggered", analysis);
         return NextResponse.json({
           success: false,
           fallback: true,
-          message: "Fallback: GPT did not return valid description or nutrients",
+          message: "Fallback: missing description or nutrients",
           analysis, // Include the potentially incomplete analysis
         });
       }
