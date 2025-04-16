@@ -389,7 +389,8 @@ export default function MealAnalysisPage() {
             )}
             {/* 💡 Tip */} 
             <p className="text-gray-600 mb-6">
-              Tip: {fallbackInfo.insight || "Use good lighting, avoid blur, and show the full plate."}
+              {/* ✅ 3. Improve error UI message */}
+              Tip: {fallbackInfo.insight || "We couldn’t confidently analyze this meal. Try again with a clearer image, or review the estimate below if partial data is available."}
             </p>
             {/* 🔁 Button */} 
             <Link 

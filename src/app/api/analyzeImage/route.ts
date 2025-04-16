@@ -317,39 +317,45 @@ async function analyzeImageWithGPT4V(
   dietaryPreferences: string[] = [],
   requestId: string
 ): Promise<any> {
-  console.log(`[${requestId}] Analyzing image with GPT-4V...`);
+  console.log(`[${requestId}] Analyzing image with GPT-4V (Mock)...`);
 
   // --- Simulate Analysis --- 
-  // In a real scenario, this would be the result from GPT/Nutritionix
-  const rawAnalysisResult = createEmptyFallbackAnalysis(); // Simulate getting an invalid result
+  // Simulate a successful, best-effort analysis for a good image based on new prompt
+  // This bypasses the old fallback logic for testing purposes
+  const simulatedSuccessfulResult = {
+    description: "Grilled chicken breast with brown rice and mixed green salad",
+    nutrients: [
+      { name: "Protein", value: "35g" },
+      { name: "Carbs", value: "45g" },
+      { name: "Fat", value: "15g" }
+    ],
+    insight: "This balanced meal supports muscle recovery and sustained energy, suitable for an active lifestyle.",
+    confidence: 0.85,
+    failureReason: null // Should be null for successful analysis
+  };
 
-  // ✅ Check if the raw analysis result is valid
-  if (!isValidAnalysis(rawAnalysisResult)) {
-    console.warn(`[${requestId}] GPT/Nutritionix analysis result is invalid, returning structured fallback.`);
-    
-    // Simulate asking GPT for a reason (Step 3)
-    const simulatedFailureReason = "Photo may be blurry, cropped, or too dark."; // Placeholder
-
-    // ✅ 1. Return the structured soft fallback object
-    return {
-      result: {
-        fallback: true,
-        success: false,
-        // Use a more user-friendly description
-        description: "We could not fully identify the food items in this image.",
-        nutrients: [],
-        // Add insight/tip
-        insight: "Try uploading a photo with clear lighting, all food items visible, and taken from above.",
-        // Add the (simulated) GPT failure reason
-        failureReason: simulatedFailureReason,
-        fallbackType: "missing_fields" // Optional debug key
-      }
-    };
+  // Simulate a scenario where GPT *could* return a partial/invalid response
+  const simulateFailure = false; // Set to true to test the fallback path
+  if (simulateFailure) {
+     console.warn(`[${requestId}] Simulating analysis failure for testing fallback.`);
+     const simulatedFailureReason = "Could not identify items due to poor lighting."; // Simulate GPT reason
+     return {
+        result: {
+          fallback: true,
+          success: false,
+          description: "We could not fully identify the food items in this image.",
+          nutrients: [], // Intentionally empty for fallback trigger
+          insight: "Try uploading a photo with clear lighting, all food items visible, and taken from above.",
+          failureReason: simulatedFailureReason,
+          fallbackType: "simulated_failure"
+        }
+      };
   }
 
-  // If valid, return the actual result (though in this mock, it's always fallback)
+  // Return the simulated *successful* result
+  console.log(`[${requestId}] Mock analysis successful, returning simulated data.`);
   return {
-    result: rawAnalysisResult 
+    result: simulatedSuccessfulResult
   };
 }
 
@@ -644,52 +650,78 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       
       responseData.debug.processingSteps.push('Analysis completed');
       
-      // ✅ Check if the analysis result is a fallback
-      if (analysisResult.result && analysisResult.result.fallback === true) {
-        console.log(`[${requestId}] Skipping save: fallback analysis result received.`);
+      const analysis = analysisResult.result;
+
+      // ✅ 2. Refined Fallback Logic: Check if analysis is truly unusable
+      const isTrulyFallback = 
+        !analysis || // No result object
+        (!analysis.description && // No description AND
+         (!analysis.nutrients || // No nutrients array OR
+          analysis.nutrients.every((n: any) => !n.value || n.value === '0' || n.value === '0g') // All nutrient values are missing/zero
+         ));
+
+      if (isTrulyFallback) {
+        console.log(`[${requestId}] Triggering fallback: Missing description and nutrients.`);
         
-        // Populate responseData with fallback info but don't try to save
-        responseData.success = false; // Indicate overall operation wasn't fully successful
+        // Use the potentially structured fallback from analysisResult if available
+        const fallbackData = analysis && analysis.fallback === true ? analysis : createEmptyFallbackAnalysis();
+
+        responseData.success = false; 
         responseData.fallback = true;
-        responseData.message = analysisResult.result.message || "Analysis resulted in fallback";
-        responseData.analysis = analysisResult.result;
-        responseData.imageUrl = imageUrl; // Keep image URL if upload succeeded
+        responseData.message = fallbackData.message || "Analysis failed due to missing essential data";
+        responseData.analysis = fallbackData;
+        responseData.imageUrl = imageUrl;
         responseData.requestId = requestId;
         responseData.debug.timestamps.end = new Date().toISOString();
         console.timeEnd(`⏱️ [${requestId}] Total API execution time (Fallback)`);
         
-        // Return the response immediately, skipping the save block
         return createAnalysisResponse(responseData);
+      } else if (analysis && analysis.fallback === true) {
+        // Handle the "soft fallback" case where we have some data but marked as fallback
+        console.log(`[${requestId}] Soft fallback detected (fallback: true flag present, but some data exists). Proceeding with partial analysis.`);
+        // The data will be passed through, and the frontend can decide how to display it
+        // We still don't save soft fallbacks
+        responseData.mealSaved = false; 
+        responseData.debug.processingSteps.push('Soft fallback - meal save skipped');
       }
       
-      // If not a fallback, proceed with preparing the response and potentially saving
-      responseData.success = true;
-      responseData.message = 'Analysis completed successfully';
-      responseData.analysis = analysisResult.result;
+      // If not a true fallback, proceed with preparing the response and potentially saving
+      responseData.success = true; // Mark as successful even if it's a soft fallback
+      responseData.message = 'Analysis completed'; // Generic message, frontend handles display
+      responseData.analysis = analysis; // Pass the potentially partial/soft-fallback analysis
       responseData.imageUrl = imageUrl;
       responseData.requestId = requestId;
       
-      if (analysisResult.reasoning) {
+      if (analysisResult.reasoning) { // Keep reasoning if available
         responseData.debug.reasoning = analysisResult.reasoning;
       }
 
-      // --- Save Meal Logic (Only if not a fallback) --- 
-      if (userId && imageUrl && responseData.analysis) { // fallback check already done above
+      // --- Save Meal Logic (Only if NOT a true fallback AND NOT a soft fallback) --- 
+      const shouldSave = userId && typeof imageUrl === 'string' && responseData.analysis && !isTrulyFallback && !(responseData.analysis?.fallback === true);
+      
+      if (shouldSave) { 
         try {
-          const { saveMealToFirestore, updateResponseWithSaveResult } = await import('./server-meal-saver');
-          
-          const saveResult = await saveMealToFirestore({
-            userId,
-            imageUrl,
-            analysis: responseData.analysis,
-            requestId,
-            requestData,
-            jsonData
-          });
-          
-          // Update the response with save results
-          updateResponseWithSaveResult(responseData, saveResult);
-          console.log(`✅ [${requestId}] Meal saving process completed with success: ${saveResult.success}`);
+          // Explicit type check inside the block to satisfy TypeScript
+          if (typeof imageUrl === 'string') { 
+            const { saveMealToFirestore, updateResponseWithSaveResult } = await import('./server-meal-saver');
+            
+            const saveResult = await saveMealToFirestore({
+              userId,
+              imageUrl, // Now guaranteed to be a string here
+              analysis: responseData.analysis,
+              requestId,
+              requestData,
+              jsonData
+            });
+            
+            // Update the response with save results
+            updateResponseWithSaveResult(responseData, saveResult);
+            console.log(`✅ [${requestId}] Meal saving process completed with success: ${saveResult.success}`);
+          } else {
+            // This should technically not be reachable due to the `shouldSave` check, but satisfies TS
+            console.warn(`[${requestId}] Skipping save due to invalid imageUrl type within shouldSave block.`);
+            responseData.debug.processingSteps.push('Meal save skipped: invalid imageUrl type');
+          }
 
         } catch (saveError) {
           console.error(`❌ [${requestId}] Error during meal save:`, saveError);
@@ -706,11 +738,14 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
         if (!userId) {
           console.log(`ℹ️ [${requestId}] No userId provided, skipping meal save`);
           responseData.debug.processingSteps.push('No userId provided, skipping meal save');
-        } else if (!imageUrl) {
-          console.log(`ℹ️ [${requestId}] No imageUrl available, skipping meal save`);
+        } else if (!imageUrl || typeof imageUrl !== 'string') {
+          console.log(`ℹ️ [${requestId}] No valid imageUrl available, skipping meal save`);
         } else if (!responseData.analysis) {
-          // This case should ideally be caught by the fallback check earlier
           console.log(`ℹ️ [${requestId}] No valid analysis object, skipping meal save`);
+        } else if (isTrulyFallback || responseData.analysis.fallback === true) {
+          // Already logged above or handled as soft fallback
+        } else {
+           console.log(`ℹ️ [${requestId}] Unknown reason, skipping meal save`);
         }
       }
       // --- End Save Meal Logic ---
