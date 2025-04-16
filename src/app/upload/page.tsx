@@ -369,34 +369,58 @@ export default function UploadPage() {
           toast.dismiss(analyzeToast);
           
           // Structured logging for debugging
-          console.warn("📊 CRITICAL: Fallback analysis detected - BLOCKING ALL SAVE ATTEMPTS", {
+          console.warn("📊 FALLBACK DETECTED:", {
             message: response.data.message,
             success: response.data.success,
             fallback: response.data.fallback,
-            mealSaved: false, // Explicitly marked as not saved
+            mealSaved: response.data.mealSaved || false,
+            error: response.data.error || 'No specific error message',
             missingFields: response.data.payload?.missingFields || ['unknown'],
-            requestId: response.data.payload?.requestId || 'unknown'
+            requestId: response.data.payload?.requestId || 'unknown',
+            trigger: response.data.payload?.trigger || 'unknown'
           });
           
-          // Show prominent error toast to user
-          toast.error("❌ AI could not analyze this image. Try again with better lighting or clearer food items.", 
-            { duration: 7000, position: 'top-center' });
+          // Show prominent error toast to user with more detailed information
+          toast.error(
+            response.data.message || "AI could not analyze this image. Try again with better lighting or clearer food items.", 
+            { duration: 7000, position: 'top-center' }
+          );
           
           // Store fallback data for display on meal-analysis page
-          const fallbackResult = response.data;
+          const fallbackResult = {
+            ...response.data,
+            fallback: true,
+            failureReason: response.data.message || response.data.error || "Unable to analyze image properly",
+            timestamp: new Date().toISOString()
+          };
+          
           sessionStorage.setItem('fallbackResult', JSON.stringify(fallbackResult));
           
-          // Show helpful message to the user with more details
-          const fallbackMessage = response.data.message || 
-            "We couldn't clearly identify your meal. Try a photo with better lighting and clearer food separation.";
+          // Show helpful message to the user with specific details if available
+          let fallbackMessage = "We couldn't clearly identify your meal.";
+          
+          if (response.data.payload?.missingFields?.length > 0) {
+            fallbackMessage = `We couldn't properly analyze your meal: missing information (${
+              response.data.payload.missingFields.slice(0, 2).join(', ')
+            }${response.data.payload.missingFields.length > 2 ? '...' : ''}).`;
+          } else if (response.data.error) {
+            fallbackMessage = response.data.error;
+          }
+          
+          // Add helpful tips
+          fallbackMessage += " Try a photo with better lighting and clearer food separation.";
           
           toast.error(fallbackMessage, { duration: 5000 });
           setError(fallbackMessage);
           setIsAnalyzing(false);
           setAnalysisStage('fallback');
           
-          // Immediately redirect to meal-analysis page where the ErrorCard will be displayed
-          router.push('/meal-analysis');
+          // Small delay before redirecting to meal-analysis page
+          setTimeout(() => {
+            // Redirect to meal-analysis page where the ErrorCard will be displayed
+            router.push('/meal-analysis');
+          }, 500);
+          
           return; // do not proceed to any save attempt
         }
         

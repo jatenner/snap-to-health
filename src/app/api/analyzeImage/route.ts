@@ -356,8 +356,8 @@ Focus specifically on:
 2. The main nutritional components (protein, carbs, fat, calories)
 3. Health impact relative to the user's goals: ${healthGoalString}
 
-For unclear or low-quality images, make your best educated guess based on visible elements.
-Always return a complete analysis with all required fields.`;
+IMPORTANT: You must strictly follow the specified JSON format with ALL required fields, even if you're uncertain.
+For unclear or low-quality images, make your best educated guess based on visible elements.`;
 
       const fallbackSystemPrompt = attempt === 1 ? primarySystemPrompt 
         : `You are a nutrition expert analyzing a food image. This may be a low-quality or difficult image.
@@ -367,6 +367,7 @@ Even with limited visual information, please:
 1. Identify ANY possible food items based on shapes, colors, and context
 2. Provide reasonable nutritional estimates even if uncertain
 3. Never refuse to analyze - always provide your best guess with appropriate confidence levels
+4. STRICT REQUIREMENT: Return ONLY valid JSON with ALL required fields - description and nutrients must be present
 
 The user's health goals are: ${healthGoalString}`;
 
@@ -386,6 +387,9 @@ The user's health goals are: ${healthGoalString}`;
     "carbs": "estimated carbs in grams (numeric value or range)",
     "fat": "estimated fat in grams (numeric value or range)"
   },
+  "feedback": ["suggestion about this meal", "another suggestion"],
+  "suggestions": ["improvement idea", "another improvement idea"],
+  "goalScore": 7,
   "healthImpact": "How this meal impacts the user's stated health goals"
 }`;
       
@@ -394,15 +398,18 @@ The user's health goals are: ${healthGoalString}`;
 Return ONLY valid JSON that can be parsed with JSON.parse(). Use this exact format:
 ${jsonFormat}
 
-IMPORTANT GUIDELINES:
-1. ALL fields in the JSON structure are required except healthImpact
-2. The "description" must be a clear and concise description of all visible food items
-3. The "nutrients" object MUST include calories, protein, carbs, and fat with numeric values when possible
+STRICT REQUIREMENTS:
+1. ALL fields in the JSON structure are required - missing ANY field will cause critical system failure
+2. The "description" must be a clear text description of all visible food items
+3. The "nutrients" object MUST include calories, protein, carbs, and fat - all are required
 4. Values can include ranges (e.g., "300-350") if exact estimation is difficult
-5. For healthImpact, provide specific insights related to the user's goals: ${healthGoalString}
-6. DO NOT include any explanatory text outside the JSON structure
-7. Your entire response must be valid JSON only
-8. If the image is unclear, provide your best estimates and note uncertainty in the description`;
+5. Feedback and suggestions arrays must be present (at least one item in each)
+6. goalScore must be a number between 1-10
+7. DO NOT include any explanatory text outside the JSON structure
+8. Your entire response must be valid JSON only
+
+If the image is unclear, provide your best estimates for ALL fields - do not omit any required fields.
+This is CRITICAL: The system CANNOT handle missing fields.`;
 
       const requestPayload = {
         model: "gpt-4-vision-preview",
@@ -421,7 +428,7 @@ IMPORTANT GUIDELINES:
             ]
           }
         ],
-        max_tokens: 800,
+        max_tokens: 1000,
         temperature: attempt === 1 ? 0.3 : 0.5,  // Higher temperature on retry for more creativity
         response_format: { type: "json_object" }  // Force JSON response
       };
@@ -478,7 +485,7 @@ IMPORTANT GUIDELINES:
           
           // On first attempt, retry
           if (attempt === 1) {
-            console.log(`[${requestId}] JSON parsing failed on first attempt, retrying...`);
+            console.log(`[${requestId}] JSON parsing failed on first attempt, retrying with more explicit instructions...`);
             lastError = new Error(`Failed to parse JSON response (attempt ${attempt}): ${parseError instanceof Error ? parseError.message : 'Unknown parsing error'}`);
             attempt++;
             continue;
@@ -494,11 +501,30 @@ IMPORTANT GUIDELINES:
         }
         
         // Validate required fields exist
-        if (!parsedResult.description || !parsedResult.nutrients) {
+        if (!parsedResult.description || 
+            !parsedResult.nutrients || 
+            !parsedResult.nutrients.calories || 
+            !parsedResult.nutrients.protein || 
+            !parsedResult.nutrients.carbs || 
+            !parsedResult.nutrients.fat) {
           console.error(`[${requestId}] Missing required fields in parsed result:`, parsedResult);
           
+          // Build detailed debug info
+          const missingFields = [];
+          if (!parsedResult.description) missingFields.push('description');
+          if (!parsedResult.nutrients) {
+            missingFields.push('nutrients');
+          } else {
+            if (!parsedResult.nutrients.calories) missingFields.push('nutrients.calories');
+            if (!parsedResult.nutrients.protein) missingFields.push('nutrients.protein');
+            if (!parsedResult.nutrients.carbs) missingFields.push('nutrients.carbs');
+            if (!parsedResult.nutrients.fat) missingFields.push('nutrients.fat');
+          }
+          
+          console.error(`[${requestId}] Missing required fields: ${missingFields.join(', ')}`);
+          
           if (attempt === 1) {
-            lastError = new Error(`Missing required fields in response (attempt ${attempt})`);
+            lastError = new Error(`Missing required fields in response (attempt ${attempt}): ${missingFields.join(', ')}`);
             attempt++;
             continue;
           }
@@ -550,6 +576,9 @@ IMPORTANT GUIDELINES:
         carbs: "Unknown",
         fat: "Unknown"
       },
+      feedback: ["We couldn't properly analyze this meal. Please try again with a clearer photo."],
+      suggestions: ["Take a photo with better lighting", "Make sure all food items are visible"],
+      goalScore: 5,
       healthImpact: "Could not determine health impact due to analysis failure",
       fallback: true,
       error: lastError?.message || "Unknown error during analysis"
@@ -561,11 +590,14 @@ IMPORTANT GUIDELINES:
 // Helper function to attempt manual JSON extraction when parsing fails
 function attemptManualJsonExtraction(content: string, requestId: string): any | null {
   try {
+    // Log the content we're trying to extract from
+    console.log(`[${requestId}] Attempting JSON extraction from:`, content.substring(0, 200) + "...");
+    
     // Look for content that appears to be JSON
     const jsonMatch = content.match(/\{[\s\S]*\}/);
     if (jsonMatch) {
       const extractedJson = jsonMatch[0];
-      console.log(`[${requestId}] Extracted JSON-like content:`, extractedJson);
+      console.log(`[${requestId}] Extracted JSON-like content:`, extractedJson.substring(0, 200) + "...");
       return JSON.parse(extractedJson);
     }
     
@@ -593,6 +625,21 @@ function ensureRequiredFields(result: any): any {
   if (!nutrients.protein) nutrients.protein = "Unknown";
   if (!nutrients.carbs) nutrients.carbs = "Unknown";
   if (!nutrients.fat) nutrients.fat = "Unknown";
+  
+  if (!result.feedback || !Array.isArray(result.feedback) || result.feedback.length === 0) {
+    result.feedback = ["We couldn't properly analyze this meal. Please try again with a clearer photo."];
+  }
+  
+  if (!result.suggestions || !Array.isArray(result.suggestions) || result.suggestions.length === 0) {
+    result.suggestions = ["Take a photo with better lighting", "Make sure all food items are visible"];
+  }
+  
+  if (typeof result.goalScore !== 'number') {
+    result.goalScore = 5;
+  }
+  
+  // Mark as fallback when we had to add fields
+  result.fallback = true;
   
   return result;
 }
@@ -908,37 +955,56 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       const analysis = analysisResult.result;
 
       // CRITICAL GUARD: Log raw GPT analysis and block invalid results
-      console.log("🔍 RAW GPT RESULT:", JSON.stringify(analysis, null, 2));
+      console.log(`🔍 [${requestId}] RAW GPT RESULT:`, JSON.stringify(analysis, null, 2));
       
       // Add raw GPT response to debug information if available
       if (analysisResult.rawResponse) {
         responseData.debug.rawGptResponse = analysisResult.rawResponse;
       }
       
-      const isInvalidAnalysis =
-        !analysis?.description || 
-        !analysis?.nutrients || 
+      // Enhanced validation with more precise checks
+      const isInvalidAnalysis = !analysis || 
+        typeof analysis !== 'object' ||
+        !analysis.description || 
+        typeof analysis.description !== 'string' ||
+        !analysis.nutrients || 
         typeof analysis.nutrients !== 'object' ||
         !(
           'calories' in analysis.nutrients && 
           'protein' in analysis.nutrients && 
           'carbs' in analysis.nutrients && 
           'fat' in analysis.nutrients
+        ) ||
+        (
+          Array.isArray(analysis.feedback) && analysis.feedback.length === 0
+        ) ||
+        (
+          Array.isArray(analysis.suggestions) && analysis.suggestions.length === 0
         );
 
-      if (isInvalidAnalysis) {
-        console.warn("🔥 Skipping save — invalid GPT result", analysis);
+      // Check if GPT returned a fallback result (marked by the GPT4V function)
+      const isGptFallback = analysis?.fallback === true;
+      
+      if (isInvalidAnalysis || isGptFallback) {
+        // Enhanced logging for debugging
+        console.warn(`🔥 [${requestId}] INVALID OR FALLBACK GPT RESULT DETECTED`);
         
         // Log what's missing for debugging
         const missingFields = [];
-        if (!analysis?.description) missingFields.push('description');
-        if (!analysis?.nutrients || typeof analysis.nutrients !== 'object') {
-          missingFields.push('nutrients object');
-        } else {
-          if (!('calories' in analysis.nutrients)) missingFields.push('nutrients.calories');
-          if (!('protein' in analysis.nutrients)) missingFields.push('nutrients.protein');
-          if (!('carbs' in analysis.nutrients)) missingFields.push('nutrients.carbs');
-          if (!('fat' in analysis.nutrients)) missingFields.push('nutrients.fat');
+        if (!analysis) missingFields.push('entire analysis object');
+        else {
+          if (!analysis.description) missingFields.push('description');
+          if (typeof analysis.description !== 'string') missingFields.push('description (not a string)');
+          if (!analysis.nutrients || typeof analysis.nutrients !== 'object') {
+            missingFields.push('nutrients object');
+          } else {
+            if (!('calories' in analysis.nutrients)) missingFields.push('nutrients.calories');
+            if (!('protein' in analysis.nutrients)) missingFields.push('nutrients.protein');
+            if (!('carbs' in analysis.nutrients)) missingFields.push('nutrients.carbs');
+            if (!('fat' in analysis.nutrients)) missingFields.push('nutrients.fat');
+          }
+          if (Array.isArray(analysis.feedback) && analysis.feedback.length === 0) missingFields.push('feedback (empty array)');
+          if (Array.isArray(analysis.suggestions) && analysis.suggestions.length === 0) missingFields.push('suggestions (empty array)');
         }
         
         console.error(`❌ [${requestId}] FATAL: HARD EXIT - BLOCKING ALL FIRESTORE OPERATIONS - Missing fields:`, missingFields);
@@ -946,33 +1012,45 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
         console.error(`📛 [${requestId}] DEBUG - Response Data Dump:`, JSON.stringify(responseData, null, 2).substring(0, 500) + '...');
         
         // Try to reveal if there's any trace of null/undefined issues
-        console.error(`🔍 [${requestId}] DEBUG - Type Checks: isInvalidAnalysis=${isInvalidAnalysis}, 
+        console.error(`🔍 [${requestId}] DEBUG - Type Checks: 
+          isInvalidAnalysis=${isInvalidAnalysis}, 
+          isGptFallback=${isGptFallback},
           analysis type=${typeof analysis}, 
           description exists=${Boolean(analysis?.description)}, 
+          description type=${typeof analysis?.description},
           nutrients is object=${typeof analysis?.nutrients === 'object'},
           has calories=${Boolean(analysis?.nutrients?.calories)},
           has protein=${Boolean(analysis?.nutrients?.protein)},
           has carbs=${Boolean(analysis?.nutrients?.carbs)},
-          has fat=${Boolean(analysis?.nutrients?.fat)}`);
+          has fat=${Boolean(analysis?.nutrients?.fat)},
+          feedback.length=${analysis?.feedback?.length},
+          suggestions.length=${analysis?.suggestions?.length}`);
 
         // CRITICAL: Return from the main POST handler immediately
         // This prevents ANY further execution in this route
         // All code after this point will NOT run for invalid analysis
         
         // Add indication that we're about to return
-        console.error("✅ EXITING EARLY - Next line will be return statement in fallback guard");
+        console.error(`✅ [${requestId}] EXITING EARLY - Next line will be return statement in fallback guard`);
+        
+        // Log an explicit message that we're ENFORCING the fallback
+        console.error(`🔒 [${requestId}] ENFORCING FALLBACK MODE - All database operations blocked`);
         
         const fallbackResponse = NextResponse.json({
           success: false,
           fallback: true,
-          message: "GPT fallback — missing description or nutrients",
+          message: "GPT analysis failed — missing required fields or bad format",
           analysis: createEmptyFallbackAnalysis(),
           payload: {
             originalAnalysis: analysis,
             missingFields,
-            requestId
+            requestId,
+            trigger: isGptFallback ? 'GPT marked as fallback' : 'Schema validation failed'
           },
-          mealSaved: false
+          mealSaved: false,  // Explicitly mark as not saved for frontend detection
+          error: missingFields.length > 0 
+            ? `Invalid analysis format: missing ${missingFields.slice(0, 3).join(', ')}${missingFields.length > 3 ? '...' : ''}`
+            : "Invalid analysis format"
         });
         
         // Ensure all pending operations are complete before returning
@@ -980,14 +1058,15 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
         console.timeEnd(`⏱️ [${requestId}] Total API execution time`);
         
         // Log one more time right before return
-        console.error("🚪 LAST LOG BEFORE RETURN - If you see anything after this log with the same requestId, the guard failed!");
+        console.error(`🚪 [${requestId}] LAST LOG BEFORE RETURN - If you see anything after this log with the same requestId, the guard failed!`);
         
         return fallbackResponse;
       }
 
-      console.log("✅ Firestore logic executing after valid analysis");
-      console.log("🧠 STEP: Passed GPT validation check - Preparing for Firestore save");
-      console.log("🧠 GPT Analysis Snapshot:", JSON.stringify(analysis, null, 2).substring(0, 300) + '...');
+      // Log successful validation
+      console.log(`✅ [${requestId}] Firestore logic executing after valid analysis`);
+      console.log(`🧠 [${requestId}] STEP: Passed GPT validation check - Preparing for Firestore save`);
+      console.log(`🧠 GPT Analysis Snapshot:`, JSON.stringify(analysis, null, 2).substring(0, 300) + '...');
       
       // If we get here, we have a valid analysis
       console.log(`✅ [${requestId}] Valid analysis detected – proceeding to save`);

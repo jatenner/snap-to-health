@@ -37,75 +37,57 @@ export async function saveMealToFirestore(params: {
     };
   }
   
-  // CRITICAL SAFETY CHECK: Block any invalid analysis at the service layer
-  if (
-    !analysis?.description ||
-    !Array.isArray(analysis.nutrients) ||
-    analysis.nutrients.length === 0
-  ) {
-    console.error(`❌ [${requestId}] BLOCKING SAVE — Missing GPT fields in server-meal-saver`);
-    console.log("🧠 STEP: Invalid analysis caught in server-meal-saver critical check");
-    
-    // Log detailed information about what's missing
-    const missingParts = [];
-    if (!analysis?.description) missingParts.push('description');
-    if (!Array.isArray(analysis?.nutrients)) missingParts.push('nutrients array');
-    else if (analysis.nutrients.length === 0) missingParts.push('non-empty nutrients');
-    
-    console.error(`❌ [${requestId}] DEBUG - Missing fields in server-meal-saver:`, missingParts);
-    console.error(`❌ [${requestId}] DEBUG - Analysis dump:`, JSON.stringify(analysis, null, 2).substring(0, 300) + '...');
-    
+  // FIRST CRITICAL CHECK: All data should have been validated by the route handler
+  // This is a redundant safety check for protection against implementation errors
+  console.log(`[${requestId}] Starting meal save process with final validation...`);
+  
+  // Perform top-level schema validation
+  if (!analysis || typeof analysis !== 'object') {
+    console.error(`❌ [${requestId}] CRITICAL ERROR: Invalid analysis object - BLOCKING SAVE`);
     return { 
       success: false, 
-      message: "Invalid analysis – save blocked",
-      error: `Missing required fields: ${missingParts.join(', ')}`
+      error: "Invalid analysis format: not a valid object"
     };
   }
   
-  console.log(`🧠 [${requestId}] STEP: First critical check passed in server-meal-saver`);
-  
-  // SAFETY GUARD 1: Validate analysis is a proper object
-  if (!analysis || typeof analysis !== 'object') {
-    console.error(`[${requestId}] ❌ Critical: Analysis is not a valid object`);
-    return {
-      success: false,
-      error: "Invalid analysis format: not an object",
-      message: "Invalid analysis format: not an object"
-    };
-  }
-  
-  // SAFETY GUARD 2: Check for explicit fallback flag from upstream code
+  // CRITICAL FALLBACK CHECK: Immediately block save if marked as fallback
   if (analysis.fallback === true) {
-    console.error(`[${requestId}] ❌ Critical: Attempted to save fallback analysis data`);
-    return {
-      success: false,
-      error: "Cannot save fallback analysis results",
-      message: "Cannot save fallback analysis results"
+    console.error(`❌ [${requestId}] CRITICAL ERROR: Attempted to save FALLBACK data - BLOCKING SAVE`);
+    return { 
+      success: false, 
+      error: "Cannot save fallback analysis data",
+      message: "Database save blocked: analysis marked as fallback"
     };
   }
   
-  // SAFETY GUARD 3: Use isValidAnalysis utility
+  // REQUIRED FIELD CHECK: Core fields must be present
+  const missingRequiredFields = [];
+  if (!analysis.description) missingRequiredFields.push('description');
+  if (!Array.isArray(analysis.nutrients)) missingRequiredFields.push('nutrients array');
+  
+  if (missingRequiredFields.length > 0) {
+    console.error(`❌ [${requestId}] BLOCKING SAVE — Missing critical fields in server-meal-saver: ${missingRequiredFields.join(', ')}`);
+    return { 
+      success: false, 
+      error: `Invalid analysis format: missing ${missingRequiredFields.join(', ')}`,
+      message: "Database save blocked: required fields missing"
+    };
+  }
+  
+  // Use validator utility as a final check
   if (!isValidAnalysis(analysis)) {
-    console.warn(`[${requestId}] ❌ Invalid analysis data received for save:`, JSON.stringify(analysis).substring(0, 200) + '...');
-    return {
-      success: false,
-      error: "Invalid analysis format: missing description or nutrients",
-      message: "Invalid analysis format: missing description or nutrients"
+    console.error(`❌ [${requestId}] BLOCKING SAVE — Analysis failed validation in isValidAnalysis`);
+    return { 
+      success: false, 
+      error: "Analysis failed validation checks",
+      message: "Database save blocked: analysis failed validation"
     };
   }
   
-  // SAFETY GUARD 4: Redundant manual check for critical fields
-  if (!analysis.description || !Array.isArray(analysis.nutrients) || analysis.nutrients.length === 0) {
-    console.error(`[${requestId}] 🚨 CRITICAL: Invalid analysis bypassed top-level guard:`, JSON.stringify(analysis).substring(0, 200) + '...');
-    return {
-      success: false,
-      error: "Invalid analysis format: critical data missing",
-      message: "Invalid analysis format: critical data missing"
-    };
-  }
+  console.log(`✅ [${requestId}] Analysis passed all validation checks - proceeding with save`);
   
   try {
-    console.log(`[${requestId}] Attempting to save meal to Firestore for user ${userId}`);
+    console.log(`[${requestId}] Saving meal to Firestore for user ${userId}`);
     
     // Extract meal name from request or use analysis description as fallback
     let mealName = 'Unnamed Meal';
@@ -135,7 +117,7 @@ export async function saveMealToFirestore(params: {
     });
     
     if (saveResult.success) {
-      console.log(`[${requestId}] Meal saved successfully: ${saveResult.savedMealId}`);
+      console.log(`✅ [${requestId}] Meal saved successfully: ${saveResult.savedMealId}`);
       return {
         success: true,
         mealId: saveResult.savedMealId
@@ -145,7 +127,7 @@ export async function saveMealToFirestore(params: {
         (typeof saveResult.error === 'string' ? saveResult.error : saveResult.error.message) : 
         'Unknown error saving meal';
         
-      console.error(`[${requestId}] Meal save failed: ${errorMessage}`);
+      console.error(`❌ [${requestId}] Meal save failed: ${errorMessage}`);
       return {
         success: false,
         error: errorMessage
@@ -153,7 +135,7 @@ export async function saveMealToFirestore(params: {
     }
   } catch (error: any) {
     const errorMessage = error?.message || 'Unknown error';
-    console.error(`[${requestId}] Error saving meal: ${errorMessage}`);
+    console.error(`❌ [${requestId}] Error saving meal: ${errorMessage}`);
     return {
       success: false,
       error: `Failed to save meal: ${errorMessage}`
