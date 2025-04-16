@@ -21,7 +21,7 @@ export function corsMiddleware(request) {
   const url = new URL(request.url);
   
   // Check if this is a request to Firebase Storage
-  if (url.pathname.includes('/api/proxy/storage')) {
+  if (url.pathname && url.pathname.includes('/api/proxy/storage')) {
     // Extract the actual Firebase Storage URL from the request
     const targetUrl = url.searchParams.get('url');
     

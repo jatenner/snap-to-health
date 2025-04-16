@@ -9,7 +9,7 @@ export function corsMiddleware(request) {
   // Check if this is a request to the storage proxy
   const url = new URL(request.url);
   
-  if (url.pathname.includes('/api/proxy/storage')) {
+  if (url.pathname && url.pathname.includes('/api/proxy/storage')) {
     console.log('CORS middleware: Detected storage proxy request');
     
     // Extract the actual Firebase Storage URL from the request
@@ -29,7 +29,7 @@ export function corsMiddleware(request) {
   }
   
   // For OPTIONS preflight requests to the API, add CORS headers
-  if (request.method === 'OPTIONS' && url.pathname.startsWith('/api/')) {
+  if (request.method === 'OPTIONS' && url.pathname && url.pathname.startsWith('/api/')) {
     console.log(`CORS middleware: Handling preflight request to ${url.pathname}`);
     
     // Handle preflight requests with proper CORS headers
