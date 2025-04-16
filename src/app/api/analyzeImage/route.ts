@@ -317,44 +317,300 @@ async function analyzeImageWithGPT4V(
   dietaryPreferences: string[] = [],
   requestId: string
 ): Promise<any> {
-  // NOTE: This is a MOCK function. The actual GPT-4V call logic needs the real prompt.
-  // This simulation reflects the *expected output* based on the new prompt.
-  console.log(`[${requestId}] Analyzing image with GPT-4V (Mock - simulating latest prompt)...`);
-
-  // --- Simulate Analysis based on latest prompt guidelines ---
-  const simulateFailure = false; // Toggle this to test the defensive guard
-
-  if (simulateFailure) {
-     console.warn(`[${requestId}] Simulating analysis failure for testing.`);
-     // Simulate an incomplete response (missing required fields) that the backend guard should catch
-     return {
-        result: {
-          description: "", // Intentionally empty to trigger guard
-          nutrients: [],   // Intentionally empty to trigger guard
-          insight: "Image quality too low.",
-          confidence: 0.1,
-          failureReason: "Image is blurry and lacks detail.", 
-        }
-      };
+  console.log(`[${requestId}] Analyzing image with GPT-4V...`);
+  
+  // Get OpenAI API key from environment
+  const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
+  
+  if (!OPENAI_API_KEY) {
+    console.error(`[${requestId}] OpenAI API key is not configured`);
+    throw new Error('OpenAI API key is not configured');
   }
 
-  // Simulate a successful, best-effort analysis adhering to the new prompt structure
-  console.log(`[${requestId}] Mock analysis successful, returning simulated data.`);
-  const simulatedSuccessfulResult = {
-    description: "Visible food items: Grilled chicken breast, steamed broccoli, quinoa", // Updated example
-    nutrients: [
-      { name: "Protein", value: "40g" }, // Updated example values
-      { name: "Carbs", value: "35g" },
-      { name: "Fat", value: "15g" }
-    ],
-    insight: "High protein meal, good for muscle maintenance and satiety.", // Updated example
-    confidence: 0.88, // Example confidence
-    failureReason: null // Should be null for successful analysis
-  };
+  // Set up for retry logic
+  let attempt = 1;
+  const MAX_ATTEMPTS = 2;
+  let lastError: Error | null = null;
+  let rawGptResponse: any = null;
   
+  // Parse the health goals into a string
+  const healthGoalString = healthGoals && healthGoals.length > 0 
+    ? healthGoals.join(', ') 
+    : 'general nutrition';
+
+  while (attempt <= MAX_ATTEMPTS) {
+    try {
+      console.log(`[${requestId}] GPT-4V attempt ${attempt} starting...`);
+      
+      // Create an AbortController for timeout management
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => {
+        controller.abort();
+        console.error(`[${requestId}] OpenAI request aborted due to timeout (30s)`);
+      }, 30000); // 30 second timeout to stay within Vercel's limits
+
+      // Configure system prompt based on attempt
+      const primarySystemPrompt = `You are a nutrition-focused food analysis expert. Analyze this food image and provide detailed information.
+Focus specifically on:
+1. What foods are visible in the image
+2. The main nutritional components (protein, carbs, fat, calories)
+3. Health impact relative to the user's goals: ${healthGoalString}
+
+For unclear or low-quality images, make your best educated guess based on visible elements.
+Always return a complete analysis with all required fields.`;
+
+      const fallbackSystemPrompt = attempt === 1 ? primarySystemPrompt 
+        : `You are a nutrition expert analyzing a food image. This may be a low-quality or difficult image.
+Make your best attempt to identify the foods and provide nutritional estimates.
+
+Even with limited visual information, please:
+1. Identify ANY possible food items based on shapes, colors, and context
+2. Provide reasonable nutritional estimates even if uncertain
+3. Never refuse to analyze - always provide your best guess with appropriate confidence levels
+
+The user's health goals are: ${healthGoalString}`;
+
+      console.log(`[${requestId}] Using ${attempt === 1 ? 'primary' : 'fallback'} prompt for health goals: ${healthGoalString}`);
+      
+      // Configure request
+      const headers = {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${OPENAI_API_KEY}`
+      };
+      
+      const jsonFormat = `{
+  "description": "A clear description of the meal and visible food items",
+  "nutrients": {
+    "calories": "estimated calories (numeric value or range)",
+    "protein": "estimated protein in grams (numeric value or range)",
+    "carbs": "estimated carbs in grams (numeric value or range)",
+    "fat": "estimated fat in grams (numeric value or range)"
+  },
+  "healthImpact": "How this meal impacts the user's stated health goals"
+}`;
+      
+      const promptText = `${fallbackSystemPrompt}
+
+Return ONLY valid JSON that can be parsed with JSON.parse(). Use this exact format:
+${jsonFormat}
+
+IMPORTANT GUIDELINES:
+1. ALL fields in the JSON structure are required except healthImpact
+2. The "description" must be a clear and concise description of all visible food items
+3. The "nutrients" object MUST include calories, protein, carbs, and fat with numeric values when possible
+4. Values can include ranges (e.g., "300-350") if exact estimation is difficult
+5. For healthImpact, provide specific insights related to the user's goals: ${healthGoalString}
+6. DO NOT include any explanatory text outside the JSON structure
+7. Your entire response must be valid JSON only
+8. If the image is unclear, provide your best estimates and note uncertainty in the description`;
+
+      const requestPayload = {
+        model: "gpt-4-vision-preview",
+        messages: [
+          {
+            role: "user",
+            content: [
+              { type: "text", text: promptText },
+              {
+                type: "image_url",
+                image_url: {
+                  url: `data:image/jpeg;base64,${base64Image}`,
+                  detail: "high"
+                }
+              }
+            ]
+          }
+        ],
+        max_tokens: 800,
+        temperature: attempt === 1 ? 0.3 : 0.5,  // Higher temperature on retry for more creativity
+        response_format: { type: "json_object" }  // Force JSON response
+      };
+      
+      const startTime = Date.now();
+      
+      try {
+        // Make the API request
+        const response = await fetch('https://api.openai.com/v1/chat/completions', {
+          method: 'POST',
+          headers,
+          body: JSON.stringify(requestPayload),
+          signal: controller.signal
+        });
+        
+        // Clear the timeout since the request completed
+        clearTimeout(timeoutId);
+        
+        // Check for API errors
+        if (!response.ok) {
+          const errorText = await response.text();
+          console.error(`[${requestId}] OpenAI API Error Status:`, response.status);
+          console.error(`[${requestId}] OpenAI API Error Response:`, errorText);
+          
+          lastError = new Error(`OpenAI API Error (attempt ${attempt}): ${response.status} ${response.statusText}`);
+          attempt++;
+          continue;
+        }
+        
+        // Parse the response
+        const responseData = await response.json();
+        console.log(`[${requestId}] GPT-4V Analysis Complete in ${(Date.now() - startTime) / 1000}s`);
+        
+        // Validate response structure
+        if (!responseData.choices?.[0]?.message?.content) {
+          console.error(`[${requestId}] Invalid OpenAI response structure:`, JSON.stringify(responseData));
+          lastError = new Error(`Invalid response structure from OpenAI API (attempt ${attempt})`);
+          attempt++;
+          continue;
+        }
+        
+        // Attempt to parse JSON content
+        let parsedResult;
+        try {
+          const content = responseData.choices[0].message.content;
+          
+          // Log raw GPT response for debugging
+          console.log(`[${requestId}] RAW GPT RESPONSE:`, content);
+          rawGptResponse = content;
+          
+          parsedResult = JSON.parse(content);
+        } catch (parseError: unknown) {
+          console.error(`[${requestId}] JSON parse error:`, parseError);
+          
+          // On first attempt, retry
+          if (attempt === 1) {
+            console.log(`[${requestId}] JSON parsing failed on first attempt, retrying...`);
+            lastError = new Error(`Failed to parse JSON response (attempt ${attempt}): ${parseError instanceof Error ? parseError.message : 'Unknown parsing error'}`);
+            attempt++;
+            continue;
+          }
+          
+          // On second attempt, attempt manual parsing/extraction
+          console.log(`[${requestId}] Attempting manual JSON extraction on final attempt...`);
+          const content = responseData.choices[0].message.content;
+          parsedResult = attemptManualJsonExtraction(content, requestId);
+          if (!parsedResult) {
+            throw new Error(`Failed to parse GPT-4V response as JSON after ${MAX_ATTEMPTS} attempts`);
+          }
+        }
+        
+        // Validate required fields exist
+        if (!parsedResult.description || !parsedResult.nutrients) {
+          console.error(`[${requestId}] Missing required fields in parsed result:`, parsedResult);
+          
+          if (attempt === 1) {
+            lastError = new Error(`Missing required fields in response (attempt ${attempt})`);
+            attempt++;
+            continue;
+          }
+          
+          // Add missing fields with fallback values on second attempt
+          parsedResult = ensureRequiredFields(parsedResult);
+        }
+        
+        // Convert nutrient values to consistent format if needed
+        parsedResult = standardizeNutrientValues(parsedResult);
+        
+        // Return the validated and parsed result
+        return {
+          result: parsedResult,
+          rawResponse: rawGptResponse
+        };
+        
+      } catch (fetchError: unknown) {
+        // Clear timeout to prevent memory leaks
+        clearTimeout(timeoutId);
+        
+        console.error(`[${requestId}] Error during OpenAI API request (attempt ${attempt}):`, fetchError);
+        
+        if (fetchError instanceof Error && fetchError.name === 'AbortError') {
+          lastError = new Error(`Request timed out after 30 seconds (attempt ${attempt})`);
+        } else {
+          lastError = fetchError instanceof Error ? fetchError : new Error('Unknown fetch error');
+        }
+        
+        attempt++;
+      }
+    } catch (overallError: unknown) {
+      console.error(`[${requestId}] General error in GPT-4V analysis:`, overallError);
+      lastError = overallError instanceof Error ? overallError : new Error('Unknown error in GPT-4V analysis');
+      attempt++;
+    }
+  }
+  
+  // If we've exhausted all attempts, create a fallback response
+  console.error(`[${requestId}] All GPT-4V attempts failed, returning fallback response. Last error:`, lastError);
+  
+  // Create a minimal valid response with the required fields
   return {
-    result: simulatedSuccessfulResult
+    result: {
+      description: "Unable to analyze the image properly",
+      nutrients: {
+        calories: "Unknown",
+        protein: "Unknown",
+        carbs: "Unknown",
+        fat: "Unknown"
+      },
+      healthImpact: "Could not determine health impact due to analysis failure",
+      fallback: true,
+      error: lastError?.message || "Unknown error during analysis"
+    },
+    rawResponse: rawGptResponse
   };
+}
+
+// Helper function to attempt manual JSON extraction when parsing fails
+function attemptManualJsonExtraction(content: string, requestId: string): any | null {
+  try {
+    // Look for content that appears to be JSON
+    const jsonMatch = content.match(/\{[\s\S]*\}/);
+    if (jsonMatch) {
+      const extractedJson = jsonMatch[0];
+      console.log(`[${requestId}] Extracted JSON-like content:`, extractedJson);
+      return JSON.parse(extractedJson);
+    }
+    
+    return null;
+  } catch (error: unknown) {
+    console.error(`[${requestId}] Manual JSON extraction failed:`, error);
+    return null;
+  }
+}
+
+// Helper function to ensure all required fields exist
+function ensureRequiredFields(result: any): any {
+  if (!result) result = {};
+  
+  if (!result.description) {
+    result.description = "Food items could not be clearly identified";
+  }
+  
+  if (!result.nutrients) {
+    result.nutrients = {};
+  }
+  
+  const nutrients = result.nutrients;
+  if (!nutrients.calories) nutrients.calories = "Unknown";
+  if (!nutrients.protein) nutrients.protein = "Unknown";
+  if (!nutrients.carbs) nutrients.carbs = "Unknown";
+  if (!nutrients.fat) nutrients.fat = "Unknown";
+  
+  return result;
+}
+
+// Helper function to standardize nutrient values
+function standardizeNutrientValues(result: any): any {
+  if (!result || !result.nutrients) return result;
+  
+  const nutrients = result.nutrients;
+  
+  // Convert any numeric-only values to strings
+  Object.keys(nutrients).forEach(key => {
+    if (typeof nutrients[key] === 'number') {
+      nutrients[key] = nutrients[key].toString();
+    }
+  });
+  
+  return result;
 }
 
 // Mock implementation for backward compatibility during migration
@@ -407,7 +663,8 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       },
       processingSteps: [],
       conversionMethod: null,
-      errorDetails: []
+      errorDetails: [],
+      rawGptResponse: null
     },
     _meta: {
       imageError: null  // Add this to track image-related errors
@@ -653,10 +910,21 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       // CRITICAL GUARD: Log raw GPT analysis and block invalid results
       console.log("🔍 RAW GPT RESULT:", JSON.stringify(analysis, null, 2));
       
+      // Add raw GPT response to debug information if available
+      if (analysisResult.rawResponse) {
+        responseData.debug.rawGptResponse = analysisResult.rawResponse;
+      }
+      
       const isInvalidAnalysis =
-        !analysis?.description ||
-        !Array.isArray(analysis.nutrients) ||
-        analysis.nutrients.length === 0;
+        !analysis?.description || 
+        !analysis?.nutrients || 
+        typeof analysis.nutrients !== 'object' ||
+        !(
+          'calories' in analysis.nutrients && 
+          'protein' in analysis.nutrients && 
+          'carbs' in analysis.nutrients && 
+          'fat' in analysis.nutrients
+        );
 
       if (isInvalidAnalysis) {
         console.warn("🔥 Skipping save — invalid GPT result", analysis);
@@ -664,8 +932,14 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
         // Log what's missing for debugging
         const missingFields = [];
         if (!analysis?.description) missingFields.push('description');
-        if (!Array.isArray(analysis.nutrients)) missingFields.push('nutrients array');
-        else if (analysis.nutrients.length === 0) missingFields.push('non-empty nutrients');
+        if (!analysis?.nutrients || typeof analysis.nutrients !== 'object') {
+          missingFields.push('nutrients object');
+        } else {
+          if (!('calories' in analysis.nutrients)) missingFields.push('nutrients.calories');
+          if (!('protein' in analysis.nutrients)) missingFields.push('nutrients.protein');
+          if (!('carbs' in analysis.nutrients)) missingFields.push('nutrients.carbs');
+          if (!('fat' in analysis.nutrients)) missingFields.push('nutrients.fat');
+        }
         
         console.error(`❌ [${requestId}] FATAL: HARD EXIT - BLOCKING ALL FIRESTORE OPERATIONS - Missing fields:`, missingFields);
         console.error(`❌ [${requestId}] DEBUG - GPT Analysis Dump:`, JSON.stringify(analysis, null, 2).substring(0, 500) + '...');
@@ -675,8 +949,11 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
         console.error(`🔍 [${requestId}] DEBUG - Type Checks: isInvalidAnalysis=${isInvalidAnalysis}, 
           analysis type=${typeof analysis}, 
           description exists=${Boolean(analysis?.description)}, 
-          nutrients is array=${Array.isArray(analysis?.nutrients)},
-          nutrients length=${analysis?.nutrients?.length || 'N/A'}`);
+          nutrients is object=${typeof analysis?.nutrients === 'object'},
+          has calories=${Boolean(analysis?.nutrients?.calories)},
+          has protein=${Boolean(analysis?.nutrients?.protein)},
+          has carbs=${Boolean(analysis?.nutrients?.carbs)},
+          has fat=${Boolean(analysis?.nutrients?.fat)}`);
 
         // CRITICAL: Return from the main POST handler immediately
         // This prevents ANY further execution in this route

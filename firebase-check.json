@@ -1,0 +1,1 @@
+{"success":true,"timestamp":"2025-04-16T16:39:56.995Z","environment":"development","privateKeyCheck":{"base64KeyPresent":true,"base64KeyLength":2272,"decodedKeyValid":true,"hasPemHeader":true,"hasPemFooter":true,"hasNewlines":true,"newlineCount":28},"firebaseConnection":{"adminInitialized":true,"firestoreConnected":true}}
