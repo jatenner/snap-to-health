@@ -2856,7 +2856,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
         
         // Clear errors since we're proceeding with the placeholder
         responseData.errors = [];
-        responseData.debug.errorDetails = responseData.debug.errorDetails.map(item => {
+        responseData.debug.errorDetails = responseData.debug.errorDetails.map((item: { step: string; [key: string]: any }) => {
           if (item.step === 'image_extraction') {
             return { ...item, resolved: 'Used placeholder image instead' };
           }
