@@ -317,39 +317,39 @@ async function analyzeImageWithGPT4V(
   dietaryPreferences: string[] = [],
   requestId: string
 ): Promise<any> {
-  console.log(`[${requestId}] Analyzing image with GPT-4V (Mock - simulating NEW prompt)...`);
+  // NOTE: This is a MOCK function. The actual GPT-4V call logic needs the real prompt.
+  // This simulation reflects the *expected output* based on the new prompt.
+  console.log(`[${requestId}] Analyzing image with GPT-4V (Mock - simulating latest prompt)...`);
 
-  // --- Simulate Analysis based on NEW prompt guidelines ---
+  // --- Simulate Analysis based on latest prompt guidelines ---
   const simulateFailure = false; // Toggle this to test the defensive guard
 
   if (simulateFailure) {
      console.warn(`[${requestId}] Simulating analysis failure for testing.`);
-     // Simulate an incomplete response (missing required fields)
+     // Simulate an incomplete response (missing required fields) that the backend guard should catch
      return {
         result: {
-          description: "", // Intentionally empty 
-          nutrients: [],   // Intentionally empty
-          insight: "Image quality appears too low for analysis.",
+          description: "", // Intentionally empty to trigger guard
+          nutrients: [],   // Intentionally empty to trigger guard
+          insight: "Image quality too low.",
           confidence: 0.1,
-          failureReason: "Image is blurry and dark.",
-          // Note: No fallback: true here; the backend guard handles it
+          failureReason: "Image is blurry and lacks detail.", 
         }
       };
   }
 
-  // Simulate a successful, best-effort analysis for a good image
-  // Conforms to the new requested JSON structure
+  // Simulate a successful, best-effort analysis adhering to the new prompt structure
   console.log(`[${requestId}] Mock analysis successful, returning simulated data.`);
   const simulatedSuccessfulResult = {
-    description: "Grilled chicken breast, brown rice, and side salad",
+    description: "Visible food items: Grilled chicken breast, steamed broccoli, quinoa", // Updated example
     nutrients: [
-      { name: "Protein", value: "35g" }, // Example values
-      { name: "Carbs", value: "40g" },
-      { name: "Fat", value: "18g" }
+      { name: "Protein", value: "40g" }, // Updated example values
+      { name: "Carbs", value: "35g" },
+      { name: "Fat", value: "15g" }
     ],
-    insight: "Good source of lean protein for muscle support.",
-    confidence: 0.9, // Example confidence
-    failureReason: null // Important: Should be null on success
+    insight: "High protein meal, good for muscle maintenance and satiety.", // Updated example
+    confidence: 0.88, // Example confidence
+    failureReason: null // Should be null for successful analysis
   };
   
   return {
