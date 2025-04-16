@@ -10,6 +10,7 @@ import { uploadMealImage, saveMealToFirestore } from '@/lib/mealUtils';
 import { getUserHealthGoal } from '@/utils/userUtils';
 import { toast } from 'react-hot-toast';
 import { validateImage, VALID_IMAGE_TYPES, MAX_FILE_SIZE } from '@/lib/imageProcessing/validateImage';
+import ErrorCard from '@/components/ErrorCard';
 
 interface OptimisticResult {
   description: string;
@@ -364,6 +365,10 @@ export default function UploadPage() {
         if (response.data?.fallback) {
           console.log('Received fallback response:', response.data.reason || 'unknown reason');
           
+          // Store fallback data for display
+          const fallbackResult = response.data;
+          sessionStorage.setItem('fallbackResult', JSON.stringify(fallbackResult));
+          
           // Show helpful message to the user
           const fallbackMessage = response.data.fallbackMessage || response.data.message || 
             "We couldn't clearly identify your meal. Try a photo with better lighting, or describe your meal in the notes section.";
@@ -371,7 +376,10 @@ export default function UploadPage() {
           toast.error(fallbackMessage, { id: analyzeToast, duration: 8000 });
           setError(fallbackMessage);
           setIsAnalyzing(false);
-          setAnalysisStage('error');
+          setAnalysisStage('fallback');
+          
+          // Immediately redirect to meal-analysis page where the ErrorCard will be displayed
+          router.push('/meal-analysis');
           return;
         }
         
@@ -670,7 +678,19 @@ export default function UploadPage() {
 
             {error && (
               <div className="bg-coral/10 border border-coral/30 text-coral rounded-lg p-3 mb-4 sm:mb-6 text-sm">
-                <p>{error}</p>
+                {analysisStage === 'fallback' ? (
+                  <div className="flex flex-col items-center justify-center py-4">
+                    <ErrorCard
+                      title="We couldn't analyze your meal"
+                      message="Try uploading a clearer, well-lit image with the full plate in view."
+                      tip="You can manually log this meal instead."
+                      buttonText="Try Again"
+                      onClick={() => resetImage()}
+                    />
+                  </div>
+                ) : (
+                  <p>{error}</p>
+                )}
               </div>
             )}
 

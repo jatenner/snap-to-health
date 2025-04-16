@@ -651,23 +651,29 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       const analysis = analysisResult.result;
 
       // Add console log for raw response
-      console.log("🔍 GPT RAW:", JSON.stringify(analysis, null, 2));
+      console.log("🔍 RAW GPT ANALYSIS:", JSON.stringify(analysis, null, 2));
 
+      // Log before defensive guard
+      console.log(`⚠️ [${requestId}] Checking if analysis is complete...`);
+      
       // Defensive Guard as provided by user
       if (
         !analysis?.description ||
         !Array.isArray(analysis?.nutrients) ||
         analysis.nutrients.length === 0
       ) {
-        console.warn("⚠️ GPT result incomplete — fallback triggered", analysis);
+        console.warn("🚫 Fallback triggered: GPT returned incomplete result", analysis);
         return createAnalysisResponse({
           ...responseData,
           success: false,
           fallback: true,
-          message: "Fallback: missing description or nutrients",
+          message: "Fallback: GPT result incomplete",
           analysis: analysis || createEmptyFallbackAnalysis() // Use the incomplete analysis or fallback if null
         });
       }
+      
+      // Log after guard passes
+      console.log(`✅ [${requestId}] Analysis is complete and valid, proceeding with response`);
       
       // If analysis passed the guard, proceed with preparing the response
       responseData.success = true; 
