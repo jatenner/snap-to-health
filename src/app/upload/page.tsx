@@ -359,21 +359,22 @@ export default function UploadPage() {
         return;
       }
       
-      // Check if response is successful and contains valid data
+      // Check if response is successful or contains valid data
       if (!response.data || response.data.success === false) {
         // Check if this is a fallback response for unclear images
-        if (response.data?.fallback) {
-          console.log('Received fallback response:', response.data.reason || 'unknown reason');
+        if (response.data?.fallback === true) {
+          console.log('Received fallback response:', response.data.message || 'unknown reason');
           
           // Store fallback data for display
           const fallbackResult = response.data;
           sessionStorage.setItem('fallbackResult', JSON.stringify(fallbackResult));
           
           // Show helpful message to the user
-          const fallbackMessage = response.data.fallbackMessage || response.data.message || 
-            "We couldn't clearly identify your meal. Try a photo with better lighting, or describe your meal in the notes section.";
+          const fallbackMessage = response.data.message || 
+            "We couldn't clearly identify your meal. Try a photo with better lighting and clearer food separation.";
           
-          toast.error(fallbackMessage, { id: analyzeToast, duration: 8000 });
+          // Cancel any existing toast before showing the error message
+          toast.dismiss(analyzeToast);
           setError(fallbackMessage);
           setIsAnalyzing(false);
           setAnalysisStage('fallback');
