@@ -636,7 +636,25 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       
       responseData.debug.processingSteps.push('Analysis completed');
       
-      // Prepare final response
+      // ✅ Check if the analysis result is a fallback
+      if (analysisResult.result && analysisResult.result.fallback === true) {
+        console.log(`[${requestId}] Skipping save: fallback analysis result received.`);
+        
+        // Populate responseData with fallback info but don't try to save
+        responseData.success = false; // Indicate overall operation wasn't fully successful
+        responseData.fallback = true;
+        responseData.message = analysisResult.result.message || "Analysis resulted in fallback";
+        responseData.analysis = analysisResult.result;
+        responseData.imageUrl = imageUrl; // Keep image URL if upload succeeded
+        responseData.requestId = requestId;
+        responseData.debug.timestamps.end = new Date().toISOString();
+        console.timeEnd(`⏱️ [${requestId}] Total API execution time (Fallback)`);
+        
+        // Return the response immediately, skipping the save block
+        return createAnalysisResponse(responseData);
+      }
+      
+      // If not a fallback, proceed with preparing the response and potentially saving
       responseData.success = true;
       responseData.message = 'Analysis completed successfully';
       responseData.analysis = analysisResult.result;
@@ -646,8 +664,51 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       if (analysisResult.reasoning) {
         responseData.debug.reasoning = analysisResult.reasoning;
       }
+
+      // --- Save Meal Logic (Only if not a fallback) --- 
+      if (userId && imageUrl && responseData.analysis) { // fallback check already done above
+        try {
+          const { saveMealToFirestore, updateResponseWithSaveResult } = await import('./server-meal-saver');
+          
+          const saveResult = await saveMealToFirestore({
+            userId,
+            imageUrl,
+            analysis: responseData.analysis,
+            requestId,
+            requestData,
+            jsonData
+          });
+          
+          // Update the response with save results
+          updateResponseWithSaveResult(responseData, saveResult);
+          console.log(`✅ [${requestId}] Meal saving process completed with success: ${saveResult.success}`);
+
+        } catch (saveError) {
+          console.error(`❌ [${requestId}] Error during meal save:`, saveError);
+          responseData.debug.processingSteps.push('Meal save failed due to error');
+          responseData.debug.errorDetails.push({ 
+            step: 'meal_save', 
+            error: saveError instanceof Error ? saveError.message : 'Unknown error',
+            details: saveError 
+          });
+          responseData.mealSaved = false;
+        }
+      } else {
+        // Log why we're skipping meal save if it wasn't due to fallback
+        if (!userId) {
+          console.log(`ℹ️ [${requestId}] No userId provided, skipping meal save`);
+          responseData.debug.processingSteps.push('No userId provided, skipping meal save');
+        } else if (!imageUrl) {
+          console.log(`ℹ️ [${requestId}] No imageUrl available, skipping meal save`);
+        } else if (!responseData.analysis) {
+          // This case should ideally be caught by the fallback check earlier
+          console.log(`ℹ️ [${requestId}] No valid analysis object, skipping meal save`);
+        }
+      }
+      // --- End Save Meal Logic ---
+
     } catch (error) {
-      // Catch errors during analysis or meal saving
+      // Catch errors during analysis (before fallback check)
       const errorMessage = `Analysis error: ${error instanceof Error ? error.message : 'Unknown error'}`;
       responseData.errors.push(errorMessage);
       responseData.message = 'Analysis failed';
