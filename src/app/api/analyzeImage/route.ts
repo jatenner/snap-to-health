@@ -2,7 +2,6 @@ import { NextRequest, NextResponse } from 'next/server';
 import axios from 'axios';
 import crypto from 'crypto';
 import { saveMealToFirestore } from '@/lib/mealUtils';
-import { getServerSession } from 'next-auth/next'; // If using NextAuth, or other auth solution
 
 // Trigger new Vercel deployment - 15 Apr 2025
 // Request concurrency tracking
@@ -2133,37 +2132,67 @@ export async function POST(request: NextRequest) {
     try {
       // Extract save-related parameters from formData
       const saveToAccount = formData.get('saveToAccount') === 'true';
-      const userId = formData.get('userId') as string;
+      const userId = formData.get('userId') as string || '';
       const mealName = formData.get('mealName') as string || '';
       const imageUrl = formData.get('imageUrl') as string || '';
 
       // Use type assertion to work with the response object
-      const responseWithSave = response as any;
+      const responseWithSave = response as Record<string, any>;
       
-      // Default to not saved
+      // Initialize save-related properties
       responseWithSave.saved = false;
+      
+      // Ensure _meta exists to avoid errors
+      if (!responseWithSave._meta) {
+        responseWithSave._meta = { requestId };
+      }
 
-      // Check if we should attempt to save the meal
-      if (saveToAccount && userId) {
-        console.log(`⭐ [${requestId}] Save to account requested for user ${userId}`);
-        
-        // Only save if we have valid analysis and not a complete failure
-        if (responseWithSave.success && !responseWithSave.fallback) {
+      // Only attempt to save if explicitly requested
+      if (!saveToAccount) {
+        console.log(`ℹ️ [${requestId}] Save to account not requested, skipping Firestore save`);
+        return;
+      }
+
+      // Check for required user ID
+      if (!userId) {
+        console.warn(`⚠️ [${requestId}] Save to account requested but no userId provided`);
+        responseWithSave.saveError = 'Authentication required to save meals';
+        return;
+      }
+
+      console.log(`⭐ [${requestId}] Save to account requested for user ${userId}`);
+      
+      // Only save if we have valid analysis and not a complete failure
+      if (!responseWithSave.success || responseWithSave.fallback) {
+        console.warn(`⚠️ [${requestId}] Not saving meal due to analysis issues: success=${responseWithSave.success}, fallback=${responseWithSave.fallback}`);
+        responseWithSave.saveError = 'Cannot save insufficient analysis results';
+        return;
+      }
+
+      // Implement save with a timeout to prevent Vercel function hang
+      const saveTimeout = 5000; // 5 seconds max for saving to Firestore
+      
+      // Create a promise that resolves with either the save operation or a timeout
+      const savePromise = Promise.race([
+        (async () => {
           try {
             // Check if we have a valid imageUrl
             let finalImageUrl = imageUrl;
             
-            // If no imageUrl was provided, use a placeholder
+            // If no imageUrl was provided, use a placeholder with timestamp
             if (!finalImageUrl) {
               console.log(`⚠️ [${requestId}] No image URL provided for save operation`);
-              
-              // If the frontend doesn't provide the URL (which it should),
-              // we'd need to use a placeholder or default image URL
-              finalImageUrl = 'https://storage.googleapis.com/snaphealth-39b14.firebasestorage.app/placeholder-meal.jpg';
-              
-              // In a real implementation, we might upload the base64 image to Storage here
-              // but that would require additional dependencies and complexity
+              finalImageUrl = `https://storage.googleapis.com/snaphealth-39b14.firebasestorage.app/placeholder-meal-${Date.now()}.jpg`;
               responseWithSave._meta.imageUrlWarning = 'Using placeholder image - real image URL was not provided';
+            }
+            
+            // Validate minimum required data before saving
+            if (!finalImageUrl) {
+              throw new Error('Cannot save meal without an image URL');
+            }
+
+            if (!responseWithSave || typeof responseWithSave !== 'object') {
+              throw new Error('Cannot save meal with invalid analysis data');
             }
             
             // Save the meal data to Firestore
@@ -2176,23 +2205,46 @@ export async function POST(request: NextRequest) {
             responseWithSave.imageUrl = finalImageUrl;
             
             console.log(`✅ [${requestId}] Meal saved successfully with ID: ${savedMealId}`);
+            return { success: true, savedMealId };
           } catch (saveError: any) {
             console.error(`❌ [${requestId}] Error saving meal to Firestore:`, saveError);
             responseWithSave.saveError = 'Failed to save meal to your account';
-            // Add error details for debugging
-            responseWithSave._meta.saveErrorDetails = saveError.message || 'Unknown save error';
+            responseWithSave._meta.saveErrorDetails = saveError?.message || 'Unknown save error';
+            return { success: false, error: saveError };
           }
-        } else {
-          console.warn(`⚠️ [${requestId}] Not saving meal due to analysis issues: success=${responseWithSave.success}, fallback=${responseWithSave.fallback}`);
-          responseWithSave.saveError = 'Cannot save insufficient analysis results';
-        }
-      } else if (saveToAccount && !userId) {
-        console.warn(`⚠️ [${requestId}] Save to account requested but no userId provided`);
-        responseWithSave.saveError = 'Authentication required to save meals';
+        })(),
+        new Promise<{ success: false; error: Error }>((resolve) => 
+          setTimeout(() => {
+            resolve({ 
+              success: false, 
+              error: new Error(`Firestore save operation timed out after ${saveTimeout}ms`) 
+            });
+          }, saveTimeout)
+        )
+      ]);
+      
+      // Wait for either the save to complete or timeout
+      const result = await savePromise;
+      
+      if (!result.success) {
+        console.warn(`⚠️ [${requestId}] Firestore save timed out or failed`);
+        responseWithSave.saveError = 'Save operation timed out - please try again';
+        responseWithSave._meta.saveTimedOut = true;
       }
-    } catch (saveProcessError) {
+    } catch (saveProcessError: any) {
       console.error(`❌ [${requestId}] Error in save processing:`, saveProcessError);
-      (response as any).saveError = 'Error processing save request';
+      
+      // Safely handle the error case
+      try {
+        const responseWithSave = response as Record<string, any>;
+        responseWithSave.saveError = 'Error processing save request';
+        if (!responseWithSave._meta) {
+          responseWithSave._meta = { requestId };
+        }
+        responseWithSave._meta.saveProcessError = saveProcessError?.message || 'Unknown error';
+      } catch (metaError) {
+        console.error(`Failed to add error details to response:`, metaError);
+      }
     }
     
     console.timeEnd(`⏱️ [${requestId}] analyzeImage`);
