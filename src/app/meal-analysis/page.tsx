@@ -244,8 +244,15 @@ export default function MealAnalysisPage() {
           throw new Error('Invalid analysis data: failed to parse JSON');
         }
         
-        if (!isValidAnalysis(parsedResult)) {
-          console.warn("Invalid analysis data (validation failed):", parsedResult);
+        // ✅ Check if the analysis result is valid OR if it's a structured fallback
+        const isInvalid = !isValidAnalysis(parsedResult);
+        const isFallback = parsedResult.fallback === true;
+
+        if (isInvalid || isFallback) {
+          const fallbackReason = isFallback ? "structured_fallback" : "validation_failed";
+          // ✅ 3. Logging
+          console.warn(`Fallback response (${fallbackReason}):`, parsedResult);
+          // Use a more specific error message based on the type of failure
           setError(
             "We couldn't analyze this meal. Try again with a clearer image. " + 
             "Tip: Ensure your plate is fully visible with all food items clear and distinct."
@@ -363,12 +370,14 @@ export default function MealAnalysisPage() {
   if (error) {
     return (
       <div className="min-h-[60vh] flex items-center justify-center">
-        <div className="text-center max-w-sm mx-auto bg-white shadow-lab rounded-xl p-6">
+        <div className="text-center max-w-sm mx-auto bg-white shadow-lab rounded-xl p-6 border border-red-200">
           <svg xmlns="http://www.w3.org/2000/svg" className="h-12 w-12 text-red-500 mx-auto mb-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
           </svg>
-          <h2 className="text-xl font-semibold text-gray-800 mb-2">Analysis Error</h2>
-          <p className="text-gray-600 mb-6">{error}</p>
+          <h2 className="text-xl font-semibold text-gray-800 mb-2">We couldn't analyze this meal.</h2>
+          <p className="text-gray-600 mb-6">
+            Try uploading a photo where the plate and food items are clearly visible.
+          </p>
           <Link 
             href="/upload" 
             className="inline-block bg-primary hover:bg-secondary text-white font-medium py-2 px-4 rounded-lg transition-colors"
