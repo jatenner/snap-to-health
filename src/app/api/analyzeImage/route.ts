@@ -317,38 +317,39 @@ async function analyzeImageWithGPT4V(
   dietaryPreferences: string[] = [],
   requestId: string
 ): Promise<any> {
-  console.log(`[${requestId}] Analyzing image with GPT-4V (Mock - simulating new prompt)...`);
+  console.log(`[${requestId}] Analyzing image with GPT-4V (Mock - simulating NEW prompt)...`);
 
-  // --- Simulate Analysis based on new prompt guidelines ---
+  // --- Simulate Analysis based on NEW prompt guidelines ---
   const simulateFailure = false; // Toggle this to test the defensive guard
 
   if (simulateFailure) {
      console.warn(`[${requestId}] Simulating analysis failure for testing.`);
-     // Simulate an incomplete response that the defensive guard should catch
+     // Simulate an incomplete response (missing required fields)
      return {
         result: {
-          // description: "", // Intentionally missing
-          nutrients: [], // Intentionally empty
-          insight: "Image too blurry to analyze.",
+          description: "", // Intentionally empty 
+          nutrients: [],   // Intentionally empty
+          insight: "Image quality appears too low for analysis.",
           confidence: 0.1,
-          failureReason: "Image too blurry",
-          // NO fallback: true here, the guard will add it
+          failureReason: "Image is blurry and dark.",
+          // Note: No fallback: true here; the backend guard handles it
         }
       };
   }
 
   // Simulate a successful, best-effort analysis for a good image
+  // Conforms to the new requested JSON structure
   console.log(`[${requestId}] Mock analysis successful, returning simulated data.`);
   const simulatedSuccessfulResult = {
-    description: "Grilled chicken breast with brown rice and mixed green salad",
+    description: "Grilled chicken breast, brown rice, and side salad",
     nutrients: [
-      { name: "Protein", value: "35g" },
-      { name: "Carbs", value: "45g" },
-      { name: "Fat", value: "15g" }
+      { name: "Protein", value: "35g" }, // Example values
+      { name: "Carbs", value: "40g" },
+      { name: "Fat", value: "18g" }
     ],
-    insight: "This balanced meal supports muscle recovery and sustained energy.",
-    confidence: 0.85,
-    failureReason: null 
+    insight: "Good source of lean protein for muscle support.",
+    confidence: 0.9, // Example confidence
+    failureReason: null // Important: Should be null on success
   };
   
   return {
