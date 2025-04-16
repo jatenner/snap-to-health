@@ -4,8 +4,8 @@ import crypto from 'crypto';
 import { adminStorage } from '@/lib/firebaseAdmin';
 import { trySaveMealServer } from '@/lib/serverMealUtils';
 import { createAnalysisResponse, createEmptyFallbackAnalysis, createErrorResponse } from './analyzer';
-import { validateBase64Image } from '@/lib/imageProcessing/validateImage';
 import { isValidAnalysis, createFallbackAnalysis } from '@/lib/utils/analysisValidator';
+import { safeExtractImage } from '@/lib/imageProcessing/safeExtractImage';
 
 // Placeholder image for development fallback
 const PLACEHOLDER_IMAGE = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
@@ -348,43 +348,6 @@ function validateGptAnalysisResult(analysis: any): { valid: boolean; reason?: st
 // Mock implementation for backward compatibility during migration
 function createFallbackResponse(reason: string, partialResult: any): any {
   return createEmptyFallbackAnalysis();
-}
-
-// Image extraction and validation
-export async function safeExtractImage(formData: FormData | null, jsonData: any): Promise<string | null> {
-  try {
-    let base64Image: string | null = null;
-
-    // Handle FormData submission
-    if (formData && formData.get('image')) {
-      const imageFile = formData.get('image') as File;
-      const arrayBuffer = await imageFile.arrayBuffer();
-      const buffer = Buffer.from(arrayBuffer);
-      base64Image = buffer.toString('base64');
-    } 
-    // Handle JSON submission with base64 image
-    else if (jsonData && typeof jsonData.image === 'string') {
-      // Extract base64 data (if the prefix exists, remove it)
-      const match = jsonData.image.match(/^data:image\/[a-zA-Z]+;base64,(.+)$/);
-      base64Image = match ? match[1] : jsonData.image;
-    }
-
-    // Validate the extracted image
-    if (base64Image) {
-      const validationResult = validateBase64Image(base64Image);
-      if (!validationResult.valid) {
-        console.warn(`Image validation failed: ${validationResult.error}`);
-        return null;
-      }
-      return base64Image;
-    }
-
-    console.warn('No image found in the request');
-    return null;
-  } catch (error) {
-    console.error('Failed to extract image', error);
-    return null;
-  }
 }
 
 // The main POST handler for image analysis
