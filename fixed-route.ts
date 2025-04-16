@@ -3,6 +3,14 @@ import axios from 'axios';
 import crypto from 'crypto';
 import { adminStorage } from '@/lib/firebaseAdmin';
 import { trySaveMealServer } from '@/lib/serverMealUtils';
+import { 
+  analyzeImageWithGPT4V, 
+  needsConfidenceEnrichment, 
+  enrichAnalysisResult, 
+  validateGptAnalysisResult, 
+  createFallbackResponse,
+  createEmergencyFallbackResponse
+} from '@/lib/analyzeImageWithGPT4V';
 
 // Trigger new Vercel deployment - 15 Apr 2025
 // Request concurrency tracking
@@ -1993,107 +2001,6 @@ function isValidGptAnalysis(gptAnalysis: any): { isValid: boolean; reason: strin
   return { isValid: false, reason: 'empty_ingredients_list' };
 }
 
-// Function to create a friendly fallback message based on the validation failure reason
-function createFallbackResponse(reason: string, healthGoal: string, requestId: string): any {
-  console.log(`[${requestId}] Creating fallback response for reason: ${reason}`);
-  
-  let fallbackMessage = "";
-  let reasonCode = "";
-  
-  switch (reason) {
-    case 'missing_ingredients_list':
-    case 'empty_ingredients_list':
-      fallbackMessage = "We couldn't identify specific ingredients in your photo. We've provided our best estimate based on what we can see.";
-      reasonCode = 'estimated_ingredients';
-      break;
-    case 'extremely_low_confidence':
-      fallbackMessage = "We detected some food items but with limited certainty. We've provided our best analysis based on what we can see.";
-      reasonCode = 'low_confidence_analysis';
-      break;
-    case 'no_analysis_result':
-      fallbackMessage = "We've provided an estimated analysis. For more accurate results, try a photo with better lighting and less blur.";
-      reasonCode = 'estimated_analysis';
-      break;
-    default:
-      fallbackMessage = "We've provided our best analysis based on what we can see in the photo.";
-      reasonCode = 'partial_analysis';
-  }
-
-  // Define a default goal score based on the health goal
-  let defaultGoalScore = 5; // Neutral score
-  let defaultScoreExplanation = "";
-
-  // Customize based on common health goals
-  if (healthGoal.toLowerCase().includes('weight')) {
-    defaultGoalScore = 4;
-    defaultScoreExplanation = "This meal may be balanced, but without clear ingredient information, it's difficult to determine its exact impact on weight management.";
-  } else if (healthGoal.toLowerCase().includes('sleep')) {
-    defaultGoalScore = 5;
-    defaultScoreExplanation = "Without clear ingredient information, we can't assess sleep-supportive nutrients like magnesium or tryptophan.";
-  } else if (healthGoal.toLowerCase().includes('muscle')) {
-    defaultGoalScore = 5;
-    defaultScoreExplanation = "Without clear protein content information, it's difficult to assess this meal's impact on muscle building.";
-  } else if (healthGoal.toLowerCase().includes('energy')) {
-    defaultGoalScore = 5;
-    defaultScoreExplanation = "Without clear ingredient information, we can't precisely assess how this meal impacts your energy levels.";
-  } else if (healthGoal.toLowerCase().includes('heart')) {
-    defaultGoalScore = 5;
-    defaultScoreExplanation = "Without clear nutrient information, we can't precisely assess this meal's impact on heart health.";
-  }
-
-  // Create a fallback analysis that includes some minimal information but is still useful
-  return {
-    fallback: true,
-    success: true, // Change to true so frontend doesn't show error
-    reason: reasonCode,
-    lowConfidence: true, // Mark as low confidence
-    message: fallbackMessage,
-    description: "A meal that appears to contain some nutritional value",
-    ingredientList: ["possible protein", "possible carbohydrate", "possible vegetables"],
-    detailedIngredients: [
-      { name: "possible protein source", category: "protein", confidence: 3.0 },
-      { name: "possible carbohydrate", category: "carbohydrate", confidence: 3.0 },
-      { name: "possible vegetables", category: "vegetable", confidence: 3.0 }
-    ],
-    basicNutrition: {
-      calories: "300-500",
-      protein: "15-25g",
-      carbs: "30-45g",
-      fat: "10-20g"
-    },
-    nutrients: [
-      { name: "Protein", value: "20", unit: "g", isHighlight: true },
-      { name: "Carbohydrates", value: "40", unit: "g", isHighlight: false },
-      { name: "Fat", value: "15", unit: "g", isHighlight: false },
-      { name: "Fiber", value: "5", unit: "g", isHighlight: true },
-      { name: "Calcium", value: "8", unit: "%DV", isHighlight: false },
-      { name: "Iron", value: "10", unit: "%DV", isHighlight: true }
-    ],
-    confidence: 3,
-    goalName: formatGoalName(healthGoal),
-    goalImpactScore: defaultGoalScore,
-    scoreExplanation: defaultScoreExplanation,
-    feedback: [
-      fallbackMessage,
-      "Even with limited information, balanced meals typically contain protein, complex carbs, and vegetables.",
-      "For better analysis, try taking photos in natural light with all food items clearly visible."
-    ],
-    suggestions: [
-      "Consider taking photos from directly above for clearer food identification",
-      "Including a variety of colorful vegetables helps support overall nutrition",
-      `For ${healthGoal.toLowerCase()}, focus on meals with a good balance of macronutrients`
-    ],
-    positiveFoodFactors: [
-      "Balanced meals typically provide sustained energy",
-      "Variety in food groups helps ensure broad nutrient intake"
-    ],
-    negativeFoodFactors: [
-      "Without clear identification, we can't assess potential dietary concerns",
-      "Consider adding more colorful vegetables for increased micronutrients"
-    ]
-  };
-}
-
 /**
  * Uploads an image to Firebase Storage using Admin SDK
  * @param file The file data to upload
@@ -3018,7 +2925,11 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
           responseData.debug.validationReason = validationResult.reason;
           
           // Create fallback for invalid results
-          const fallbackResponse = createFallbackResponse(validationResult.reason, analysisResult.result);
+          const fallbackResponse = createFallbackResponse(
+            validationResult.reason || 'unknown_error',
+            'general',
+            requestId
+          );
           analysisResult.result = fallbackResponse;
           
           console.log(`♻️ [${requestId}] Using fallback analysis response`);
