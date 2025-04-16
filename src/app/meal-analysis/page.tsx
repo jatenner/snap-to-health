@@ -200,8 +200,6 @@ export default function MealAnalysisPage() {
   const [loading, setLoading] = useState(true);
   const [loadingStage, setLoadingStage] = useState<string>('initializing');
   const [error, setError] = useState<string | null>(null);
-  const [isPartialResult, setIsPartialResult] = useState(false);
-  const [missingDataType, setMissingDataType] = useState<string | null>(null);
   const [fallbackInfo, setFallbackInfo] = useState<AnalysisResult | null>(null);
   const router = useRouter();
   const { currentUser } = useAuth();
@@ -247,29 +245,28 @@ export default function MealAnalysisPage() {
           throw new Error('Invalid analysis data: failed to parse JSON');
         }
         
-        // ✅ Check if the analysis result is valid OR if it's a structured fallback
-        const isInvalid = !isValidAnalysis(parsedResult);
-        const isFallback = parsedResult.fallback === true;
-
-        if (isInvalid || isFallback) {
-          const fallbackReason = isFallback ? "structured_fallback" : "validation_failed";
-          console.warn(`Fallback response (${fallbackReason}):`, parsedResult);
-
-          // ✅ Set fallbackInfo state instead of just an error string
-          setFallbackInfo(parsedResult);
-          setError("Analysis Failed"); // Set a generic error flag
-          
+        // Check if the result indicates a fallback (now set reliably by the backend guard)
+        if (parsedResult.fallback === true) {
+          console.warn("Fallback response detected in frontend:", parsedResult);
+          setFallbackInfo(parsedResult); // Store the fallback info
+          setError("Analysis Fallback"); // Set generic error flag to trigger error UI
+          setLoading(false);
+          setLoadingStage('error');
+          // Clear session storage for next attempt
+          sessionStorage.removeItem('analysisResult');
+          sessionStorage.removeItem('previewUrl');
+          return; // Stop processing
+        }
+        
+        // If not fallback, validate the main structure needed for display
+        if (!isValidAnalysis(parsedResult)) {
+          console.warn("Invalid analysis data (structure validation failed):", parsedResult);
+          setError("Received incomplete analysis data.");
           setLoading(false);
           setLoadingStage('error');
           sessionStorage.removeItem('analysisResult');
           sessionStorage.removeItem('previewUrl');
           return;
-        }
-        
-        // Check if this is a partial result
-        if (parsedResult.partial) {
-          setIsPartialResult(true);
-          setMissingDataType(parsedResult.missing || null);
         }
         
         // Set preview image first for perceived performance
@@ -374,31 +371,29 @@ export default function MealAnalysisPage() {
     // Check if we have structured fallback info
     if (fallbackInfo) {
       return (
-        <div className="min-h-[60vh] flex items-center justify-center">
-          <div className="text-center max-w-sm mx-auto bg-white shadow-lab rounded-xl p-6 border border-red-200">
-            <svg xmlns="http://www.w3.org/2000/svg" className="h-12 w-12 text-red-500 mx-auto mb-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
-            </svg>
-            {/* ❌ Heading */}
-            <h2 className="text-xl font-semibold text-gray-800 mb-2">We couldn't analyze this meal.</h2>
-            {/* 📸 Reason */} 
-            {fallbackInfo.failureReason && (
-              <p className="text-gray-600 mb-2">
-                Reason: {fallbackInfo.failureReason}
-              </p>
-            )}
-            {/* 💡 Tip */} 
-            <p className="text-gray-600 mb-6">
-              {/* ✅ 3. Improve error UI message */}
-              Tip: {fallbackInfo.insight || "We couldn’t confidently analyze this meal. Try again with a clearer image, or review the estimate below if partial data is available."}
+        <div className="min-h-[60vh] flex items-center justify-center p-4">
+          {/* Simulating ErrorCard component */} 
+          <div className="text-center max-w-md mx-auto bg-white shadow-xl rounded-xl p-6 border border-red-200">
+            <div className="w-16 h-16 mx-auto bg-red-100 rounded-full flex items-center justify-center mb-4">
+              <svg xmlns="http://www.w3.org/2000/svg" className="h-8 w-8 text-red-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+              </svg>
+            </div>
+            <h2 className="text-xl font-semibold text-gray-800 mb-3">
+              We couldn't analyze this meal
+            </h2>
+            <p className="text-gray-600 mb-3">
+              {fallbackInfo.failureReason || "Try uploading a clearer photo — full plate, well-lit, top-down angle."}
             </p>
-            {/* 🔁 Button */} 
-            <Link 
-              href="/upload" 
-              className="inline-block bg-primary hover:bg-secondary text-white font-medium py-2 px-4 rounded-lg transition-colors"
+            <p className="text-xs text-gray-500 italic mb-6">
+              {fallbackInfo.insight || "You can also enter it manually if needed."}
+            </p>
+            <button 
+              onClick={() => router.push('/upload')}
+              className="inline-block bg-primary hover:bg-secondary text-white font-medium py-2.5 px-6 rounded-lg transition-colors text-sm shadow-md"
             >
               Try Again
-            </Link>
+            </button>
           </div>
         </div>
       );
@@ -722,27 +717,6 @@ export default function MealAnalysisPage() {
               </h2>
               <div className="bg-white border border-slate/20 rounded-xl p-4">
                 <IngredientsList ingredients={analysisResult.detailedIngredients} />
-              </div>
-            </div>
-          )}
-          
-          {/* Partial result notification */}
-          {isPartialResult && (
-            <div className="mb-4 bg-amber-50 border border-amber-300 rounded-lg p-3 sm:p-4 text-sm sm:text-base text-amber-800">
-              <div className="flex items-start">
-                <svg className="w-5 h-5 mr-2 mt-0.5 flex-shrink-0" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor">
-                  <path fillRule="evenodd" d="M8.485 2.495c.673-1.167 2.357-1.167 3.03 0l6.28 10.875c.673 1.167-.17 2.625-1.516 2.625H3.72c-1.347 0-2.189-1.458-1.515-2.625L8.485 2.495zM10 5a.75.75 0 01.75.75v4.5a.75.75 0 01-1.5 0v-4.5A.75.75 0 0110 5zm0 10a1 1 0 100-2 1 1 0 000 2z" clipRule="evenodd" />
-                </svg>
-                <div>
-                  <p className="font-medium">Limited Analysis Available</p>
-                  <p className="mt-1">
-                    {missingDataType === 'nutrition' ? 
-                      'We were able to analyze your meal but couldn\'t fetch complete nutrition data. Some details may be limited.' : 
-                      missingDataType === 'gpt' ? 
-                      'We identified ingredients but couldn\'t complete full analysis. Some insights may be limited.' : 
-                      'Some data couldn\'t be processed completely. Results may be limited.'}
-                  </p>
-                </div>
               </div>
             </div>
           )}

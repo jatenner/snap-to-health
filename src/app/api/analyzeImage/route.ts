@@ -317,11 +317,28 @@ async function analyzeImageWithGPT4V(
   dietaryPreferences: string[] = [],
   requestId: string
 ): Promise<any> {
-  console.log(`[${requestId}] Analyzing image with GPT-4V (Mock)...`);
+  console.log(`[${requestId}] Analyzing image with GPT-4V (Mock - simulating new prompt)...`);
 
-  // --- Simulate Analysis --- 
-  // Simulate a successful, best-effort analysis for a good image based on new prompt
-  // This bypasses the old fallback logic for testing purposes
+  // --- Simulate Analysis based on new prompt guidelines ---
+  const simulateFailure = false; // Toggle this to test the defensive guard
+
+  if (simulateFailure) {
+     console.warn(`[${requestId}] Simulating analysis failure for testing.`);
+     // Simulate an incomplete response that the defensive guard should catch
+     return {
+        result: {
+          // description: "", // Intentionally missing
+          nutrients: [], // Intentionally empty
+          insight: "Image too blurry to analyze.",
+          confidence: 0.1,
+          failureReason: "Image too blurry",
+          // NO fallback: true here, the guard will add it
+        }
+      };
+  }
+
+  // Simulate a successful, best-effort analysis for a good image
+  console.log(`[${requestId}] Mock analysis successful, returning simulated data.`);
   const simulatedSuccessfulResult = {
     description: "Grilled chicken breast with brown rice and mixed green salad",
     nutrients: [
@@ -329,31 +346,11 @@ async function analyzeImageWithGPT4V(
       { name: "Carbs", value: "45g" },
       { name: "Fat", value: "15g" }
     ],
-    insight: "This balanced meal supports muscle recovery and sustained energy, suitable for an active lifestyle.",
+    insight: "This balanced meal supports muscle recovery and sustained energy.",
     confidence: 0.85,
-    failureReason: null // Should be null for successful analysis
+    failureReason: null 
   };
-
-  // Simulate a scenario where GPT *could* return a partial/invalid response
-  const simulateFailure = false; // Set to true to test the fallback path
-  if (simulateFailure) {
-     console.warn(`[${requestId}] Simulating analysis failure for testing fallback.`);
-     const simulatedFailureReason = "Could not identify items due to poor lighting."; // Simulate GPT reason
-     return {
-        result: {
-          fallback: true,
-          success: false,
-          description: "We could not fully identify the food items in this image.",
-          nutrients: [], // Intentionally empty for fallback trigger
-          insight: "Try uploading a photo with clear lighting, all food items visible, and taken from above.",
-          failureReason: simulatedFailureReason,
-          fallbackType: "simulated_failure"
-        }
-      };
-  }
-
-  // Return the simulated *successful* result
-  console.log(`[${requestId}] Mock analysis successful, returning simulated data.`);
+  
   return {
     result: simulatedSuccessfulResult
   };
@@ -652,43 +649,35 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       
       const analysis = analysisResult.result;
 
-      // ✅ 2. Refined Fallback Logic: Check if analysis is truly unusable
-      const isTrulyFallback = 
-        !analysis || // No result object
-        (!analysis.description && // No description AND
-         (!analysis.nutrients || // No nutrients array OR
-          analysis.nutrients.every((n: any) => !n.value || n.value === '0' || n.value === '0g') // All nutrient values are missing/zero
-         ));
+      // ✅ 2. Add Defensive Fallback Guard
+      if (
+        !analysis?.description ||
+        !Array.isArray(analysis?.nutrients) ||
+        analysis.nutrients.length === 0
+      ) {
+        console.warn(`⚠️ [${requestId}] Skipping save: incomplete GPT result`, {
+          description: analysis?.description,
+          nutrients: analysis?.nutrients,
+        });
 
-      if (isTrulyFallback) {
-        console.log(`[${requestId}] Triggering fallback: Missing description and nutrients.`);
-        
-        // Use the potentially structured fallback from analysisResult if available
-        const fallbackData = analysis && analysis.fallback === true ? analysis : createEmptyFallbackAnalysis();
-
-        responseData.success = false; 
+        // Populate responseData for fallback
+        responseData.success = false;
         responseData.fallback = true;
-        responseData.message = fallbackData.message || "Analysis failed due to missing essential data";
-        responseData.analysis = fallbackData;
-        responseData.imageUrl = imageUrl;
+        responseData.message = "Analysis fallback triggered: missing description or nutrients";
+        // Use the potentially partial analysis data received for the response
+        responseData.analysis = analysis || createEmptyFallbackAnalysis(); 
+        responseData.imageUrl = imageUrl; 
         responseData.requestId = requestId;
         responseData.debug.timestamps.end = new Date().toISOString();
-        console.timeEnd(`⏱️ [${requestId}] Total API execution time (Fallback)`);
-        
-        return createAnalysisResponse(responseData);
-      } else if (analysis && analysis.fallback === true) {
-        // Handle the "soft fallback" case where we have some data but marked as fallback
-        console.log(`[${requestId}] Soft fallback detected (fallback: true flag present, but some data exists). Proceeding with partial analysis.`);
-        // The data will be passed through, and the frontend can decide how to display it
-        // We still don't save soft fallbacks
-        responseData.mealSaved = false; 
-        responseData.debug.processingSteps.push('Soft fallback - meal save skipped');
+        console.timeEnd(`⏱️ [${requestId}] Total API execution time (Defensive Fallback)`);
+
+        return createAnalysisResponse(responseData); // Use helper to ensure consistent format
       }
       
-      // If not a true fallback, proceed with preparing the response and potentially saving
-      responseData.success = true; // Mark as successful even if it's a soft fallback
-      responseData.message = 'Analysis completed'; // Generic message, frontend handles display
-      responseData.analysis = analysis; // Pass the potentially partial/soft-fallback analysis
+      // If analysis passed the guard, proceed with preparing the response
+      responseData.success = true; 
+      responseData.message = 'Analysis completed'; 
+      responseData.analysis = analysis; 
       responseData.imageUrl = imageUrl;
       responseData.requestId = requestId;
       
@@ -696,8 +685,9 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
         responseData.debug.reasoning = analysisResult.reasoning;
       }
 
-      // --- Save Meal Logic (Only if NOT a true fallback AND NOT a soft fallback) --- 
-      const shouldSave = userId && typeof imageUrl === 'string' && responseData.analysis && !isTrulyFallback && !(responseData.analysis?.fallback === true);
+      // --- Save Meal Logic (Only if analysis passed the guard) --- 
+      // The guard logic above replaces the need for `isTrulyFallback` and `fallback` checks here
+      const shouldSave = userId && typeof imageUrl === 'string' && responseData.analysis;
       
       if (shouldSave) { 
         try {
@@ -742,8 +732,6 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
           console.log(`ℹ️ [${requestId}] No valid imageUrl available, skipping meal save`);
         } else if (!responseData.analysis) {
           console.log(`ℹ️ [${requestId}] No valid analysis object, skipping meal save`);
-        } else if (isTrulyFallback || responseData.analysis.fallback === true) {
-          // Already logged above or handled as soft fallback
         } else {
            console.log(`ℹ️ [${requestId}] Unknown reason, skipping meal save`);
         }
