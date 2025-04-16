@@ -20,6 +20,22 @@ export const saveMealToFirestoreServer = async (
     throw new Error('UserId, imageUrl, and analysis are required');
   }
   
+  // ABSOLUTE FINAL SAFETY CHECK: This is the last line of defense before touching Firestore
+  // Block any invalid analysis data from being saved, no matter what upstream logic did
+  if (!analysis?.description || !Array.isArray(analysis.nutrients) || analysis.nutrients.length === 0) {
+    // Log detailed information about what's missing
+    const missingFields = [];
+    if (!analysis?.description) missingFields.push('description');
+    if (!Array.isArray(analysis?.nutrients)) missingFields.push('nutrients array');
+    else if (analysis.nutrients.length === 0) missingFields.push('non-empty nutrients');
+    
+    console.error(`🔥 CRITICAL SAFETY BLOCK: Rejected Firestore write in saveMealToFirestoreServer - Missing fields:`, missingFields);
+    console.error(`🛡️ FIRESTORE GUARDIAN: Invalid analysis data will NOT be saved to the database`);
+    
+    // Throw detailed error to prevent any further processing
+    throw new Error(`BLOCKED FIRESTORE WRITE: Invalid analysis data missing ${missingFields.join(', ')}. This is the final safety check.`);
+  }
+  
   if (!adminDb) {
     throw new Error('Firebase Admin Firestore is not initialized');
   }
@@ -220,4 +236,4 @@ export async function trySaveMealServer({
       error: error instanceof Error ? error : new Error(error?.message || 'Unknown error in save processing')
     };
   }
-} 
+}
