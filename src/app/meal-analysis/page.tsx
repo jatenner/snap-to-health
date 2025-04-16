@@ -7,6 +7,7 @@ import Link from 'next/link';
 import { useAuth } from '@/contexts/AuthContext';
 import { trySaveMeal } from '@/lib/mealUtils';
 import { isValidAnalysis, createFallbackAnalysis } from '@/lib/utils/analysisValidator';
+import ErrorCard from '@/components/ErrorCard';
 
 interface Nutrient {
   name: string;
@@ -371,50 +372,25 @@ export default function MealAnalysisPage() {
     if (fallbackInfo) {
       return (
         <div className="min-h-[60vh] flex items-center justify-center p-4">
-          {/* Simulating ErrorCard component Structure */}
-          <div className="text-center max-w-md mx-auto bg-white shadow-xl rounded-xl p-6 border border-red-200">
-            <div className="w-16 h-16 mx-auto bg-red-100 rounded-full flex items-center justify-center mb-4">
-              <svg xmlns="http://www.w3.org/2000/svg" className="h-8 w-8 text-red-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126ZM12 15.75h.008v.008H12v-.008Z" />
-              </svg>
-            </div>
-            <h2 className="text-xl font-semibold text-gray-800 mb-3">
-              We couldn't analyze this meal
-            </h2>
-            {/* Use failureReason if available, otherwise the standard message */}
-            <p className="text-gray-600 mb-3">
-              {fallbackInfo.failureReason || "Try uploading a clearer photo — full plate, well-lit, top-down angle."}
-            </p>
-            {/* Use insight if available, otherwise the standard tip */}
-            <p className="text-xs text-gray-500 italic mb-6">
-              Tip: {fallbackInfo.insight || "You can also enter your meal manually."}
-            </p>
-            <button 
-              onClick={() => router.push('/upload')}
-              className="inline-block bg-primary hover:bg-secondary text-white font-medium py-2.5 px-6 rounded-lg transition-colors text-sm shadow-md"
-            >
-              Try Again
-            </button>
-          </div>
+          <ErrorCard
+            title="We couldn't analyze your meal"
+            message={fallbackInfo.failureReason || "Try uploading a clearer, well-lit image with the full plate in view."}
+            tip={fallbackInfo.insight || "You can manually log this meal instead."}
+            buttonText="Try Again"
+            onClick={() => router.push('/upload')}
+          />
         </div>
       );
     } else {
       // Render generic error if no specific fallback info
       return (
         <div className="min-h-[60vh] flex items-center justify-center">
-          <div className="text-center max-w-sm mx-auto bg-white shadow-lab rounded-xl p-6 border border-red-200">
-            <svg xmlns="http://www.w3.org/2000/svg" className="h-12 w-12 text-red-500 mx-auto mb-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
-            </svg>
-            <h2 className="text-xl font-semibold text-gray-800 mb-2">Analysis Error</h2>
-            <p className="text-gray-600 mb-6">{error}</p> {/* Display the generic error message */}
-            <Link 
-              href="/upload" 
-              className="inline-block bg-primary hover:bg-secondary text-white font-medium py-2 px-4 rounded-lg transition-colors"
-            >
-              Try Again
-            </Link>
-          </div>
+          <ErrorCard
+            title="Analysis Error"
+            message={error}
+            buttonText="Try Again"
+            onClick={() => router.push('/upload')}
+          />
         </div>
       );
     }
