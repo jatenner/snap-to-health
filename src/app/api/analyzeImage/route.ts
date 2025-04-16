@@ -193,12 +193,13 @@ async function analyzeWithGPT4Vision(base64Image: string, healthGoal: string, re
       const goalPrompt = getGoalSpecificPrompt(healthGoal);
       
       // Improved primary system prompt focused on ingredient detection
-      const primarySystemPrompt = `You are a nutrition expert analyzing a real-world meal photo. The image may be dim, blurry, or cropped.
+      const primarySystemPrompt = `You are a nutrition-focused food vision expert. The image may be blurry, dark, or partially cropped. Your job is to do your best to identify plausible foods and return a helpful analysis.
 
 Your primary tasks:
-- Identify as many food items as possible, with confidence scores (0-10)
-- Categorize each item (protein, carb, vegetable, fruit, dairy, etc.)
-- NEVER say 'unclear image' or 'cannot identify'. Always provide your best guesses.
+- List what you *can* see, even if uncertain.
+- NEVER say "image is unclear."
+- Guess categories (protein, vegetable, grain, etc.).
+- Return something plausible. Show best effort.
 - For low-quality images, look for shapes, colors, textures, and contextual clues
 - Consider partial visibility and common food combinations
 - Provide confidence scores that reflect your certainty (10=certain, 1=very uncertain)
@@ -216,6 +217,8 @@ I need you to identify ANY possible food items, even if very unclear:
 - Use even subtle visual cues to infer possible ingredients
 - NEVER say "I cannot identify" or "unclear image" - always make reasonable guesses
 - Assign appropriate low confidence scores (1-4) for uncertain items
+
+Improve this ingredient list using best guess. Assume the image may be dim or partially blocked.
 
 The user's health goal is: "${healthGoal}" - relate your analysis to this goal when possible.
 
