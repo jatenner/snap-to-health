@@ -251,10 +251,31 @@ async function uploadImageToFirebase(base64Image: string, userId: string, reques
     
     // Remove the data:image/xyz;base64, prefix if present
     const base64Data = base64Image.replace(/^data:image\/\w+;base64,/, '');
-    const buffer = Buffer.from(base64Data, 'base64');
+    
+    // Safely create buffer - wrap in try/catch to prevent crashes
+    let buffer: Buffer;
+    try {
+      buffer = Buffer.from(base64Data, 'base64');
+      
+      // Validate the buffer has actual content
+      if (!buffer || buffer.length === 0) {
+        console.error(`❌ [${requestId}] Created buffer is empty or invalid`);
+        return null;
+      }
+    } catch (bufferError) {
+      console.error(`❌ [${requestId}] Failed to create buffer from base64 data:`, bufferError);
+      return null;
+    }
     
     // Upload to Firebase Storage using Admin SDK
     const bucket = adminStorage.bucket();
+    
+    // Validate bucket exists
+    if (!bucket) {
+      console.error(`❌ [${requestId}] Firebase Storage bucket is not available`);
+      return null;
+    }
+    
     const file_ref = bucket.file(imagePath);
     
     // Upload options
@@ -381,7 +402,21 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     if (contentType.includes('multipart/form-data')) {
       try {
         requestData = await request.formData();
-        rawFile = requestData?.get('file') || null;
+        
+        // Check if the 'image' field exists and is not null/empty
+        if (!requestData.has('image') || !requestData.get('image')) {
+          console.warn(`⚠️ [${requestId}] No image field in form data`);
+          return NextResponse.json({ 
+            _meta: { 
+              success: false, 
+              imageError: 'No image uploaded',
+              requestId
+            },
+            analysis: createEmptyFallbackAnalysis()
+          }, { status: 200 });
+        }
+        
+        rawFile = requestData?.get('file') || requestData?.get('image') || null;
         userId = (requestData?.get('userId') || '').toString();
         mealName = (requestData?.get('mealName') || '').toString();
         
@@ -407,12 +442,31 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
         const errorMessage = `Failed to parse form data: ${error instanceof Error ? error.message : 'Unknown error'}`;
         responseData.errors.push(errorMessage);
         responseData.message = errorMessage;
-        return createAnalysisResponse(responseData);
+        responseData._meta.imageError = errorMessage;
+        return createAnalysisResponse({
+          ...responseData,
+          success: false,
+          fallback: true,
+          analysis: createEmptyFallbackAnalysis()
+        });
       }
     } else if (contentType.includes('application/json')) {
       try {
         jsonData = await request.json();
         if (jsonData && typeof jsonData === 'object') {
+          // Check if the image field exists and is not null/empty
+          if (!jsonData.file && !jsonData.image && !jsonData.base64Image) {
+            console.warn(`⚠️ [${requestId}] No image data in JSON payload`);
+            return NextResponse.json({ 
+              _meta: { 
+                success: false, 
+                imageError: 'No image uploaded',
+                requestId
+              },
+              analysis: createEmptyFallbackAnalysis()
+            }, { status: 200 });
+          }
+          
           rawFile = jsonData.file || jsonData.image || jsonData.base64Image || null;
           userId = jsonData.userId || '';
           mealName = jsonData.mealName || '';
@@ -422,19 +476,37 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
           const error = 'Invalid JSON structure';
           responseData.errors.push(error);
           responseData.message = error;
-          return createAnalysisResponse(responseData);
+          responseData._meta.imageError = error;
+          return createAnalysisResponse({
+            ...responseData,
+            success: false,
+            fallback: true,
+            analysis: createEmptyFallbackAnalysis()
+          });
         }
       } catch (error) {
         const errorMessage = `Failed to parse JSON: ${error instanceof Error ? error.message : 'Unknown error'}`;
         responseData.errors.push(errorMessage);
         responseData.message = errorMessage;
-        return createAnalysisResponse(responseData);
+        responseData._meta.imageError = errorMessage;
+        return createAnalysisResponse({
+          ...responseData,
+          success: false,
+          fallback: true,
+          analysis: createEmptyFallbackAnalysis()
+        });
       }
     } else {
       const error = `Unsupported content type: ${contentType}`;
       responseData.errors.push(error);
       responseData.message = error;
-      return createAnalysisResponse(responseData);
+      responseData._meta.imageError = error;
+      return createAnalysisResponse({
+        ...responseData,
+        success: false,
+        fallback: true,
+        analysis: createEmptyFallbackAnalysis()
+      });
     }
     
     // Validate required parameters
@@ -517,8 +589,9 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
           responseData.debug.processingSteps.push('Image upload failed, continuing with analysis only');
         }
       } catch (error) {
-        console.error(`[${requestId}] Firebase upload error:`, error);
+        console.error(`❌ [${requestId}] Firebase upload error:`, error);
         responseData.debug.processingSteps.push('Image upload failed, continuing with analysis only');
+        // Continue with analysis even if upload fails
       }
     }
     
@@ -627,27 +700,32 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
           responseData.debug.processingSteps.push('No userId provided, skipping meal save');
         } else if (!imageUrl) {
           console.log(`ℹ️ [${requestId}] No imageUrl available, skipping meal save`);
-          responseData.debug.processingSteps.push('No imageUrl available, skipping meal save');
-        } else if (!responseData.analysis) {
-          console.log(`ℹ️ [${requestId}] No analysis result, skipping meal save`);
-          responseData.debug.processingSteps.push('No analysis result, skipping meal save');
-        } else if (responseData.analysis.fallback) {
-          console.log(`ℹ️ [${requestId}] Analysis is a fallback result, skipping meal save`);
-          responseData.debug.processingSteps.push('Analysis is a fallback result, skipping meal save');
         }
       }
-      
-      console.log(`✅ [${requestId}] Analysis completed successfully`);
     } catch (error) {
-      const errorMessage = `Analysis failed: ${error instanceof Error ? error.message : 'Unknown error'}`;
+      // Catch errors during analysis or meal saving
+      const errorMessage = `Analysis error: ${error instanceof Error ? error.message : 'Unknown error'}`;
       responseData.errors.push(errorMessage);
-      responseData.message = errorMessage;
+      responseData.message = 'Analysis failed';
+      responseData.debug.errorDetails.push({ 
+        step: 'analysis', 
+        error: errorMessage,
+        details: error 
+      });
+      console.error(`❌ [${requestId}] ${errorMessage}`, error);
       
-      console.error(`[${requestId}] ${errorMessage}`);
-      
-      // Return a fallback response
-      responseData.analysis = createEmptyFallbackAnalysis();
+      // Return a properly structured response with fallback analysis
+      return createAnalysisResponse({
+        ...responseData,
+        success: false,
+        fallback: true,
+        analysis: createEmptyFallbackAnalysis()
+      });
     }
+    
+    // Record end timestamp and return successful response
+    responseData.debug.timestamps.end = new Date().toISOString();
+    console.timeEnd(`⏱️ [${requestId}] Total API execution time`);
   } catch (error) {
     // Catch-all for any unexpected errors
     const errorMessage = `Fatal error in analysis API: ${error instanceof Error ? error.message : 'Unknown error'}`;
