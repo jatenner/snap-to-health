@@ -94,6 +94,21 @@ NEXT_PUBLIC_FIREBASE_MEASUREMENT_ID=your_measurement_id
 # Firebase Admin Configuration 
 FIREBASE_CLIENT_EMAIL=firebase-adminsdk-xxxx@your-project-id.iam.gserviceaccount.com
 FIREBASE_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----\nYour...\n-----END PRIVATE KEY-----\n"
+
+### Firebase Private Key
+
+For Firebase Admin SDK to work correctly, the private key must be properly formatted with actual newlines. To ensure consistent behavior across different environments (local development, Vercel, etc.), we now use base64 encoding for the private key.
+
+**Steps to set up your Firebase private key:**
+
+1. Obtain your Firebase service account key from the Firebase console
+2. Use the provided script to encode it: `node src/scripts/encodePrivateKey.js --paste`
+3. Add the base64 encoded key to your `.env.local` file:
+   ```
+   FIREBASE_PRIVATE_KEY_BASE64=your_base64_encoded_key
+   ```
+
+This approach prevents issues with newline handling across different platforms and deployment environments.
 ```
 
 ### Firebase Security Rules
