@@ -81,46 +81,131 @@ function isLowConfidenceAnalysis(analysis: any): boolean {
 }
 
 // Function to extract base64 from FormData image
-async function extractBase64Image(formData: FormData): Promise<string> {
-  console.time('extractBase64Image');
-  const file = formData.get('image') as File;
+async function extractBase64Image(formData: FormData, requestId: string = 'unknown'): Promise<string> {
+  console.time(`⏱️ [${requestId}] extractBase64Image`);
+  const rawFile = formData.get('image');
   
-  if (!file) {
-    console.timeEnd('extractBase64Image');
+  // Log detailed information about the file for debugging
+  const fileInfo = {
+    type: typeof rawFile,
+    constructor: rawFile?.constructor?.name,
+    isNull: rawFile === null,
+    isUndefined: rawFile === undefined,
+    hasProperties: rawFile ? Object.keys(Object(rawFile)) : []
+  };
+  
+  console.log(`📝 [${requestId}] Image file info:`, fileInfo);
+  
+  if (!rawFile) {
+    console.timeEnd(`⏱️ [${requestId}] extractBase64Image`);
     throw new Error('No image file provided');
   }
   
-  console.log('Image file details:', {
-    name: file.name,
-    type: file.type,
-    size: file.size,
-    lastModified: new Date(file.lastModified).toISOString()
-  });
+  // Try to determine the file type and properties
+  let fileType: string = 'unknown';
+  let fileSize: number = 0;
   
-  // Validate image type
-  if (!file.type.startsWith('image/')) {
-    console.timeEnd('extractBase64Image');
-    throw new Error(`Invalid file type: ${file.type}. Only images are accepted.`);
+  // Try to access common properties based on file type
+  try {
+    // Force cast to any to avoid TypeScript errors with FormDataEntryValue
+    const fileAny = rawFile as any;
+    
+    if (fileAny && typeof fileAny === 'object') {
+      // Extract type if available
+      if (fileAny.type) {
+        fileType = String(fileAny.type);
+      }
+      
+      // Extract size if available
+      if (fileAny.size !== undefined) {
+        fileSize = Number(fileAny.size);
+      }
+      
+      // For File objects, log name and last modified if available
+      if (fileAny.name) {
+        console.log(`📄 [${requestId}] File name:`, String(fileAny.name));
+      }
+      
+      if (fileAny.lastModified) {
+        try {
+          const lastModified = new Date(Number(fileAny.lastModified)).toISOString();
+          console.log(`🕒 [${requestId}] Last modified:`, lastModified);
+        } catch (dateError) {
+          // Ignore date parsing errors
+        }
+      }
+    }
+  } catch (propError) {
+    console.warn(`⚠️ [${requestId}] Error getting file properties:`, propError);
   }
   
+  console.log(`📝 [${requestId}] File details - Type: ${fileType}, Size: ${fileSize} bytes`);
+  
+  // Validate image type if available
+  if (fileType !== 'unknown' && !fileType.startsWith('image/')) {
+    console.timeEnd(`⏱️ [${requestId}] extractBase64Image`);
+    throw new Error(`Invalid file type: ${fileType}. Only images are accepted.`);
+  }
+  
+  // Convert the file to base64 using different methods depending on the file type
   try {
-    const bytes = await file.arrayBuffer();
-    const buffer = Buffer.from(bytes);
+    let buffer: Buffer;
+    
+    // Handle different types
+    if ('arrayBuffer' in rawFile && typeof rawFile.arrayBuffer === 'function') {
+      // File or Blob with arrayBuffer method
+      const bytes = await rawFile.arrayBuffer();
+      buffer = Buffer.from(bytes);
+    } else if ('stream' in rawFile && typeof rawFile.stream === 'function') {
+      // FormDataEntryValue with stream
+      const chunks: Uint8Array[] = [];
+      const stream = (rawFile as any).stream();
+      const reader = stream.getReader();
+      
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        chunks.push(value);
+      }
+      
+      buffer = Buffer.concat(chunks);
+    } else if (Buffer.isBuffer(rawFile)) {
+      // Already a Buffer
+      buffer = rawFile;
+    } else if (rawFile instanceof ArrayBuffer) {
+      // ArrayBuffer
+      buffer = Buffer.from(rawFile);
+    } else if (typeof rawFile === 'string') {
+      // Base64 string
+      if (rawFile.startsWith('data:')) {
+        const base64Data = rawFile.split(',')[1] || rawFile;
+        buffer = Buffer.from(base64Data, 'base64');
+      } else {
+        buffer = Buffer.from(rawFile, 'base64');
+      }
+    } else {
+      // Unknown type, try to make a sensible attempt
+      console.warn(`⚠️ [${requestId}] Unknown file type, attempting cast to string`);
+      const stringValue = String(rawFile);
+      buffer = Buffer.from(stringValue, 'utf-8');
+    }
+    
+    // Convert buffer to base64
     const base64 = buffer.toString('base64');
     
-    console.log('Successfully converted image to base64');
-    console.log('Base64 length:', base64.length);
+    console.log(`✅ [${requestId}] Successfully converted image to base64`);
+    console.log(`📊 [${requestId}] Base64 length: ${base64.length} chars`);
     
     if (base64.length === 0) {
-      console.timeEnd('extractBase64Image');
+      console.timeEnd(`⏱️ [${requestId}] extractBase64Image`);
       throw new Error('Image conversion resulted in empty base64 string');
     }
     
-    console.timeEnd('extractBase64Image');
+    console.timeEnd(`⏱️ [${requestId}] extractBase64Image`);
     return base64;
   } catch (error: any) {
-    console.error('Error converting image to base64:', error);
-    console.timeEnd('extractBase64Image');
+    console.error(`❌ [${requestId}] Error converting image to base64:`, error);
+    console.timeEnd(`⏱️ [${requestId}] extractBase64Image`);
     throw new Error(`Failed to convert image to base64: ${error.message}`);
   }
 }
@@ -1815,13 +1900,21 @@ function createFallbackResponse(reason: string, healthGoal: string, requestId: s
  * @returns The download URL or null if the upload fails
  */
 async function uploadImageToFirebase(
-  file: File | Buffer | ArrayBuffer, 
+  file: unknown, 
   userId: string, 
   requestId: string,
   timeoutMs: number = 5000
 ): Promise<string | null> {
   console.time(`⏱️ [${requestId}] uploadImageToFirebase`);
   console.log(`🖼️ [${requestId}] Starting image upload to Firebase Storage for user ${userId}`);
+  
+  // Debug metadata to track file types and conversion
+  const debugMeta: Record<string, any> = {
+    imageBufferType: typeof file,
+    originalFileType: file?.constructor?.name || 'unknown',
+    imageInstanceChecks: {},
+    processingSteps: []
+  };
   
   if (!adminStorage) {
     console.error(`❌ [${requestId}] Firebase Admin Storage is not initialized`);
@@ -1840,15 +1933,110 @@ async function uploadImageToFirebase(
     // Create storage reference using admin SDK
     const file_ref = adminStorage.bucket().file(storagePath);
     
-    // Convert File to Buffer if needed
-    let fileBuffer: Buffer;
-    if (file instanceof File) {
-      const arrayBuffer = await file.arrayBuffer();
-      fileBuffer = Buffer.from(arrayBuffer);
-    } else if (file instanceof ArrayBuffer) {
-      fileBuffer = Buffer.from(file);
-    } else {
-      fileBuffer = file as Buffer;
+    // Enhanced type checking for file conversion
+    debugMeta.imageInstanceChecks = {
+      isFile: file instanceof File,
+      isBlob: file instanceof Blob,
+      isArrayBuffer: file instanceof ArrayBuffer,
+      isBuffer: Buffer.isBuffer(file),
+      isFormDataEntryValue: typeof file === 'object' && file !== null && 'stream' in file && 'size' in file,
+      isNull: file === null,
+      isUndefined: file === undefined,
+      isString: typeof file === 'string',
+    };
+    
+    console.log(`🔍 [${requestId}] Image file type analysis:`, debugMeta.imageInstanceChecks);
+    
+    // Convert to Buffer with comprehensive type checking
+    let fileBuffer: Buffer | undefined;
+    
+    try {
+      if (file instanceof File || file instanceof Blob) {
+        debugMeta.processingSteps.push('Converting File/Blob to ArrayBuffer');
+        const arrayBuffer = await file.arrayBuffer();
+        debugMeta.processingSteps.push('Converting ArrayBuffer to Buffer');
+        fileBuffer = Buffer.from(arrayBuffer);
+      } 
+      else if (file instanceof ArrayBuffer) {
+        debugMeta.processingSteps.push('Converting ArrayBuffer to Buffer directly');
+        fileBuffer = Buffer.from(file);
+      } 
+      else if (Buffer.isBuffer(file)) {
+        debugMeta.processingSteps.push('Using existing Buffer');
+        fileBuffer = file;
+      } 
+      else if (typeof file === 'object' && file !== null && 'stream' in file && 'size' in file) {
+        debugMeta.processingSteps.push('Converting FormDataEntryValue to Buffer');
+        // Handle FormDataEntryValue by treating it as a Blob-like object
+        try {
+          // Try to use arrayBuffer() method if available (like Blob)
+          if ('arrayBuffer' in file && typeof file.arrayBuffer === 'function') {
+            const arrayBuffer = await (file as unknown as Blob).arrayBuffer();
+            fileBuffer = Buffer.from(arrayBuffer);
+          } 
+          // Otherwise try to use stream if available
+          else if ('stream' in file && typeof file.stream === 'function') {
+            const chunks: Uint8Array[] = [];
+            const stream = (file as any).stream();
+            const reader = stream.getReader();
+            
+            while (true) {
+              const { done, value } = await reader.read();
+              if (done) break;
+              chunks.push(value);
+            }
+            
+            // Combine all chunks into a single buffer
+            fileBuffer = Buffer.concat(chunks);
+          }
+          else {
+            throw new Error('FormDataEntryValue lacks expected methods for conversion');
+          }
+        } catch (formDataError: any) {
+          console.error(`Failed to convert FormDataEntryValue: ${formDataError.message}`);
+          debugMeta.formDataEntryError = formDataError.message;
+          throw formDataError;
+        }
+      }
+      else if (typeof file === 'string') {
+        // Handle base64 string input
+        debugMeta.processingSteps.push('Converting string to Buffer');
+        // Check if it's a data URL
+        if (file.startsWith('data:')) {
+          const base64Data = file.split(',')[1] || file;
+          fileBuffer = Buffer.from(base64Data, 'base64');
+        } else {
+          // Assume it's already base64
+          fileBuffer = Buffer.from(file, 'base64');
+        }
+      } 
+      else {
+        // Unknown type, log details and fail
+        debugMeta.processingSteps.push('Unknown file type, conversion failed');
+        debugMeta.conversionError = 'Unrecognized file type';
+        console.error(`❌ [${requestId}] Cannot process file of type`, typeof file);
+        throw new Error(`Unable to process file of type ${typeof file}`);
+      }
+      
+      // Check if fileBuffer was properly assigned
+      if (!fileBuffer) {
+        debugMeta.conversionError = 'Buffer conversion failed - undefined result';
+        throw new Error('Image conversion resulted in undefined buffer');
+      }
+      
+      debugMeta.bufferSize = fileBuffer.length;
+      
+      if (fileBuffer.length === 0) {
+        debugMeta.conversionError = 'Empty buffer after conversion';
+        throw new Error('Image conversion resulted in empty buffer');
+      }
+      
+      console.log(`✅ [${requestId}] Successfully converted image to Buffer (${fileBuffer.length} bytes)`);
+      
+    } catch (conversionError: any) {
+      debugMeta.bufferConversionError = conversionError.message || 'Unknown conversion error';
+      console.error(`❌ [${requestId}] Error converting image to Buffer:`, conversionError);
+      throw new Error(`Failed to convert image to Buffer: ${conversionError.message}`);
     }
     
     // Create a promise race to handle timeout
@@ -1856,6 +2044,11 @@ async function uploadImageToFirebase(
       file_ref.save(fileBuffer, {
         metadata: {
           contentType: 'image/jpeg',
+          metadata: {
+            originalUpload: new Date().toISOString(),
+            bufferSize: fileBuffer.length,
+            ...debugMeta
+          }
         }
       }),
       new Promise((_resolve, reject) => 
@@ -1967,7 +2160,7 @@ export async function POST(request: NextRequest) {
     // Extract base64 image with error handling 
     let base64Image;
     try {
-      base64Image = await extractBase64Image(formData);
+      base64Image = await extractBase64Image(formData, requestId);
       console.log(`[${requestId}] Successfully extracted base64 image (${base64Image.length} chars)`);
       
       // Check image quality before proceeding
@@ -2260,20 +2453,43 @@ export async function POST(request: NextRequest) {
       console.log(`🖼️ [${requestId}] Starting image processing for storage...`);
       
       // Get the original image file from formData
-      const imageFile = formData.get('image') as File | null;
+      const imageFileRaw = formData.get('image');
+      
+      // Log detailed information about the image file
+      console.log(`📄 [${requestId}] Image file details:`, {
+        type: typeof imageFileRaw,
+        constructor: imageFileRaw?.constructor?.name,
+        isNull: imageFileRaw === null,
+        isUndefined: imageFileRaw === undefined
+      });
       
       // Storage for the final image URL we'll use in Firestore
       let finalImageUrl = imageUrl;
       let storageUploadSuccess = false;
       
-      if (imageFile && userId) {
+      // Store debugging metadata about the file
+      responseWithSave._meta.imageFileType = typeof imageFileRaw;
+      responseWithSave._meta.imageFileConstructor = imageFileRaw?.constructor?.name;
+      
+      // Check if we have a valid file
+      if (!imageFileRaw) {
+        console.warn(`⚠️ [${requestId}] No valid image file uploaded`);
+        responseWithSave._meta.imageStorageSkipReason = 'No valid image file uploaded';
+        
+        // If no imageUrl was provided and we don't have a file, use a placeholder
+        if (!finalImageUrl) {
+          finalImageUrl = `https://storage.googleapis.com/snaphealth-39b14.appspot.com/placeholder-meal.jpg`;
+          responseWithSave._meta.imageUrlWarning = 'Using placeholder image - no file or URL was provided';
+        }
+      }
+      else if (userId) {
         try {
           console.log(`📤 [${requestId}] Uploading original image to Firebase Storage...`);
           responseWithSave._meta.imageProcessingStart = Date.now();
           
           // Upload the image with a timeout to prevent Vercel function hang
           const uploadedUrl = await uploadImageToFirebase(
-            imageFile, 
+            imageFileRaw, 
             userId, 
             requestId,
             5000 // 5 second timeout
@@ -2299,10 +2515,6 @@ export async function POST(request: NextRequest) {
         }
       } else {
         // Log reason why we're not uploading
-        if (!imageFile) {
-          console.warn(`⚠️ [${requestId}] No image file available for storage upload`);
-          responseWithSave._meta.imageStorageSkipReason = 'No image file available';
-        }
         if (!userId) {
           console.warn(`⚠️ [${requestId}] No userId available for storage path`);
           responseWithSave._meta.imageStorageSkipReason = 'No userId available';
