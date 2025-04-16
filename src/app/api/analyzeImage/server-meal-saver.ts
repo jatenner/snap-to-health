@@ -37,7 +37,27 @@ export async function saveMealToFirestore(params: {
     };
   }
   
-  // ✅ 1. Strengthen Backend Validation
+  // SAFETY GUARD 1: Validate analysis is a proper object
+  if (!analysis || typeof analysis !== 'object') {
+    console.error(`[${requestId}] ❌ Critical: Analysis is not a valid object`);
+    return {
+      success: false,
+      error: "Invalid analysis format: not an object",
+      message: "Invalid analysis format: not an object"
+    };
+  }
+  
+  // SAFETY GUARD 2: Check for explicit fallback flag from upstream code
+  if (analysis.fallback === true) {
+    console.error(`[${requestId}] ❌ Critical: Attempted to save fallback analysis data`);
+    return {
+      success: false,
+      error: "Cannot save fallback analysis results",
+      message: "Cannot save fallback analysis results"
+    };
+  }
+  
+  // SAFETY GUARD 3: Use isValidAnalysis utility
   if (!isValidAnalysis(analysis)) {
     console.warn(`[${requestId}] ❌ Invalid analysis data received for save:`, JSON.stringify(analysis).substring(0, 200) + '...');
     return {
@@ -47,7 +67,7 @@ export async function saveMealToFirestore(params: {
     };
   }
   
-  // Extra verification for extra safety - these validations should never fail if the top-level guard works
+  // SAFETY GUARD 4: Redundant manual check for critical fields
   if (!analysis.description || !Array.isArray(analysis.nutrients) || analysis.nutrients.length === 0) {
     console.error(`[${requestId}] 🚨 CRITICAL: Invalid analysis bypassed top-level guard:`, JSON.stringify(analysis).substring(0, 200) + '...');
     return {
