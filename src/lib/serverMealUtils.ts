@@ -31,10 +31,15 @@ export const saveMealToFirestoreServer = async (
     
     console.error(`🔥 CRITICAL SAFETY BLOCK: Rejected Firestore write in saveMealToFirestoreServer - Missing fields:`, missingFields);
     console.error(`🛡️ FIRESTORE GUARDIAN: Invalid analysis data will NOT be saved to the database`);
+    console.error("FINAL SAVE BLOCKER TRIGGERED - Firestore write completely blocked");
+    console.error(`🧠 DEBUG - Analysis dump in saveMealToFirestoreServer:`, JSON.stringify(analysis, null, 2).substring(0, 300) + '...');
     
     // Throw detailed error to prevent any further processing
-    throw new Error(`BLOCKED FIRESTORE WRITE: Invalid analysis data missing ${missingFields.join(', ')}. This is the final safety check.`);
+    throw new Error(`🔥 BLOCKED SAVE — missing fields at final step: ${missingFields.join(', ')}`);
   }
+  
+  console.log("🧠 STEP: Reached Firestore save - All validation checks passed");
+  console.log("🧠 GPT Analysis Snapshot:", JSON.stringify(analysis, null, 2).substring(0, 200) + '...');
   
   if (!adminDb) {
     throw new Error('Firebase Admin Firestore is not initialized');
@@ -126,24 +131,39 @@ export async function trySaveMealServer({
   error?: Error; 
   timeoutTriggered?: boolean;
 }> {
-  // CRITICAL SAFEGUARD: Block any attempt to save with invalid analysis
+  console.log(`🧠 STEP: Entered trySaveMealServer with requestId=${requestId}`);
+  
+  // ABSOLUTE KILL-SWITCH: First line of defense
   if (!analysis?.description || !Array.isArray(analysis.nutrients) || analysis.nutrients.length === 0) {
-    console.warn("❌ BLOCKED: Attempted save with incomplete analysis data");
+    console.error("🚨 BLOCKING SAVE — Missing GPT fields in trySaveMealServer");
     
-    // Log what's missing for debugging
-    const missingFields = [];
-    if (!analysis?.description) missingFields.push('description');
-    if (!Array.isArray(analysis.nutrients)) missingFields.push('nutrients array');
-    else if (analysis.nutrients.length === 0) missingFields.push('non-empty nutrients');
+    // Log the analysis for debugging
+    console.error(`🚨 [${requestId}] DEBUG - Analysis dump in trySaveMealServer:`, JSON.stringify(analysis, null, 2).substring(0, 300) + '...');
     
-    console.error(`🚫 [${requestId}] BLOCKING FIRESTORE SAVE in trySaveMealServer - Missing fields:`, missingFields);
+    // Log exactly what's missing
+    const missingParts = [];
+    if (!analysis?.description) missingParts.push('description');
+    if (!Array.isArray(analysis?.nutrients)) missingParts.push('nutrients array');
+    else if (analysis.nutrients.length === 0) missingParts.push('non-empty nutrients');
     
-    return {
-      success: false,
-      error: new Error(`Save blocked due to invalid GPT result: missing ${missingFields.join(', ')}`)
+    console.error(`🚨 [${requestId}] DEBUG - Missing fields in trySaveMealServer:`, missingParts);
+    
+    return { 
+      success: false, 
+      error: new Error(`KILL-SWITCH ENGAGED: Blocked invalid GPT result with missing ${missingParts.join(', ')}`)
     };
   }
   
+  // CRITICAL SAFEGUARD: Block any attempt to save with invalid analysis
+  if (!isValidAnalysis(analysis)) {
+    console.warn(`⚠️ [${requestId}] Not saving meal due to invalid analysis structure`);
+    console.error(`⚠️ [${requestId}] Invalid analysis data:`, JSON.stringify(analysis, null, 2).substring(0, 500) + '...');
+    return {
+      success: false,
+      error: new Error('Invalid analysis data: missing required fields')
+    };
+  }
+
   // Validate input parameters
   if (!userId) {
     console.warn(`⚠️ [${requestId}] Save to account requested but no userId provided`);
@@ -162,16 +182,6 @@ export async function trySaveMealServer({
     };
   }
   
-  // Validate analysis structure using the analysis validator
-  if (!isValidAnalysis(analysis)) {
-    console.warn(`⚠️ [${requestId}] Not saving meal due to invalid analysis structure`);
-    console.error(`⚠️ [${requestId}] Invalid analysis data:`, JSON.stringify(analysis, null, 2).substring(0, 500) + '...');
-    return {
-      success: false,
-      error: new Error('Invalid analysis data: missing required fields')
-    };
-  }
-
   // Create a promise that resolves with either the save operation or a timeout
   try {
     // Check if we have a valid imageUrl

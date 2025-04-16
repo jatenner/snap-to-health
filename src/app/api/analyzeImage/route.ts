@@ -668,10 +668,23 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
         else if (analysis.nutrients.length === 0) missingFields.push('non-empty nutrients');
         
         console.error(`❌ [${requestId}] FATAL: HARD EXIT - BLOCKING ALL FIRESTORE OPERATIONS - Missing fields:`, missingFields);
+        console.error(`❌ [${requestId}] DEBUG - GPT Analysis Dump:`, JSON.stringify(analysis, null, 2).substring(0, 500) + '...');
+        console.error(`📛 [${requestId}] DEBUG - Response Data Dump:`, JSON.stringify(responseData, null, 2).substring(0, 500) + '...');
         
+        // Try to reveal if there's any trace of null/undefined issues
+        console.error(`🔍 [${requestId}] DEBUG - Type Checks: isInvalidAnalysis=${isInvalidAnalysis}, 
+          analysis type=${typeof analysis}, 
+          description exists=${Boolean(analysis?.description)}, 
+          nutrients is array=${Array.isArray(analysis?.nutrients)},
+          nutrients length=${analysis?.nutrients?.length || 'N/A'}`);
+
         // CRITICAL: Return from the main POST handler immediately
         // This prevents ANY further execution in this route
         // All code after this point will NOT run for invalid analysis
+        
+        // Add indication that we're about to return
+        console.error("✅ EXITING EARLY - Next line will be return statement in fallback guard");
+        
         const fallbackResponse = NextResponse.json({
           success: false,
           fallback: true,
@@ -688,10 +701,16 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
         // Ensure all pending operations are complete before returning
         // This prevents any race conditions or lingering promises
         console.timeEnd(`⏱️ [${requestId}] Total API execution time`);
+        
+        // Log one more time right before return
+        console.error("🚪 LAST LOG BEFORE RETURN - If you see anything after this log with the same requestId, the guard failed!");
+        
         return fallbackResponse;
       }
 
       console.log("✅ Firestore logic executing after valid analysis");
+      console.log("🧠 STEP: Passed GPT validation check - Preparing for Firestore save");
+      console.log("🧠 GPT Analysis Snapshot:", JSON.stringify(analysis, null, 2).substring(0, 300) + '...');
       
       // If we get here, we have a valid analysis
       console.log(`✅ [${requestId}] Valid analysis detected – proceeding to save`);

@@ -43,7 +43,8 @@ export async function saveMealToFirestore(params: {
     !Array.isArray(analysis.nutrients) ||
     analysis.nutrients.length === 0
   ) {
-    console.warn(`❌ Blocked Firestore save in server-meal-saver due to invalid analysis`);
+    console.error(`❌ [${requestId}] BLOCKING SAVE — Missing GPT fields in server-meal-saver`);
+    console.log("🧠 STEP: Invalid analysis caught in server-meal-saver critical check");
     
     // Log detailed information about what's missing
     const missingParts = [];
@@ -51,12 +52,17 @@ export async function saveMealToFirestore(params: {
     if (!Array.isArray(analysis?.nutrients)) missingParts.push('nutrients array');
     else if (analysis.nutrients.length === 0) missingParts.push('non-empty nutrients');
     
+    console.error(`❌ [${requestId}] DEBUG - Missing fields in server-meal-saver:`, missingParts);
+    console.error(`❌ [${requestId}] DEBUG - Analysis dump:`, JSON.stringify(analysis, null, 2).substring(0, 300) + '...');
+    
     return { 
       success: false, 
       message: "Invalid analysis – save blocked",
       error: `Missing required fields: ${missingParts.join(', ')}`
     };
   }
+  
+  console.log(`🧠 [${requestId}] STEP: First critical check passed in server-meal-saver`);
   
   // SAFETY GUARD 1: Validate analysis is a proper object
   if (!analysis || typeof analysis !== 'object') {
