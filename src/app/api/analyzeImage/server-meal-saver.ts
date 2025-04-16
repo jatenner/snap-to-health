@@ -39,11 +39,21 @@ export async function saveMealToFirestore(params: {
   
   // ✅ 1. Strengthen Backend Validation
   if (!isValidAnalysis(analysis)) {
-    console.warn(`[${requestId}] Invalid analysis data received for save:`, JSON.stringify(analysis).substring(0, 200) + '...');
+    console.warn(`[${requestId}] ❌ Invalid analysis data received for save:`, JSON.stringify(analysis).substring(0, 200) + '...');
     return {
       success: false,
       error: "Invalid analysis format: missing description or nutrients",
       message: "Invalid analysis format: missing description or nutrients"
+    };
+  }
+  
+  // Extra verification for extra safety - these validations should never fail if the top-level guard works
+  if (!analysis.description || !Array.isArray(analysis.nutrients) || analysis.nutrients.length === 0) {
+    console.error(`[${requestId}] 🚨 CRITICAL: Invalid analysis bypassed top-level guard:`, JSON.stringify(analysis).substring(0, 200) + '...');
+    return {
+      success: false,
+      error: "Invalid analysis format: critical data missing",
+      message: "Invalid analysis format: critical data missing"
     };
   }
   

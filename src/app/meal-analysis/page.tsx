@@ -236,7 +236,11 @@ export default function MealAnalysisPage() {
       try {
         const fallbackData = JSON.parse(storedFallbackResult);
         console.warn("Fallback data detected from upload page:", fallbackData);
-        setFallbackInfo(fallbackData);
+        setFallbackInfo({
+          ...fallbackData,
+          fallback: true,
+          failureReason: fallbackData.message || "Image could not be processed completely."
+        });
         setError("Analysis Fallback");
         setLoading(false);
         setLoadingStage('error');
@@ -391,9 +395,9 @@ export default function MealAnalysisPage() {
       return (
         <div className="min-h-[60vh] flex items-center justify-center p-4">
           <ErrorCard
-            title="We couldn't analyze your meal"
-            message={fallbackInfo.failureReason || "Try uploading a clearer, well-lit image with the full plate in view."}
-            tip={fallbackInfo.insight || "You can manually log this meal instead."}
+            title="Meal analysis failed"
+            message="The image could not be processed. Try again with better lighting and clear food separation."
+            tip="Images must be well-lit and contain distinct food items."
             buttonText="Try Again"
             onClick={() => router.push('/upload')}
           />

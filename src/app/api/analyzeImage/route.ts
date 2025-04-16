@@ -653,7 +653,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       // Add console log for raw response
       console.log("🔍 RAW GPT RESULT:", JSON.stringify(analysis, null, 2));
       
-      // Guard against incomplete GPT results
+      // TOP LEVEL GUARD - Completely block invalid GPT results
       if (
         !analysis?.description ||
         !Array.isArray(analysis.nutrients) ||
@@ -661,11 +661,11 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       ) {
         console.warn("🚫 Incomplete GPT result. Skipping save to Firestore. Data:", JSON.stringify(analysis, null, 2));
         
-        return createAnalysisResponse({
-          ...responseData,
+        // Use NextResponse directly to guarantee no further processing
+        return NextResponse.json({
           success: false,
           fallback: true,
-          message: "GPT fallback triggered — description or nutrients missing",
+          message: "Incomplete GPT result – skipping save",
           analysis,
         });
       }
