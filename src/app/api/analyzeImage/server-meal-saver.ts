@@ -1,4 +1,5 @@
 import { trySaveMealServer } from '@/lib/serverMealUtils';
+import { isValidAnalysis, createFallbackAnalysis } from '@/lib/utils/analysisValidator';
 
 /**
  * Saves a meal to Firestore using the server-side Admin SDK
@@ -17,6 +18,7 @@ export async function saveMealToFirestore(params: {
   success: boolean;
   mealId?: string;
   error?: string;
+  message?: string;
 }> {
   const { userId, imageUrl, analysis, requestId, requestData, jsonData } = params;
   
@@ -32,6 +34,16 @@ export async function saveMealToFirestore(params: {
     return {
       success: false,
       error: `Cannot save meal: missing ${missingData.join(', ')}`
+    };
+  }
+  
+  // ✅ 1. Strengthen Backend Validation
+  if (!isValidAnalysis(analysis)) {
+    console.warn(`[${requestId}] Invalid analysis data received for save:`, JSON.stringify(analysis).substring(0, 200) + '...');
+    return {
+      success: false,
+      error: "Invalid analysis format: missing description or nutrients",
+      message: "Invalid analysis format: missing description or nutrients"
     };
   }
   
@@ -97,14 +109,18 @@ export async function saveMealToFirestore(params: {
  */
 export function updateResponseWithSaveResult(
   responseData: any, 
-  saveResult: { success: boolean; mealId?: string; error?: string }
+  saveResult: { success: boolean; mealId?: string; error?: string; message?: string }
 ): void {
   if (saveResult.success) {
     responseData.debug.processingSteps.push('Meal saved successfully');
     responseData.mealSaved = true;
     responseData.mealId = saveResult.mealId;
   } else {
-    responseData.debug.processingSteps.push(`Meal save failed: ${saveResult.error}`);
+    // Use the specific error message if available
+    const errorMessage = saveResult.message || saveResult.error || 'unknown error';
+    responseData.debug.processingSteps.push(`Meal save failed: ${errorMessage}`);
     responseData.mealSaved = false;
+    // Optionally store the specific error in the response if needed
+    responseData.saveError = errorMessage;
   }
 } 

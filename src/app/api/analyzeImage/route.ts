@@ -3,7 +3,9 @@ import axios from 'axios';
 import crypto from 'crypto';
 import { adminStorage } from '@/lib/firebaseAdmin';
 import { trySaveMealServer } from '@/lib/serverMealUtils';
-import { createAnalysisResponse, createEmptyFallbackAnalysis, createErrorResponse, safeExtractImage } from './analyzer';
+import { createAnalysisResponse, createEmptyFallbackAnalysis, createErrorResponse } from './analyzer';
+import { validateBase64Image } from '@/lib/imageProcessing/validateImage';
+import { isValidAnalysis, createFallbackAnalysis } from '@/lib/utils/analysisValidator';
 
 // Placeholder image for development fallback
 const PLACEHOLDER_IMAGE = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
@@ -348,6 +350,43 @@ function createFallbackResponse(reason: string, partialResult: any): any {
   return createEmptyFallbackAnalysis();
 }
 
+// Image extraction and validation
+export async function safeExtractImage(formData: FormData | null, jsonData: any): Promise<string | null> {
+  try {
+    let base64Image: string | null = null;
+
+    // Handle FormData submission
+    if (formData && formData.get('image')) {
+      const imageFile = formData.get('image') as File;
+      const arrayBuffer = await imageFile.arrayBuffer();
+      const buffer = Buffer.from(arrayBuffer);
+      base64Image = buffer.toString('base64');
+    } 
+    // Handle JSON submission with base64 image
+    else if (jsonData && typeof jsonData.image === 'string') {
+      // Extract base64 data (if the prefix exists, remove it)
+      const match = jsonData.image.match(/^data:image\/[a-zA-Z]+;base64,(.+)$/);
+      base64Image = match ? match[1] : jsonData.image;
+    }
+
+    // Validate the extracted image
+    if (base64Image) {
+      const validationResult = validateBase64Image(base64Image);
+      if (!validationResult.valid) {
+        console.warn(`Image validation failed: ${validationResult.error}`);
+        return null;
+      }
+      return base64Image;
+    }
+
+    console.warn('No image found in the request');
+    return null;
+  } catch (error) {
+    console.error('Failed to extract image', error);
+    return null;
+  }
+}
+
 // The main POST handler for image analysis
 export async function POST(request: NextRequest): Promise<NextResponse> {
   // Generate a unique request ID for tracing this request through logs
@@ -614,47 +653,6 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       
       responseData.debug.processingSteps.push('Analysis completed');
       
-      // Handle potential save to Firestore if user is logged in
-      if (userId && imageUrl && analysisResult.result) {
-        try {
-          responseData.debug.processingSteps.push('Attempting to save meal to Firestore');
-          console.log(`[${requestId}] Attempting to save meal to Firestore for user ${userId}`);
-          
-          const saveResult = await trySaveMealServer({
-            userId,
-            imageUrl,
-            analysis: analysisResult.result,
-            mealName: mealName || analysisResult.result.description || 'Unnamed Meal',
-            requestId,
-            timeout: 5000 // 5 second timeout
-          });
-          
-          if (saveResult.success) {
-            responseData.debug.processingSteps.push('Meal saved successfully');
-            responseData.mealSaved = true;
-            responseData.mealId = saveResult.savedMealId;
-            console.log(`[${requestId}] Meal saved successfully: ${saveResult.savedMealId}`);
-          } else {
-            responseData.debug.processingSteps.push(`Meal save failed: ${saveResult.error}`);
-            responseData.mealSaved = false;
-            console.error(`[${requestId}] Meal save failed:`, saveResult.error);
-          }
-        } catch (saveError) {
-          const errorMessage = `Failed to save meal: ${saveError instanceof Error ? saveError.message : 'Unknown error'}`;
-          responseData.debug.processingSteps.push(errorMessage);
-          responseData.mealSaved = false;
-          console.error(`[${requestId}] Error saving meal:`, saveError);
-        }
-      } else {
-        if (!userId) {
-          responseData.debug.processingSteps.push('No userId provided, skipping meal save');
-        } else if (!imageUrl) {
-          responseData.debug.processingSteps.push('No imageUrl available, skipping meal save');
-        } else {
-          responseData.debug.processingSteps.push('No valid analysis result, skipping meal save');
-        }
-      }
-      
       // Prepare final response
       responseData.success = true;
       responseData.message = 'Analysis completed successfully';
@@ -664,43 +662,6 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       
       if (analysisResult.reasoning) {
         responseData.debug.reasoning = analysisResult.reasoning;
-      }
-      
-      // Save the meal to Firestore if we have a userId and valid analysis
-      if (userId && imageUrl && responseData.analysis && !responseData.analysis.fallback) {
-        try {
-          const { saveMealToFirestore, updateResponseWithSaveResult } = await import('./server-meal-saver');
-          
-          const saveResult = await saveMealToFirestore({
-            userId,
-            imageUrl,
-            analysis: responseData.analysis,
-            requestId,
-            requestData,
-            jsonData
-          });
-          
-          // Update the response with save results
-          updateResponseWithSaveResult(responseData, saveResult);
-          console.log(`✅ [${requestId}] Meal saving process completed with success: ${saveResult.success}`);
-        } catch (saveError) {
-          console.error(`❌ [${requestId}] Error during meal save:`, saveError);
-          responseData.debug.processingSteps.push('Meal save failed due to error');
-          responseData.debug.errorDetails.push({ 
-            step: 'meal_save', 
-            error: saveError instanceof Error ? saveError.message : 'Unknown error',
-            details: saveError 
-          });
-          responseData.mealSaved = false;
-        }
-      } else {
-        // Log why we're skipping meal save
-        if (!userId) {
-          console.log(`ℹ️ [${requestId}] No userId provided, skipping meal save`);
-          responseData.debug.processingSteps.push('No userId provided, skipping meal save');
-        } else if (!imageUrl) {
-          console.log(`ℹ️ [${requestId}] No imageUrl available, skipping meal save`);
-        }
       }
     } catch (error) {
       // Catch errors during analysis or meal saving

@@ -1,5 +1,6 @@
 import { adminDb, adminStorage } from './firebaseAdmin';
 import { Timestamp } from 'firebase-admin/firestore';
+import { isValidAnalysis, createFallbackAnalysis } from './utils/analysisValidator';
 
 /**
  * Save meal analysis data to Firestore using Firebase Admin SDK
@@ -124,6 +125,16 @@ export async function trySaveMealServer({
     return { 
       success: false, 
       error: new Error('Cannot save insufficient analysis results')
+    };
+  }
+  
+  // Validate analysis structure using the analysis validator
+  if (!isValidAnalysis(analysis)) {
+    console.warn(`⚠️ [${requestId}] Not saving meal due to invalid analysis structure`);
+    console.error(`⚠️ [${requestId}] Invalid analysis data:`, JSON.stringify(analysis, null, 2).substring(0, 500) + '...');
+    return {
+      success: false,
+      error: new Error('Invalid analysis data: missing required fields')
     };
   }
 
