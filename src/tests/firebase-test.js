@@ -68,7 +68,7 @@ async function testFirebaseAdmin() {
     const requiredVars = [
       'NEXT_PUBLIC_FIREBASE_PROJECT_ID',
       'FIREBASE_CLIENT_EMAIL',
-      'FIREBASE_PRIVATE_KEY'
+      'FIREBASE_PRIVATE_KEY_BASE64'
     ];
     
     const missingVars = requiredVars.filter(varName => !process.env[varName]);
@@ -78,10 +78,28 @@ async function testFirebaseAdmin() {
       return false;
     }
     
-    // Process private key (might include escaped newlines)
+    // Decode base64 private key
     const getPrivateKey = () => {
-      const privateKey = process.env.FIREBASE_PRIVATE_KEY;
-      return privateKey.includes('\\n') ? privateKey.replace(/\\n/g, '\n') : privateKey;
+      try {
+        const privateKeyBase64 = process.env.FIREBASE_PRIVATE_KEY_BASE64;
+        if (!privateKeyBase64) {
+          throw new Error('FIREBASE_PRIVATE_KEY_BASE64 is not set');
+        }
+        
+        // Decode from base64
+        const decodedKey = Buffer.from(privateKeyBase64, 'base64').toString('utf8');
+        
+        // Basic validation
+        if (!decodedKey.includes('-----BEGIN PRIVATE KEY-----') || 
+            !decodedKey.includes('-----END PRIVATE KEY-----')) {
+          throw new Error('Decoded private key is not in valid PEM format');
+        }
+        
+        return decodedKey;
+      } catch (error) {
+        fail(`Failed to decode private key: ${error.message}`);
+        throw error;
+      }
     };
     
     // Initialize Firebase Admin

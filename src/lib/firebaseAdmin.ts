@@ -10,47 +10,77 @@ let adminAuth: any;
 let adminStorage: any;
 
 if (!apps.length) {
-  try {
-    // Check if we have the necessary credentials
-    if (
-      process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID &&
-      process.env.FIREBASE_CLIENT_EMAIL &&
-      process.env.FIREBASE_PRIVATE_KEY
-    ) {
-      // Function to properly process the private key
-      const getPrivateKey = () => {
-        const privateKey = process.env.FIREBASE_PRIVATE_KEY;
-        // Handle different formats of the private key
-        if (privateKey?.includes('\\n')) {
-          return privateKey.replace(/\\n/g, '\n');
+  // Check if we have the necessary credentials
+  const projectId = process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID;
+  const clientEmail = process.env.FIREBASE_CLIENT_EMAIL;
+  const privateKeyBase64 = process.env.FIREBASE_PRIVATE_KEY_BASE64;
+  const storageBucket = process.env.NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET;
+  
+  // Check for missing required environment variables
+  const missingVars = [];
+  if (!projectId) missingVars.push('NEXT_PUBLIC_FIREBASE_PROJECT_ID');
+  if (!clientEmail) missingVars.push('FIREBASE_CLIENT_EMAIL');
+  if (!privateKeyBase64) missingVars.push('FIREBASE_PRIVATE_KEY_BASE64');
+  
+  if (missingVars.length > 0) {
+    const errorMessage = `Firebase Admin SDK initialization failed: Missing required environment variables: ${missingVars.join(', ')}`;
+    console.error(errorMessage);
+    // Continue execution but Firebase Admin services won't be available
+  } else {
+    try {
+      // Decode the base64 encoded private key
+      let decodedPrivateKey: string;
+      try {
+        decodedPrivateKey = Buffer.from(privateKeyBase64!, 'base64').toString('utf8');
+        
+        // Basic validation of the decoded key format
+        if (!decodedPrivateKey.includes('-----BEGIN PRIVATE KEY-----') || 
+            !decodedPrivateKey.includes('-----END PRIVATE KEY-----') || 
+            !decodedPrivateKey.includes('\n')) {
+          throw new Error('Decoded private key is not in valid PEM format');
         }
-        return privateKey;
-      };
+        
+        console.log('Successfully decoded base64 private key');
+      } catch (error: any) {
+        const errorMessage = `Failed to decode Firebase private key from base64: ${error?.message || 'Unknown error'}`;
+        console.error(errorMessage);
+        throw new Error(errorMessage);
+      }
+      
+      // Simple logging (without revealing sensitive key information)
+      console.log(`Initializing Firebase Admin with: 
+        - Project ID: ${projectId}
+        - Client Email: ${clientEmail ? clientEmail.substring(0, 5) + '...' : 'missing'}
+        - Private Key: Successfully decoded (PEM format)
+        - Storage Bucket: ${storageBucket || 'not specified'}`);
 
+      // Initialize Firebase Admin with the decoded private key
       initializeApp({
         credential: cert({
-          projectId: process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID,
-          clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
-          privateKey: getPrivateKey(),
+          projectId,
+          clientEmail,
+          privateKey: decodedPrivateKey,
         }),
-        storageBucket: process.env.NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET,
+        storageBucket,
       });
       
+      // Initialize services
       adminDb = getFirestore();
       adminAuth = getAuth();
       adminStorage = getStorage();
       
-      console.log('Firebase Admin initialized successfully');
-    } else {
-      const missingVars = [];
-      if (!process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID) missingVars.push('NEXT_PUBLIC_FIREBASE_PROJECT_ID');
-      if (!process.env.FIREBASE_CLIENT_EMAIL) missingVars.push('FIREBASE_CLIENT_EMAIL');
-      if (!process.env.FIREBASE_PRIVATE_KEY) missingVars.push('FIREBASE_PRIVATE_KEY');
+      console.log('✅ Firebase Admin initialized successfully');
+    } catch (error: any) {
+      console.error('❌ Firebase Admin initialization error:', error?.message || error);
       
-      console.warn(`Firebase Admin SDK not initialized: Missing environment variables: ${missingVars.join(', ')}`);
+      // Provide specific guidance for base64 key issues
+      if (error.message?.includes('private key') || error.message?.includes('Firebase')) {
+        console.error('Please check that your FIREBASE_PRIVATE_KEY_BASE64 environment variable:');
+        console.error('1. Contains a valid base64-encoded Firebase service account private key');
+        console.error('2. Is complete (not truncated)');
+        console.error('3. Was generated with: node src/scripts/encodePrivateKey.js');
+      }
     }
-  } catch (error) {
-    console.error('Firebase Admin initialization error:', error);
   }
 }
 
