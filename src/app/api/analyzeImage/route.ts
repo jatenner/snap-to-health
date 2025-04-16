@@ -667,23 +667,32 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
         if (!Array.isArray(analysis.nutrients)) missingFields.push('nutrients array');
         else if (analysis.nutrients.length === 0) missingFields.push('non-empty nutrients');
         
-        console.error(`❌ [${requestId}] BLOCKING ALL FIRESTORE SAVE ATTEMPTS - Missing required fields:`, missingFields);
+        console.error(`❌ [${requestId}] FATAL: HARD EXIT - BLOCKING ALL FIRESTORE OPERATIONS - Missing fields:`, missingFields);
         
-        // Return early with complete response - nothing after this runs
-        return NextResponse.json({
+        // CRITICAL: Return from the main POST handler immediately
+        // This prevents ANY further execution in this route
+        // All code after this point will NOT run for invalid analysis
+        const fallbackResponse = NextResponse.json({
           success: false,
           fallback: true,
           message: "GPT fallback — missing description or nutrients",
           analysis: createEmptyFallbackAnalysis(),
           payload: {
-            originalAnalysis: analysis, // Include original for debugging
+            originalAnalysis: analysis,
             missingFields,
             requestId
           },
           mealSaved: false
         });
+        
+        // Ensure all pending operations are complete before returning
+        // This prevents any race conditions or lingering promises
+        console.timeEnd(`⏱️ [${requestId}] Total API execution time`);
+        return fallbackResponse;
       }
 
+      console.log("✅ Firestore logic executing after valid analysis");
+      
       // If we get here, we have a valid analysis
       console.log(`✅ [${requestId}] Valid analysis detected – proceeding to save`);
       
