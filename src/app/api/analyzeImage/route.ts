@@ -650,29 +650,20 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       
       const analysis = analysisResult.result;
 
-      // ✅ 2. Add Defensive Fallback Guard
+      // Replace previous guard with user-provided snippet
       if (
         !analysis?.description ||
         !Array.isArray(analysis?.nutrients) ||
         analysis.nutrients.length === 0
       ) {
-        console.warn(`⚠️ [${requestId}] Skipping save: incomplete GPT result`, {
-          description: analysis?.description,
-          nutrients: analysis?.nutrients,
+        console.warn("⛔ Skipping save: invalid GPT result", analysis);
+        // Return NextResponse directly as requested
+        return NextResponse.json({
+          success: false,
+          fallback: true,
+          message: "Fallback: GPT did not return valid description or nutrients",
+          analysis, // Include the potentially incomplete analysis
         });
-
-        // Populate responseData for fallback
-        responseData.success = false;
-        responseData.fallback = true;
-        responseData.message = "Analysis fallback triggered: missing description or nutrients";
-        // Use the potentially partial analysis data received for the response
-        responseData.analysis = analysis || createEmptyFallbackAnalysis(); 
-        responseData.imageUrl = imageUrl; 
-        responseData.requestId = requestId;
-        responseData.debug.timestamps.end = new Date().toISOString();
-        console.timeEnd(`⏱️ [${requestId}] Total API execution time (Defensive Fallback)`);
-
-        return createAnalysisResponse(responseData); // Use helper to ensure consistent format
       }
       
       // If analysis passed the guard, proceed with preparing the response
