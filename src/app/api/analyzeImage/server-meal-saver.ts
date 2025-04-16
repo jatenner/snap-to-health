@@ -37,6 +37,20 @@ export async function saveMealToFirestore(params: {
     };
   }
   
+  // CRITICAL SAFETY CHECK: Block any invalid analysis at the service layer
+  if (
+    !analysis?.description ||
+    !Array.isArray(analysis.nutrients) ||
+    analysis.nutrients.length === 0
+  ) {
+    console.warn(`❌ Blocked save inside server-meal-saver.ts due to invalid analysis`);
+    return { 
+      success: false, 
+      message: "Invalid analysis – not saved",
+      error: "Missing required fields: description or nutrients"
+    };
+  }
+  
   // SAFETY GUARD 1: Validate analysis is a proper object
   if (!analysis || typeof analysis !== 'object') {
     console.error(`[${requestId}] ❌ Critical: Analysis is not a valid object`);

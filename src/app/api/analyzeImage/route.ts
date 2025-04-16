@@ -653,22 +653,19 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       // CRITICAL GUARD: Log raw GPT analysis and block invalid results
       console.log("🔍 RAW GPT RESULT:", JSON.stringify(analysis, null, 2));
       
-      // Explicit check for required properties to prevent invalid data reaching any save logic
-      // This must block execution before ANY assignment to responseData.analysis
-      const hasMissingDescription = !analysis?.description || typeof analysis.description !== 'string' || analysis.description.trim() === '';
-      const hasMissingNutrients = !Array.isArray(analysis?.nutrients) || analysis.nutrients.length === 0;
-      
-      if (hasMissingDescription || hasMissingNutrients) {
-        console.warn(`🚫 GPT FALLBACK GUARD TRIGGERED - blocking all save attempts. Missing: ${hasMissingDescription ? 'description' : ''} ${hasMissingNutrients ? 'nutrients' : ''}`);
-        
-        // Create a complete error response with fallback flag
-        // This format is consistent with other API responses and what frontend expects
-        return createAnalysisResponse({
-          ...responseData,
+      const isInvalid =
+        !analysis?.description ||
+        !Array.isArray(analysis.nutrients) ||
+        analysis.nutrients.length === 0;
+
+      if (isInvalid) {
+        console.warn("❌ GPT fallback triggered – skipping all save logic");
+
+        return NextResponse.json({
           success: false,
           fallback: true,
-          message: "GPT fallback triggered — description or nutrients missing",
-          analysis: createEmptyFallbackAnalysis(), // Always use safe fallback data
+          message: "GPT fallback – incomplete analysis (no description or nutrients)",
+          analysis: createEmptyFallbackAnalysis(), // Use proper fallback analysis structure
           mealSaved: false // Explicitly mark as not saved
         });
       }
@@ -688,8 +685,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       }
 
       // --- Save Meal Logic (Only if analysis passed the guard) --- 
-      // The guard logic above replaces the need for `isTrulyFallback` and `fallback` checks here
-      const shouldSave = userId && typeof imageUrl === 'string' && responseData.analysis;
+      const shouldSave = userId && typeof imageUrl === 'string';
       
       if (shouldSave) { 
         try {
