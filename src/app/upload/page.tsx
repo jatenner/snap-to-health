@@ -365,7 +365,18 @@ export default function UploadPage() {
         if (response.data?.fallback === true) {
           console.log('Received fallback response:', response.data.message || 'unknown reason');
           
-          // Store fallback data for display
+          // Cancel any pending toast to avoid confusion
+          toast.dismiss(analyzeToast);
+          
+          // Structured logging for debugging
+          console.warn("📊 Fallback analysis data:", {
+            message: response.data.message,
+            success: response.data.success,
+            fallback: response.data.fallback,
+            mealSaved: response.data.mealSaved || false
+          });
+          
+          // Store fallback data for display on meal-analysis page
           const fallbackResult = response.data;
           sessionStorage.setItem('fallbackResult', JSON.stringify(fallbackResult));
           
@@ -373,8 +384,7 @@ export default function UploadPage() {
           const fallbackMessage = response.data.message || 
             "We couldn't clearly identify your meal. Try a photo with better lighting and clearer food separation.";
           
-          // Cancel any existing toast before showing the error message
-          toast.dismiss(analyzeToast);
+          toast.error(fallbackMessage, { duration: 5000 });
           setError(fallbackMessage);
           setIsAnalyzing(false);
           setAnalysisStage('fallback');

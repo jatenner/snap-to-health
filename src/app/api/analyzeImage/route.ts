@@ -650,30 +650,33 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       
       const analysis = analysisResult.result;
 
-      // Add console log for raw response
+      // CRITICAL GUARD: Log raw GPT analysis and block invalid results
       console.log("🔍 RAW GPT RESULT:", JSON.stringify(analysis, null, 2));
       
-      // TOP LEVEL GUARD - Completely block invalid GPT results
-      if (
-        !analysis?.description ||
-        !Array.isArray(analysis.nutrients) ||
-        analysis.nutrients.length === 0
-      ) {
-        console.warn("🚫 Incomplete GPT result. Skipping save to Firestore. Data:", JSON.stringify(analysis, null, 2));
+      // Explicit check for required properties to prevent invalid data reaching any save logic
+      // This must block execution before ANY assignment to responseData.analysis
+      const hasMissingDescription = !analysis?.description || typeof analysis.description !== 'string' || analysis.description.trim() === '';
+      const hasMissingNutrients = !Array.isArray(analysis?.nutrients) || analysis.nutrients.length === 0;
+      
+      if (hasMissingDescription || hasMissingNutrients) {
+        console.warn(`🚫 GPT FALLBACK GUARD TRIGGERED - blocking all save attempts. Missing: ${hasMissingDescription ? 'description' : ''} ${hasMissingNutrients ? 'nutrients' : ''}`);
         
-        // Use NextResponse directly to guarantee no further processing
-        return NextResponse.json({
+        // Create a complete error response with fallback flag
+        // This format is consistent with other API responses and what frontend expects
+        return createAnalysisResponse({
+          ...responseData,
           success: false,
           fallback: true,
-          message: "Incomplete GPT result – skipping save",
-          analysis,
+          message: "GPT fallback triggered — description or nutrients missing",
+          analysis: createEmptyFallbackAnalysis(), // Always use safe fallback data
+          mealSaved: false // Explicitly mark as not saved
         });
       }
       
-      // Log after guard passes
-      console.log(`✅ [${requestId}] Analysis is complete and valid, proceeding with response`);
+      // If we get here, we have a valid analysis
+      console.log(`✅ [${requestId}] Valid GPT result confirmed - description and nutrients are present`);
       
-      // If analysis passed the guard, proceed with preparing the response
+      // Only set responseData.analysis AFTER validation passed
       responseData.success = true; 
       responseData.message = 'Analysis completed'; 
       responseData.analysis = analysis; 
