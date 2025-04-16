@@ -318,10 +318,30 @@ async function analyzeImageWithGPT4V(
   requestId: string
 ): Promise<any> {
   console.log(`[${requestId}] Analyzing image with GPT-4V...`);
-  
-  // For now, return a mock response with fallback data
+
+  // --- Simulate Analysis --- 
+  // In a real scenario, this would be the result from GPT/Nutritionix
+  const rawAnalysisResult = createEmptyFallbackAnalysis(); // Simulate getting an invalid result
+
+  // ✅ Check if the raw analysis result is valid
+  if (!isValidAnalysis(rawAnalysisResult)) {
+    console.warn(`[${requestId}] GPT/Nutritionix analysis result is invalid, returning structured fallback.`);
+    // Return the structured fallback object
+    return {
+      result: {
+        fallback: true,
+        success: false,
+        message: "Unable to analyze the image",
+        description: "Analysis failed due to unclear image or missing data.",
+        nutrients: [],
+        insight: null
+      }
+    };
+  }
+
+  // If valid, return the actual result (though in this mock, it's always fallback)
   return {
-    result: createEmptyFallbackAnalysis()
+    result: rawAnalysisResult 
   };
 }
 

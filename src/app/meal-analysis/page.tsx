@@ -246,7 +246,10 @@ export default function MealAnalysisPage() {
         
         if (!isValidAnalysis(parsedResult)) {
           console.warn("Invalid analysis data (validation failed):", parsedResult);
-          setError("We couldn't analyze this meal. Please try again with a clearer photo.");
+          setError(
+            "We couldn't analyze this meal. Try again with a clearer image. " + 
+            "Tip: Ensure your plate is fully visible with all food items clear and distinct."
+          );
           setLoading(false);
           setLoadingStage('error');
           sessionStorage.removeItem('analysisResult');
