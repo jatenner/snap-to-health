@@ -147,7 +147,7 @@ describe('trySaveMeal', () => {
     // Check that the first parameter is userId, and second contains placeholder URL
     const saveMealCall = (mealUtils.saveMealToFirestore as jest.Mock).mock.calls[0];
     expect(saveMealCall[0]).toBe(mockUserId);
-    expect(saveMealCall[1]).toContain('https://storage.googleapis.com/snaphealth-39b14.firebasestorage.app/placeholder-meal-');
+    expect(saveMealCall[1]).toContain('https://storage.googleapis.com/snaphealth-39b14.appspot.com/placeholder-meal');
   });
 
   test('should handle Firestore save errors', async () => {

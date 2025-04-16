@@ -9,11 +9,17 @@ import { useAuth } from '@/contexts/AuthContext';
 import { uploadMealImage, saveMealToFirestore } from '@/lib/mealUtils';
 import { getUserHealthGoal } from '@/utils/userUtils';
 import { toast } from 'react-hot-toast';
-import { useLoading } from '@/contexts/LoadingContext';
 
 interface OptimisticResult {
   description: string;
   ingredients: string[];
+  feedback?: string[];
+  suggestions?: string[];
+  goalScore?: number;
+  goalName?: string;
+  scoreExplanation?: string;
+  positiveFoodFactors?: string[];
+  negativeFoodFactors?: string[];
 }
 
 export default function UploadPage() {
@@ -31,7 +37,6 @@ export default function UploadPage() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const router = useRouter();
   const { currentUser, loading: authLoading, authInitialized } = useAuth();
-  const { setLoading } = useLoading();
   const [showOptions, setShowOptions] = useState(false);
   const [imagePreview, setImagePreview] = useState<string | null>(null);
   const [imageValidated, setImageValidated] = useState(true);
