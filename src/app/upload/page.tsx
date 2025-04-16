@@ -432,14 +432,44 @@ export default function UploadPage() {
       
       // Final validation before storing the result
       try {
+        // Log the raw response for debugging
+        console.log("Raw analysis result before storing:", response.data);
+        
         // Validate analysis structure one more time before storing
         if (!response.data || typeof response.data !== 'object') {
           console.warn('Invalid result structure before storing:', response.data);
           throw new Error('Invalid or corrupted analysis result');
         }
         
+        // TODO: Add more comprehensive validation of specific fields
+        // Verify that critical fields exist and have the expected types
+        const requiredFields = ['description', 'nutrients'];
+        const missingFields = requiredFields.filter(field => !(field in response.data));
+        
+        if (missingFields.length > 0) {
+          console.error("Missing required fields in analysis:", missingFields);
+          throw new Error(`Invalid analysis data: missing ${missingFields.join(', ')}`);
+        }
+        
+        // Validate array fields
+        if (!Array.isArray(response.data.nutrients)) {
+          console.error("nutrients is not an array:", response.data.nutrients);
+          throw new Error('Invalid analysis data: nutrients must be an array');
+        }
+        
+        let resultToStore = response.data;
+        
+        // Try to safely stringify the analysis result
+        let resultString;
+        try {
+          resultString = JSON.stringify(resultToStore);
+        } catch (stringifyError) {
+          console.error('Error stringifying analysis result:', stringifyError);
+          throw new Error('Failed to process analysis data for storage');
+        }
+        
         // Store analysis result and metadata in sessionStorage
-        sessionStorage.setItem('analysisResult', JSON.stringify(response.data));
+        sessionStorage.setItem('analysisResult', resultString);
         sessionStorage.setItem('previewUrl', previewUrl || '');
         sessionStorage.setItem('mealSaved', response.data.saved ? 'true' : 'false');
         
