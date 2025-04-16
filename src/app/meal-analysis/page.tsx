@@ -44,6 +44,7 @@ interface AnalysisResult {
   lowConfidence?: boolean;
   failureReason?: string;
   insight?: string;
+  message?: string;
 }
 
 // Component to display ingredients with confidence levels
@@ -395,10 +396,14 @@ export default function MealAnalysisPage() {
       return (
         <div className="min-h-[60vh] flex items-center justify-center p-4">
           <ErrorCard
-            title="Meal analysis failed"
-            message="The image could not be processed. Try again with better lighting and clear food separation."
-            tip="Images must be well-lit and contain distinct food items."
-            buttonText="Try Again"
+            title="Analysis Failed"
+            message={
+              fallbackInfo.failureReason || 
+              fallbackInfo.message || 
+              "The AI couldn't properly analyze this meal image. Please try again with a clearer photo."
+            }
+            tip="For best results, take photos in good lighting with the food clearly visible. Make sure all food items are in frame and easily distinguishable."
+            buttonText="Try Another Photo"
             onClick={() => router.push('/upload')}
           />
         </div>
@@ -410,6 +415,7 @@ export default function MealAnalysisPage() {
           <ErrorCard
             title="Analysis Error"
             message={error}
+            tip="If this problem persists, try refreshing your browser or uploading a different image."
             buttonText="Try Again"
             onClick={() => router.push('/upload')}
           />
