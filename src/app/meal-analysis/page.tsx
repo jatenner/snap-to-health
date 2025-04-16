@@ -229,15 +229,47 @@ export default function MealAnalysisPage() {
     if (storedResult) {
       try {
         setLoadingStage('parsing');
+        
+        // Log the raw response for debugging
+        console.log("Raw analysis result:", storedResult);
+        
         const parsedResult = JSON.parse(storedResult);
         
-        // Validate that the parsed result has the required fields
-        if (!parsedResult || 
-            typeof parsedResult !== 'object' || 
-            !('description' in parsedResult) || 
-            !('nutrients' in parsedResult) || 
-            !Array.isArray(parsedResult.nutrients)) {
-          throw new Error('Invalid or corrupted analysis data');
+        // More comprehensive validation of the analysis data structure
+        if (!parsedResult || typeof parsedResult !== 'object') {
+          throw new Error('Invalid analysis data: not an object');
+        }
+        
+        // TODO: Refine structure assumptions - add more specific type checking for complex nested objects
+        // Check for required top-level fields
+        const requiredFields = ['description', 'nutrients'];
+        const missingFields = requiredFields.filter(field => !(field in parsedResult));
+        
+        if (missingFields.length > 0) {
+          console.error("Missing required fields in analysis:", missingFields);
+          throw new Error(`Invalid analysis data: missing ${missingFields.join(', ')}`);
+        }
+        
+        // Validate nutrients array structure
+        if (!Array.isArray(parsedResult.nutrients)) {
+          console.error("nutrients is not an array:", parsedResult.nutrients);
+          throw new Error('Invalid analysis data: nutrients must be an array');
+        }
+        
+        // Validate other array fields if they exist
+        if (parsedResult.feedback && !Array.isArray(parsedResult.feedback)) {
+          console.error("feedback is not an array:", parsedResult.feedback);
+          throw new Error('Invalid analysis data: feedback must be an array');
+        }
+        
+        if (parsedResult.suggestions && !Array.isArray(parsedResult.suggestions)) {
+          console.error("suggestions is not an array:", parsedResult.suggestions);
+          throw new Error('Invalid analysis data: suggestions must be an array');
+        }
+        
+        if (parsedResult.detailedIngredients && !Array.isArray(parsedResult.detailedIngredients)) {
+          console.error("detailedIngredients is not an array:", parsedResult.detailedIngredients);
+          throw new Error('Invalid analysis data: detailedIngredients must be an array');
         }
         
         // Check if this is a partial result
@@ -269,7 +301,13 @@ export default function MealAnalysisPage() {
         }, 300);
       } catch (err: any) {
         console.error('Failed to parse stored analysis result:', err);
-        setError(err.message || 'Failed to load analysis results');
+        
+        // Create a user-friendly error message
+        const errorMessage = err.message && err.message.includes('Invalid analysis data') 
+          ? 'Something went wrong processing your meal data. Please try again or upload a different image.'
+          : 'Failed to load analysis results. Please try uploading a new image.';
+        
+        setError(errorMessage);
         setLoading(false);
         setLoadingStage('error');
       }
