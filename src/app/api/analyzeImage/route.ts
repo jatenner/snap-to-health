@@ -1,10 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import axios from 'axios';
 import crypto from 'crypto';
-import { saveMealToFirestore, trySaveMeal } from '@/lib/mealUtils';
-import { storage } from '@/lib/firebase';
-import { ref, uploadBytes, getDownloadURL, UploadResult } from 'firebase/storage';
 import { adminStorage } from '@/lib/firebaseAdmin';
+import { trySaveMealServer } from '@/lib/serverMealUtils';
 
 // Trigger new Vercel deployment - 15 Apr 2025
 // Request concurrency tracking
@@ -1808,15 +1806,13 @@ function createFallbackResponse(reason: string, healthGoal: string, requestId: s
   };
 }
 
-// Add this function to upload image to Firebase Storage
 /**
- * Uploads an image to Firebase Storage with timeout protection
- * 
- * @param file The file to upload
- * @param userId User ID for storage path
- * @param requestId Request ID for logging
- * @param timeoutMs Maximum time to wait for upload
- * @returns Download URL for the uploaded file or null if failed
+ * Uploads an image to Firebase Storage using the Admin SDK
+ * @param file The image file to upload
+ * @param userId The user's ID
+ * @param requestId A unique ID for the request for logging
+ * @param timeoutMs Timeout in milliseconds
+ * @returns The download URL or null if the upload fails
  */
 async function uploadImageToFirebase(
   file: File | Buffer | ArrayBuffer, 
@@ -1827,6 +1823,11 @@ async function uploadImageToFirebase(
   console.time(`⏱️ [${requestId}] uploadImageToFirebase`);
   console.log(`🖼️ [${requestId}] Starting image upload to Firebase Storage for user ${userId}`);
   
+  if (!adminStorage) {
+    console.error(`❌ [${requestId}] Firebase Admin Storage is not initialized`);
+    return null;
+  }
+  
   try {
     const fileExtension = 'jpg'; // Default to jpg for consistency
     const timestamp = Date.now();
@@ -1835,105 +1836,52 @@ async function uploadImageToFirebase(
     const storagePath = `users/${userId}/meals/${filename}`;
     
     console.log(`📁 [${requestId}] Upload path: ${storagePath}`);
-
-    // Create storage ref based on whether we have a Buffer or File
-    let storageRef;
-    let uploadTask;
-    let isUsingAdminSDK = false;
     
-    try {
-      // Attempt to use client-side storage first
-      if (storage) {
-        storageRef = ref(storage, storagePath);
-        console.log(`🔗 [${requestId}] Created storage reference using client SDK`);
-      } else if (adminStorage) {
-        // Fall back to admin SDK if client SDK is not available
-        isUsingAdminSDK = true;
-        console.log(`🔗 [${requestId}] Using admin SDK fallback for storage operation`);
-        
-        // Convert File to Buffer if needed
-        let fileBuffer: Buffer;
-        if (file instanceof File) {
-          const arrayBuffer = await file.arrayBuffer();
-          fileBuffer = Buffer.from(arrayBuffer);
-        } else if (file instanceof ArrayBuffer) {
-          fileBuffer = Buffer.from(file);
-        } else {
-          fileBuffer = file as Buffer;
-        }
-        
-        // Create a promise race to handle timeout
-        const uploadPromise = Promise.race([
-          adminStorage.bucket().file(storagePath).save(fileBuffer, {
-            metadata: {
-              contentType: 'image/jpeg',
-            }
-          }),
-          new Promise((_resolve, reject) => 
-            setTimeout(() => reject(new Error(`Admin SDK upload timed out after ${timeoutMs}ms`)), timeoutMs)
-          )
-        ]);
-        
-        await uploadPromise;
-        
-        // Get download URL from admin SDK
-        const [url] = await adminStorage.bucket().file(storagePath).getSignedUrl({
-          action: 'read',
-          expires: '03-01-2500', // Far future expiration
-        });
-        
-        console.log(`✅ [${requestId}] Image uploaded successfully via Admin SDK`);
-        console.timeEnd(`⏱️ [${requestId}] uploadImageToFirebase`);
-        return url;
-      } else {
-        throw new Error('Neither client nor admin Firebase Storage is initialized');
-      }
-    } catch (initError) {
-      console.error(`❌ [${requestId}] Storage initialization error:`, initError);
-      throw initError;
-    }
+    // Create storage reference using admin SDK
+    const file_ref = adminStorage.bucket().file(storagePath);
     
-    // Skip the rest if we already used admin SDK
-    if (isUsingAdminSDK) return null;
-    
-    // Prepare the file for upload with client SDK
-    let fileToUpload: Blob | Uint8Array | ArrayBuffer;
+    // Convert File to Buffer if needed
+    let fileBuffer: Buffer;
     if (file instanceof File) {
-      fileToUpload = file;
+      const arrayBuffer = await file.arrayBuffer();
+      fileBuffer = Buffer.from(arrayBuffer);
     } else if (file instanceof ArrayBuffer) {
-      fileToUpload = file;
+      fileBuffer = Buffer.from(file);
     } else {
-      // Assume it's a Buffer
-      fileToUpload = new Uint8Array(file as Buffer);
+      fileBuffer = file as Buffer;
     }
     
     // Create a promise race to handle timeout
-    const uploadWithTimeout: Promise<UploadResult> = Promise.race([
-      uploadBytes(storageRef, fileToUpload, {
-        contentType: 'image/jpeg'
+    const uploadPromise = Promise.race([
+      file_ref.save(fileBuffer, {
+        metadata: {
+          contentType: 'image/jpeg',
+        }
       }),
-      new Promise<never>((_resolve, reject) => 
-        setTimeout(() => reject(new Error(`Upload timed out after ${timeoutMs}ms`)), timeoutMs)
+      new Promise((_resolve, reject) => 
+        setTimeout(() => reject(new Error(`Admin SDK upload timed out after ${timeoutMs}ms`)), timeoutMs)
       )
     ]);
     
-    // Execute the upload
-    const uploadResult = await uploadWithTimeout;
-    console.log(`✅ [${requestId}] Image uploaded successfully to path: ${uploadResult.ref.fullPath}`);
+    await uploadPromise;
     
-    // Get the download URL with timeout
-    const urlWithTimeout: Promise<string> = Promise.race([
-      getDownloadURL(uploadResult.ref),
+    // Get download URL from admin SDK with timeout
+    const urlPromise = Promise.race([
+      file_ref.getSignedUrl({
+        action: 'read',
+        expires: '03-01-2500', // Far future expiration
+      }),
       new Promise<never>((_resolve, reject) => 
         setTimeout(() => reject(new Error(`Get download URL timed out after ${timeoutMs}ms`)), timeoutMs)
       )
     ]);
     
-    const downloadUrl = await urlWithTimeout;
-    console.log(`🔗 [${requestId}] Download URL generated: ${downloadUrl.substring(0, 50)}...`);
+    const [url] = await urlPromise;
     
+    console.log(`✅ [${requestId}] Image uploaded successfully via Admin SDK`);
+    console.log(`🔗 [${requestId}] Download URL generated: ${url.substring(0, 50)}...`);
     console.timeEnd(`⏱️ [${requestId}] uploadImageToFirebase`);
-    return downloadUrl;
+    return url;
   } catch (error: any) {
     console.error(`❌ [${requestId}] Failed to upload image to Firebase:`, error);
     console.timeEnd(`⏱️ [${requestId}] uploadImageToFirebase`);
@@ -2369,7 +2317,7 @@ export async function POST(request: NextRequest) {
       }
       
       // Use our centralized trySaveMeal utility function
-      const saveResult = await trySaveMeal({
+      const saveResult = await trySaveMealServer({
         userId,
         analysis: responseWithSave,
         imageUrl: finalImageUrl, // Use the uploaded URL or fallback
