@@ -653,25 +653,26 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       // CRITICAL GUARD: Log raw GPT analysis and block invalid results
       console.log("🔍 RAW GPT RESULT:", JSON.stringify(analysis, null, 2));
       
-      const isInvalid =
+      const isInvalidAnalysis =
         !analysis?.description ||
         !Array.isArray(analysis.nutrients) ||
         analysis.nutrients.length === 0;
 
-      if (isInvalid) {
-        console.warn("❌ GPT fallback triggered – skipping all save logic");
-
+      if (isInvalidAnalysis) {
+        console.warn("❌ Skipping meal save due to incomplete GPT result");
+        
+        // Block all further processing and exit immediately
         return NextResponse.json({
           success: false,
           fallback: true,
-          message: "GPT fallback – incomplete analysis (no description or nutrients)",
-          analysis: createEmptyFallbackAnalysis(), // Use proper fallback analysis structure
-          mealSaved: false // Explicitly mark as not saved
+          message: "GPT fallback – description or nutrients missing",
+          analysis: createEmptyFallbackAnalysis(),
+          mealSaved: false
         });
       }
-      
+
       // If we get here, we have a valid analysis
-      console.log(`✅ [${requestId}] Valid GPT result confirmed - description and nutrients are present`);
+      console.log(`✅ [${requestId}] Valid analysis detected – proceeding to save`);
       
       // Only set responseData.analysis AFTER validation passed
       responseData.success = true; 
@@ -684,11 +685,12 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
         responseData.debug.reasoning = analysisResult.reasoning;
       }
 
-      // --- Save Meal Logic (Only if analysis passed the guard) --- 
+      // --- Save Meal Logic (Only AFTER valid analysis confirmed) --- 
       const shouldSave = userId && typeof imageUrl === 'string';
       
       if (shouldSave) { 
         try {
+          console.log(`✅ [${requestId}] Starting Firestore save attempt - valid analysis confirmed`);
           // Explicit type check inside the block to satisfy TypeScript
           if (typeof imageUrl === 'string') { 
             const { saveMealToFirestore, updateResponseWithSaveResult } = await import('./server-meal-saver');
