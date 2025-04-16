@@ -3076,7 +3076,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
           responseData.message = 'Analysis completed with emergency fallback';
           
           // Clear error since we're using a fallback
-          responseData.errors = responseData.errors.map(err => 
+          responseData.errors = responseData.errors.map((err: string) => 
             err.includes('GPT-4V analysis failed') ? 'Used emergency fallback due to analysis error' : err
           );
         } catch (fallbackError: any) {
@@ -3121,30 +3121,6 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
 
   // Continue with usual processing flow
   return createAnalysisResponse(responseData);
-} catch (error: any) {
-  // Catch-all for any unexpected errors during processing
-  const fatalError = `Fatal error in analysis API: ${error?.message || 'Unknown error'}`;
-  responseData.errors.push(fatalError);
-  responseData.debug.errorDetails.push({ 
-    step: 'fatal_error', 
-    error: fatalError, 
-    details: error?.stack || error 
-  });
-  responseData.message = 'An unexpected error occurred';
-  responseData._meta.imageError = fatalError;
-  
-  console.error(`⛔ [${requestId}] FATAL ERROR:`, error);
-  
-  // Always return a structured response, even for fatal errors
-  return createAnalysisResponse({
-    ...responseData,
-    success: false,
-    fallback: true,
-    analysis: createEmptyFallbackAnalysis(),
-    _meta: {
-      imageError: fatalError
-    }
-  });
 }
 
 /**
