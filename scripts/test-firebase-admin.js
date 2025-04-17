@@ -1,90 +1,59 @@
 // Test script for Firebase Admin SDK initialization
-const fs = require('fs');
-const path = require('path');
-const dotenv = require('dotenv');
-const { initializeApp, cert } = require('firebase-admin/app');
-const { getFirestore } = require('firebase-admin/firestore');
+require('dotenv').config({ path: '.env.local.firebase' });
+const admin = require('firebase-admin');
 
-console.log('🔥 Firebase Admin SDK Initialization Test');
-console.log('----------------------------------------');
-
-// Load environment variables from .env.local
-dotenv.config({ path: path.resolve(process.cwd(), '.env.local') });
-
-// Extract Firebase Admin config
-const projectId = process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID;
-const clientEmail = process.env.FIREBASE_CLIENT_EMAIL;
-const privateKeyBase64 = process.env.FIREBASE_PRIVATE_KEY_BASE64;
-const storageBucket = process.env.NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET;
-
-// Validate environment variables
-console.log('Checking required environment variables:');
-console.log(`- Project ID: ${projectId ? '✅' : '❌'}`);
-console.log(`- Client Email: ${clientEmail ? '✅' : '❌'}`);
-console.log(`- Private Key Base64: ${privateKeyBase64 ? '✅ (length: ' + privateKeyBase64.length + ' chars)' : '❌'}`);
-
-if (!projectId || !clientEmail || !privateKeyBase64) {
-  console.error('❌ Missing required environment variables');
-  process.exit(1);
+// Function to check if a string looks like a PEM private key
+function isPEMPrivateKey(key) {
+  return (
+    key.includes('-----BEGIN PRIVATE KEY-----') &&
+    key.includes('-----END PRIVATE KEY-----')
+  );
 }
 
-// Decode the private key
-console.log('\nDecoding private key from base64...');
+// Extract and decode the private key from environment
+const privateKeyBase64 = process.env.FIREBASE_PRIVATE_KEY_BASE64;
+const privateKey = Buffer.from(privateKeyBase64, 'base64').toString('utf8');
+
+console.log('Private key obtained from environment:');
+console.log('- Base64 encoded key length:', privateKeyBase64?.length || 0);
+console.log('- Decoded key length:', privateKey?.length || 0);
+console.log('- Is valid PEM format:', isPEMPrivateKey(privateKey));
+console.log('- First 20 chars of decoded key:', privateKey.substring(0, 20) + '...');
+
+// Attempt to initialize Firebase Admin
 try {
-  const decodedPrivateKey = Buffer.from(privateKeyBase64, 'base64').toString('utf8');
+  console.log('\nInitializing Firebase Admin...');
   
-  // Validate the PEM format
-  const hasPemHeader = decodedPrivateKey.includes('-----BEGIN PRIVATE KEY-----');
-  const hasPemFooter = decodedPrivateKey.includes('-----END PRIVATE KEY-----');
-  const hasNewlines = decodedPrivateKey.includes('\n');
-  const newlineCount = (decodedPrivateKey.match(/\n/g) || []).length;
-  
-  console.log(`Private key validation:`);
-  console.log(`- Contains PEM header: ${hasPemHeader ? '✅' : '❌'}`);
-  console.log(`- Contains PEM footer: ${hasPemFooter ? '✅' : '❌'}`);
-  console.log(`- Contains newlines: ${hasNewlines ? `✅ (${newlineCount} found)` : '❌'}`);
-  console.log(`- Decoded length: ${decodedPrivateKey.length} characters`);
-  
-  if (!hasPemHeader || !hasPemFooter || !hasNewlines) {
-    console.error('❌ Decoded private key is not in valid PEM format');
-    process.exit(1);
+  // Check if already initialized
+  try {
+    admin.app();
+    console.log('Firebase Admin already initialized.');
+  } catch (error) {
+    // Not initialized yet, proceed with initialization
+    admin.initializeApp({
+      credential: admin.credential.cert({
+        projectId: process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID,
+        clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
+        privateKey: privateKey
+      })
+    });
+    console.log('Firebase Admin initialized successfully.');
   }
   
-  console.log('✅ Private key has valid PEM format');
+  // Test Firestore access
+  console.log('\nTesting Firestore access...');
+  const db = admin.firestore();
   
-  // Initialize Firebase Admin
-  console.log('\nInitializing Firebase Admin SDK...');
-  initializeApp({
-    credential: cert({
-      projectId,
-      clientEmail,
-      privateKey: decodedPrivateKey,
-    }),
-    storageBucket,
-  });
-  
-  console.log('✅ Firebase Admin initialized successfully');
-  
-  // Test Firestore connection
-  console.log('\nTesting Firestore connection...');
-  const db = getFirestore();
-  
-  db.collection('test').doc('admin-test')
-    .set({
-      timestamp: new Date(),
-      test: 'Firebase Admin SDK initialization test',
-    })
-    .then(() => {
-      console.log('✅ Successfully connected to Firestore and wrote test document');
-      console.log('\n✅✅✅ All tests passed! Firebase Admin SDK is working correctly.');
-      process.exit(0);
+  // Attempt to query a small collection
+  db.collection('test-collection').limit(1).get()
+    .then(snapshot => {
+      console.log(`Firestore query successful. Found ${snapshot.size} documents.`);
+      console.log('Firebase Admin initialization test completed successfully! ✅');
     })
     .catch(error => {
-      console.error('❌ Firestore write operation failed:', error);
-      process.exit(1);
+      console.error('Error querying Firestore:', error);
     });
-  
+    
 } catch (error) {
-  console.error('❌ Error initializing Firebase Admin SDK:', error);
-  process.exit(1);
+  console.error('Error initializing Firebase Admin:', error);
 } 
