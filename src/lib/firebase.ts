@@ -98,7 +98,14 @@ if (typeof window !== 'undefined') {
       if (firebaseConfig.apiKey && firebaseConfig.projectId) {
         console.log("🔥 Initializing Firebase app for the first time with config:");
         // Log the config being used (mask API key)
-        console.log(JSON.stringify({ ...firebaseConfig, apiKey: `${firebaseConfig.apiKey.substring(0, 6)}...` }, null, 2));
+        // console.log(JSON.stringify({ ...firebaseConfig, apiKey: `${firebaseConfig.apiKey.substring(0, 6)}...` }, null, 2));
+        
+        // Add the requested diagnostic log just before initialization
+        console.log('[Firebase Init Check]', {
+          apiKey: process.env.NEXT_PUBLIC_FIREBASE_API_KEY ? `${process.env.NEXT_PUBLIC_FIREBASE_API_KEY.substring(0, 6)}... (masked)` : 'MISSING',
+          projectId: process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID,
+          authDomain: process.env.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN,
+        });
 
         app = initializeApp(firebaseConfig);
 
