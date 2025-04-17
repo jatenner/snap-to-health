@@ -1013,7 +1013,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       requestId
     );
 
-    // Log the raw GPT response status (success/failure and model info)
+    // Enhanced logging - Log full details of status and model used
     console.log(`📊 [${requestId}] GPT Analysis complete - Success: ${gptResult.success}, Model: ${gptResult.modelUsed}${gptResult.usedFallbackModel ? ' (fallback)' : ''}${gptResult.forceGPT4V ? ' (forced)' : ''}`);
     
     // Add model information to the debug info
@@ -1025,6 +1025,17 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     if (!gptResult.success) {
       console.error(`❌ [${requestId}] GPT Analysis failed: ${gptResult.error}`);
       
+      // Log detailed raw response for errors (truncated for log readability)
+      if (gptResult.rawResponse) {
+        const truncatedResponse = gptResult.rawResponse.length > 1000 
+          ? `${gptResult.rawResponse.substring(0, 1000)}... (truncated)`
+          : gptResult.rawResponse;
+        console.error(`❌ [${requestId}] Raw GPT response for failed analysis: ${truncatedResponse}`);
+        
+        // Store full raw response in debug info
+        responseData.debug.rawGptResponse = gptResult.rawResponse;
+      }
+      
       // Add error details to debug info
       responseData.debug.gptError = gptResult.error;
     }
@@ -1032,9 +1043,31 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     // Extract the GPT analysis result
     const analysisResult = gptResult.analysis;
     
-    // Always log truncated analysis structure for debugging
-    const truncatedAnalysis = JSON.stringify(analysisResult).substring(0, 500) + '...';
-    console.log(`🔍 [${requestId}] Analysis structure: ${truncatedAnalysis}`);
+    // Log analysis structure for debugging
+    if (analysisResult) {
+      // Log structure overview (what fields are present/missing)
+      const analysisKeys = Object.keys(analysisResult).join(', ');
+      console.log(`🔍 [${requestId}] Analysis structure contains keys: ${analysisKeys}`);
+      
+      // Check nutrient fields if present
+      if (analysisResult.nutrients) {
+        const nutrientKeys = Object.keys(analysisResult.nutrients).join(', ');
+        console.log(`🔍 [${requestId}] Nutrient fields: ${nutrientKeys}`);
+      } else {
+        console.warn(`⚠️ [${requestId}] Missing nutrients object in analysis result`);
+      }
+      
+      // Check array fields
+      ['feedback', 'suggestions', 'detailedIngredients'].forEach(arrayField => {
+        if (Array.isArray(analysisResult[arrayField])) {
+          console.log(`🔍 [${requestId}] ${arrayField} array length: ${analysisResult[arrayField].length}`);
+        } else {
+          console.warn(`⚠️ [${requestId}] Missing or invalid ${arrayField} array in analysis result`);
+        }
+      });
+    } else {
+      console.error(`❌ [${requestId}] Analysis result is null or undefined`);
+    }
 
     // Check if we have a valid analysis result with required fields
     const isValidAnalysis = validateGptAnalysisResult(analysisResult);

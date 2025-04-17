@@ -102,14 +102,14 @@ export async function checkModelAvailability(
         errorMessage.includes('permission') || 
         errorMessage.includes('unauthorized') || 
         errorMessage.includes('access')) {
-      fallbackModel = 'gpt-3.5-turbo';
+      fallbackModel = 'gpt-4-vision-preview';
       errorDetail = `No access to ${modelId} (permission denied). Using ${fallbackModel} as fallback.`;
     } else if (statusCode === 404 || errorMessage.includes('not found') || errorMessage.includes('deprecated')) {
-      fallbackModel = 'gpt-3.5-turbo';
+      fallbackModel = 'gpt-4-vision-preview';
       errorDetail = `Model ${modelId} not found or deprecated. Using ${fallbackModel} as fallback.`;
     } else {
       // For other errors, still try to use the fallback model
-      fallbackModel = 'gpt-3.5-turbo';
+      fallbackModel = 'gpt-4-vision-preview';
       errorDetail = `Error checking model: ${errorMessage}. Using ${fallbackModel} as fallback.`;
     }
     
@@ -138,6 +138,7 @@ export async function analyzeImageWithGPT4V(
   modelUsed: string;
   usedFallbackModel: boolean;
   forceGPT4V: boolean;
+  rawResponse?: string;
 }> {
   console.log(`📸 [${requestId}] Starting image analysis with GPT4o...`);
   console.log(`📊 [${requestId}] Goals: ${healthGoals.join(', ')}`);
@@ -240,6 +241,13 @@ GOAL: Analyze the food in the image and return a JSON object with the following 
   ]
 }
 
+IMPORTANT: 
+- You MUST output valid JSON only
+- All numeric values must be numbers, not strings
+- All arrays must be properly formed
+- Your response should contain ALL the fields specified above
+- If you cannot identify the food clearly, state this in the description but still provide a best estimate for nutrients
+
 User Health Goals: ${healthGoals.join(', ')}
 Dietary Preferences/Restrictions: ${dietaryPreferences.join(', ')}
 
@@ -252,6 +260,7 @@ ${usedFallbackModel ? '\nNOTE: This analysis is being performed by a fallback mo
       : `data:image/jpeg;base64,${base64Image}`;
 
     // Make the OpenAI API request
+    console.log(`⏳ [${requestId}] Sending request to OpenAI API with model: ${modelToUse}`);
     const response = await openai.chat.completions.create({
       model: modelToUse,
       messages: [
@@ -276,7 +285,7 @@ ${usedFallbackModel ? '\nNOTE: This analysis is being performed by a fallback mo
           ]
         }
       ],
-      max_tokens: 2000,
+      max_tokens: 3000,
       temperature: 0.2,
       response_format: { type: 'json_object' }
     });
@@ -286,11 +295,8 @@ ${usedFallbackModel ? '\nNOTE: This analysis is being performed by a fallback mo
     // Extract the response content
     const responseContent = response.choices[0]?.message?.content || '';
     
-    // Log a truncated version of the response (to avoid massive logs)
-    const truncatedResponse = responseContent.length > 500 
-      ? `${responseContent.substring(0, 500)}... (truncated)`
-      : responseContent;
-    console.log(`📋 [${requestId}] GPT Response: ${truncatedResponse}`);
+    // Always log the full response (for debugging)
+    console.log(`📋 [${requestId}] FULL GPT Response: ${responseContent}`);
     
     // Try to parse the JSON response
     let parsedResponse: Record<string, any>;
@@ -311,8 +317,30 @@ ${usedFallbackModel ? '\nNOTE: This analysis is being performed by a fallback mo
           error: `Incomplete analysis result: missing ${missingKeys.join(', ')}`,
           modelUsed: modelToUse,
           usedFallbackModel,
-          forceGPT4V
+          forceGPT4V,
+          rawResponse: responseContent
         };
+      }
+      
+      // Also check for nutrient value structure
+      if (parsedResponse.nutrients) {
+        const requiredNutrients = ['calories', 'protein', 'carbs', 'fat'];
+        const missingNutrients = requiredNutrients.filter(
+          nutrient => typeof parsedResponse.nutrients[nutrient] !== 'number'
+        );
+        
+        if (missingNutrients.length > 0) {
+          console.error(`⚠️ [${requestId}] Missing or invalid nutrient values: ${missingNutrients.join(', ')}`);
+          return {
+            analysis: parsedResponse,
+            success: false,
+            error: `Invalid nutrient values: ${missingNutrients.join(', ')}`,
+            modelUsed: modelToUse,
+            usedFallbackModel,
+            forceGPT4V,
+            rawResponse: responseContent
+          };
+        }
       }
       
       return {
@@ -320,10 +348,12 @@ ${usedFallbackModel ? '\nNOTE: This analysis is being performed by a fallback mo
         success: true,
         modelUsed: modelToUse,
         usedFallbackModel,
-        forceGPT4V
+        forceGPT4V,
+        rawResponse: responseContent
       };
     } catch (parseError) {
       console.error(`❌ [${requestId}] Failed to parse GPT response as JSON: ${(parseError as Error).message}`);
+      console.error(`❌ [${requestId}] Raw non-JSON response: ${responseContent}`);
       
       // If we can't parse the JSON, return an empty analysis
       return {
@@ -332,12 +362,19 @@ ${usedFallbackModel ? '\nNOTE: This analysis is being performed by a fallback mo
         error: `Failed to parse response: ${(parseError as Error).message}`,
         modelUsed: modelToUse,
         usedFallbackModel,
-        forceGPT4V
+        forceGPT4V,
+        rawResponse: responseContent
       };
     }
   } catch (error: any) {
     const errorMessage = error?.message || 'Unknown error';
-    console.error(`❌ [${requestId}] GPT4o analysis failed: ${errorMessage}`);
+    const statusCode = error?.status || error?.statusCode || 'unknown';
+    console.error(`❌ [${requestId}] GPT4o analysis failed (Status: ${statusCode}): ${errorMessage}`);
+    
+    // Log detailed API error information if available
+    if (error?.response) {
+      console.error(`❌ [${requestId}] API Error Details:`, JSON.stringify(error.response, null, 2));
+    }
     
     return {
       analysis: createEmptyFallbackAnalysis(),
@@ -345,7 +382,8 @@ ${usedFallbackModel ? '\nNOTE: This analysis is being performed by a fallback mo
       error: errorMessage,
       modelUsed: 'error',
       usedFallbackModel: false,
-      forceGPT4V
+      forceGPT4V,
+      rawResponse: JSON.stringify(error)
     };
   }
 }
@@ -434,12 +472,42 @@ export function createFallbackResponse(
   const fallback = createEmptyFallbackAnalysis();
   
   // Add the reason to the fallback analysis
-  fallback.warnings = [`Analysis failed: ${reason}`];
+  fallback.warnings = [
+    `Analysis failed: ${reason}`,
+    "Our AI system encountered an issue analyzing your image."
+  ];
+  
+  // Add specific user-friendly message based on the error type
+  if (reason.includes('parse') || reason.includes('JSON')) {
+    fallback.warnings.push("The analysis produced invalid data format.");
+  } else if (reason.includes('missing') || reason.includes('invalid')) {
+    fallback.warnings.push("The analysis was incomplete or had missing information.");
+  } else if (reason.includes('confidence') || reason.includes('unclear')) {
+    fallback.warnings.push("The image may be unclear or the food items difficult to identify.");
+  }
+  
+  // Add error metadata for debugging
+  fallback._meta = {
+    error: reason,
+    timestamp: new Date().toISOString(),
+    isPartial: !!partialAnalysis
+  };
   
   // If we have partial data, try to incorporate valid parts
   if (partialAnalysis) {
+    // Description
     if (partialAnalysis.description && typeof partialAnalysis.description === 'string') {
       fallback.description = partialAnalysis.description;
+    }
+    
+    // Try to salvage any valid nutrients
+    if (partialAnalysis.nutrients && typeof partialAnalysis.nutrients === 'object') {
+      const validNutrients = ['calories', 'protein', 'carbs', 'fat', 'fiber', 'sugar', 'sodium'];
+      validNutrients.forEach(nutrient => {
+        if (typeof partialAnalysis.nutrients[nutrient] === 'number') {
+          fallback.nutrients[nutrient] = partialAnalysis.nutrients[nutrient];
+        }
+      });
     }
     
     // Try to salvage any valid detailed ingredients
@@ -452,6 +520,12 @@ export function createFallbackResponse(
     if (Array.isArray(partialAnalysis.feedback) && 
         partialAnalysis.feedback.length > 0) {
       fallback.feedback = [...fallback.feedback, ...partialAnalysis.feedback];
+    }
+    
+    // Try to salvage any valid suggestions
+    if (Array.isArray(partialAnalysis.suggestions) && 
+        partialAnalysis.suggestions.length > 0) {
+      fallback.suggestions = [...fallback.suggestions, ...partialAnalysis.suggestions];
     }
   }
   
