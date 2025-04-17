@@ -45,6 +45,11 @@ interface AnalysisResult {
   failureReason?: string;
   insight?: string;
   message?: string;
+  modelInfo?: {
+    model: string;
+    usedFallback: boolean;
+    forceGPT4V: boolean;
+  };
 }
 
 // Component to display ingredients with confidence levels
@@ -190,6 +195,34 @@ const SaveStatusBanner = ({
         <div>
           <p>{message}</p>
           {actionLink && <div className="mt-2">{actionLink}</div>}
+        </div>
+      </div>
+    </div>
+  );
+};
+
+/**
+ * Component to display a warning when using a fallback model
+ */
+const ModelWarningBanner = ({ modelInfo }: { modelInfo?: AnalysisResult['modelInfo'] }) => {
+  // If no model info or GPT-4-Vision is being used without fallback, don't show warning
+  if (!modelInfo || !modelInfo.usedFallback) {
+    return null;
+  }
+  
+  return (
+    <div className="mb-4 p-3 bg-amber-50 border border-amber-200 rounded-md">
+      <div className="flex items-start">
+        <div className="flex-shrink-0 pt-0.5">
+          <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 text-amber-500" viewBox="0 0 20 20" fill="currentColor">
+            <path fillRule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
+          </svg>
+        </div>
+        <div className="ml-3">
+          <h3 className="text-sm font-medium text-amber-800">Limited Analysis Mode</h3>
+          <div className="mt-1 text-xs text-amber-700">
+            <p>This analysis was performed using {modelInfo.model} instead of GPT-4-Vision. Results may be less accurate.</p>
+          </div>
         </div>
       </div>
     </div>
@@ -508,258 +541,291 @@ export default function MealAnalysisPage() {
   };
 
   return (
-    <main className="max-w-2xl mx-auto pb-12">
-      <div className={`bg-white shadow-lab rounded-xl overflow-hidden mb-6 transition-all duration-500 ${animationComplete ? 'opacity-100' : 'opacity-90'}`}>
-        {/* Summary Section: Photo + Score */}
-        <div className="relative">
-          {previewUrl && (
-            <div className="relative w-full h-64 bg-gray-100">
-              <Image
-                src={previewUrl}
-                alt="Analyzed meal"
-                fill
-                style={{ objectFit: 'cover' }}
-                className="transition-opacity duration-300"
-                priority
-              />
-              {/* Score Overlay */}
-              <div className="absolute bottom-0 right-0 p-3">
-                <div className="bg-white/90 backdrop-blur-sm rounded-lg p-2 shadow-lab flex items-center">
-                  <div 
-                    className={`w-12 h-12 rounded-full flex items-center justify-center text-white text-xl font-bold ${getScoreColor(goalScore)}`}
-                  >
-                    {goalScore}
-                  </div>
-                  <div className="ml-2">
-                    <span className="text-xs font-medium uppercase text-gray-500">Score</span>
-                    <p className="text-sm font-medium">{getScoreLabel(goalScore)}</p>
-                  </div>
-                </div>
-              </div>
-            </div>
-          )}
+    <div className="pb-20 sm:pb-24 md:pb-12">
+      {/* Sticky header for mobile */}
+      <header className="fixed top-0 w-full bg-white z-10 md:hidden shadow-sm">
+        <div className="flex items-center justify-between px-3 py-2">
+          <h1 className="text-lg font-bold text-primary truncate">Meal Analysis</h1>
+          <button
+            onClick={() => router.back()}
+            className="p-2 text-gray-500 hover:text-gray-700 focus:outline-none"
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+              <path fillRule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clipRule="evenodd" />
+            </svg>
+          </button>
         </div>
+      </header>
+
+      <div className="max-w-2xl mx-auto pt-14 md:pt-0 px-3 sm:px-4">
+        {/* Desktop back button */}
+        <div className="hidden md:block mb-6">
+          <button
+            onClick={() => router.back()}
+            className="flex items-center text-gray-600 hover:text-gray-900"
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 mr-1" viewBox="0 0 20 20" fill="currentColor">
+              <path fillRule="evenodd" d="M9.707 16.707a1 1 0 01-1.414 0l-6-6a1 1 0 010-1.414l6-6a1 1 0 011.414 1.414L5.414 9H17a1 1 0 110 2H5.414l4.293 4.293a1 1 0 010 1.414z" clipRule="evenodd" />
+            </svg>
+            Back
+          </button>
+        </div>
+
+        <SaveStatusBanner 
+          mealSaved={mealSaved} 
+          fallback={Boolean(analysisResult.fallback)}
+          lowConfidence={Boolean(analysisResult.lowConfidence)}
+          saveError={saveError}
+          userId={currentUser?.uid || null}
+        />
         
-        <div className="p-6">
-          {/* Save Status Banner */}
-          <SaveStatusBanner 
-            mealSaved={mealSaved} 
-            fallback={!!analysisResult.fallback}
-            lowConfidence={!!analysisResult.lowConfidence}
-            saveError={saveError}
-            userId={currentUser?.uid || null}
-          />
+        {/* Add the model warning banner */}
+        <ModelWarningBanner modelInfo={analysisResult.modelInfo} />
+
+        {/* Main analysis section */}
+        <div className="bg-white rounded-lg shadow-md overflow-hidden mb-6">
+          {/* Summary Section: Photo + Score */}
+          <div className="relative">
+            {previewUrl && (
+              <div className="relative w-full h-64 bg-gray-100">
+                <Image
+                  src={previewUrl}
+                  alt="Analyzed meal"
+                  fill
+                  style={{ objectFit: 'cover' }}
+                  className="transition-opacity duration-300"
+                  priority
+                />
+                {/* Score Overlay */}
+                <div className="absolute bottom-0 right-0 p-3">
+                  <div className="bg-white/90 backdrop-blur-sm rounded-lg p-2 shadow-lab flex items-center">
+                    <div 
+                      className={`w-12 h-12 rounded-full flex items-center justify-center text-white text-xl font-bold ${getScoreColor(goalScore)}`}
+                    >
+                      {goalScore}
+                    </div>
+                    <div className="ml-2">
+                      <span className="text-xs font-medium uppercase text-gray-500">Score</span>
+                      <p className="text-sm font-medium">{getScoreLabel(goalScore)}</p>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
           
-          {/* Header with Goal Context */}
-          <div className="mb-6">
-            <div className="flex items-center mb-2">
-              <span className="text-3xl mr-3">{getGoalIcon(goalName)}</span>
-              <div>
-                <h1 className="text-2xl font-bold text-navy">{goalName} Analysis</h1>
-                <p className="text-slate text-sm">Goal: {rawGoal}</p>
-              </div>
-            </div>
-          </div>
-
-          {/* Score Card with Score Explanation */}
-          <div className="mb-8 bg-white rounded-xl border border-slate/20 shadow-sm p-5">
-            <h2 className="font-bold text-navy text-lg mb-3">Goal Impact Score: {goalScore}/10</h2>
-            
-            <div className="w-full bg-gray-200 rounded-full h-3 mb-3">
-              <div 
-                className={`h-3 rounded-full transition-all duration-1000 ease-out ${getScoreColor(goalScore)}`}
-                style={{ width: animationComplete ? `${goalScore * 10}%` : '0%' }}
-              ></div>
-            </div>
-            
-            <p className="text-slate mb-4">{scoreExplanation}</p>
-            
-            {/* Meal Description */}
-            <p className="text-navy text-sm italic border-t border-slate/10 pt-3 mt-2">{description}</p>
-          </div>
-
-          {/* How It Helps Your Goal Section */}
-          {positiveFoodFactors.length > 0 && (
+          <div className="p-6">
+            {/* Header with Goal Context */}
             <div className="mb-6">
-              <h2 className="font-bold text-navy text-lg mb-3 flex items-center">
-                <span className="text-green-600 mr-2">✓</span>
-                How This Meal Supports Your Goal
-              </h2>
-              <div className="bg-green-50 border border-green-100 rounded-xl p-4">
-                <ul className="space-y-2.5">
-                  {positiveFoodFactors.map((factor, index) => (
-                    <li key={index} className="flex">
-                      <span className="text-green-600 mr-2.5 mt-0.5">•</span>
-                      <span className="text-slate">{factor}</span>
-                    </li>
-                  ))}
-                </ul>
+              <div className="flex items-center mb-2">
+                <span className="text-3xl mr-3">{getGoalIcon(goalName)}</span>
+                <div>
+                  <h1 className="text-2xl font-bold text-navy">{goalName} Analysis</h1>
+                  <p className="text-slate text-sm">Goal: {rawGoal}</p>
+                </div>
               </div>
             </div>
-          )}
 
-          {/* What May Hold You Back Section */}
-          {negativeFoodFactors.length > 0 && (
-            <div className="mb-6">
-              <h2 className="font-bold text-navy text-lg mb-3 flex items-center">
-                <span className="text-amber-600 mr-2">⚠️</span>
-                What May Hold You Back
-              </h2>
-              <div className="bg-amber-50 border border-amber-100 rounded-xl p-4">
-                <ul className="space-y-2.5">
-                  {negativeFoodFactors.map((factor, index) => (
-                    <li key={index} className="flex">
-                      <span className="text-amber-600 mr-2.5 mt-0.5">•</span>
-                      <span className="text-slate">{factor}</span>
-                    </li>
-                  ))}
-                </ul>
+            {/* Score Card with Score Explanation */}
+            <div className="mb-8 bg-white rounded-xl border border-slate/20 shadow-sm p-5">
+              <h2 className="font-bold text-navy text-lg mb-3">Goal Impact Score: {goalScore}/10</h2>
+              
+              <div className="w-full bg-gray-200 rounded-full h-3 mb-3">
+                <div 
+                  className={`h-3 rounded-full transition-all duration-1000 ease-out ${getScoreColor(goalScore)}`}
+                  style={{ width: animationComplete ? `${goalScore * 10}%` : '0%' }}
+                ></div>
               </div>
+              
+              <p className="text-slate mb-4">{scoreExplanation}</p>
+              
+              {/* Meal Description */}
+              <p className="text-navy text-sm italic border-t border-slate/10 pt-3 mt-2">{description}</p>
             </div>
-          )}
 
-          {/* Expert Suggestions Section */}
-          {suggestions && suggestions.length > 0 && (
-            <div className="mb-6">
-              <h2 className="font-bold text-navy text-lg mb-3 flex items-center">
-                <span className="text-indigo mr-2">💡</span>
-                Personalized Expert Suggestions
-              </h2>
-              <div className="bg-indigo/5 border border-indigo/20 rounded-xl p-4">
-                <ul className="space-y-2.5">
-                  {suggestions.map((suggestion, index) => (
-                    <li key={index} className="flex">
-                      <span className="text-indigo mr-2.5 mt-0.5 shrink-0">{index + 1}.</span>
-                      <span className="text-slate">{suggestion}</span>
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            </div>
-          )}
-
-          {/* Nutritional Harmony Section */}
-          <div className="mb-6">
-            <h2 className="font-bold text-navy text-lg mb-3 flex items-center">
-              <span className="text-forest mr-2">📊</span>
-              Nutritional Breakdown
-            </h2>
-            
-            {/* Macronutrients */}
-            {macros.length > 0 && (
-              <div className="bg-white border border-slate/20 rounded-xl p-4 mb-4">
-                <h3 className="text-navy font-medium text-sm uppercase mb-3">Macronutrients</h3>
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-                  {macros.map((nutrient, index) => (
-                    <div 
-                      key={`macro-${index}`}
-                      className="bg-gray-50 rounded-lg p-3 transition-all hover:shadow-sm"
-                    >
-                      <p className="text-xs font-medium text-slate uppercase">{nutrient.name}</p>
-                      <p className="text-lg font-bold text-navy">{nutrient.value}<span className="text-xs ml-1">{nutrient.unit}</span></p>
-                    </div>
-                  ))}
+            {/* How It Helps Your Goal Section */}
+            {positiveFoodFactors.length > 0 && (
+              <div className="mb-6">
+                <h2 className="font-bold text-navy text-lg mb-3 flex items-center">
+                  <span className="text-green-600 mr-2">✓</span>
+                  How This Meal Supports Your Goal
+                </h2>
+                <div className="bg-green-50 border border-green-100 rounded-xl p-4">
+                  <ul className="space-y-2.5">
+                    {positiveFoodFactors.map((factor, index) => (
+                      <li key={index} className="flex">
+                        <span className="text-green-600 mr-2.5 mt-0.5">•</span>
+                        <span className="text-slate">{factor}</span>
+                      </li>
+                    ))}
+                  </ul>
                 </div>
               </div>
             )}
-            
-            {/* Micronutrients - Beneficial for Goal */}
-            {micronutrients.length > 0 && (
-              <div className="bg-white border border-slate/20 rounded-xl p-4 mb-4">
-                <h3 className="text-navy font-medium text-sm uppercase mb-3 flex items-center">
-                  <span className="w-2 h-2 rounded-full bg-green-500 mr-2"></span>
-                  Key Nutrients for Your Goal
-                </h3>
-                <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
-                  {micronutrients.map((nutrient, index) => (
-                    <div 
-                      key={`micro-${index}`}
-                      className="bg-green-50 rounded-lg p-3 border border-green-100"
-                    >
-                      <p className="text-xs font-medium text-slate uppercase">{nutrient.name}</p>
-                      <p className="text-md font-bold text-navy">{nutrient.value}<span className="text-xs ml-1">{nutrient.unit}</span></p>
-                    </div>
-                  ))}
+
+            {/* What May Hold You Back Section */}
+            {negativeFoodFactors.length > 0 && (
+              <div className="mb-6">
+                <h2 className="font-bold text-navy text-lg mb-3 flex items-center">
+                  <span className="text-amber-600 mr-2">⚠️</span>
+                  What May Hold You Back
+                </h2>
+                <div className="bg-amber-50 border border-amber-100 rounded-xl p-4">
+                  <ul className="space-y-2.5">
+                    {negativeFoodFactors.map((factor, index) => (
+                      <li key={index} className="flex">
+                        <span className="text-amber-600 mr-2.5 mt-0.5">•</span>
+                        <span className="text-slate">{factor}</span>
+                      </li>
+                    ))}
+                  </ul>
                 </div>
               </div>
             )}
-            
-            {/* Other Nutrients - Regular and Negative */}
-            {otherNutrients.length > 0 && (
-              <div className="bg-white border border-slate/20 rounded-xl p-4">
-                <h3 className="text-navy font-medium text-sm uppercase mb-3">Additional Nutrients</h3>
-                <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
-                  {otherNutrients.map((nutrient, index) => {
-                    // Determine if this is a negative nutrient (like sugar, sodium, etc.)
-                    const isNegative = ['sugar', 'sodium', 'caffeine', 'saturated', 'cholesterol'].some(
-                      neg => nutrient.name.toLowerCase().includes(neg)
-                    );
-                    
-                    return (
+
+            {/* Expert Suggestions Section */}
+            {suggestions && suggestions.length > 0 && (
+              <div className="mb-6">
+                <h2 className="font-bold text-navy text-lg mb-3 flex items-center">
+                  <span className="text-indigo mr-2">💡</span>
+                  Personalized Expert Suggestions
+                </h2>
+                <div className="bg-indigo/5 border border-indigo/20 rounded-xl p-4">
+                  <ul className="space-y-2.5">
+                    {suggestions.map((suggestion, index) => (
+                      <li key={index} className="flex">
+                        <span className="text-indigo mr-2.5 mt-0.5 shrink-0">{index + 1}.</span>
+                        <span className="text-slate">{suggestion}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              </div>
+            )}
+
+            {/* Nutritional Harmony Section */}
+            <div className="mb-6">
+              <h2 className="font-bold text-navy text-lg mb-3 flex items-center">
+                <span className="text-forest mr-2">📊</span>
+                Nutritional Breakdown
+              </h2>
+              
+              {/* Macronutrients */}
+              {macros.length > 0 && (
+                <div className="bg-white border border-slate/20 rounded-xl p-4 mb-4">
+                  <h3 className="text-navy font-medium text-sm uppercase mb-3">Macronutrients</h3>
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                    {macros.map((nutrient, index) => (
                       <div 
-                        key={`other-${index}`}
-                        className={`rounded-lg p-3 ${isNegative ? 'bg-amber-50 border border-amber-100' : 'bg-gray-50 border border-gray-100'}`}
+                        key={`macro-${index}`}
+                        className="bg-gray-50 rounded-lg p-3 transition-all hover:shadow-sm"
                       >
-                        <div className="flex justify-between items-center">
-                          <p className="text-xs font-medium text-slate uppercase">{nutrient.name}</p>
-                          {isNegative && <span className="w-2 h-2 rounded-full bg-amber-500"></span>}
-                        </div>
+                        <p className="text-xs font-medium text-slate uppercase">{nutrient.name}</p>
+                        <p className="text-lg font-bold text-navy">{nutrient.value}<span className="text-xs ml-1">{nutrient.unit}</span></p>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+              
+              {/* Micronutrients - Beneficial for Goal */}
+              {micronutrients.length > 0 && (
+                <div className="bg-white border border-slate/20 rounded-xl p-4 mb-4">
+                  <h3 className="text-navy font-medium text-sm uppercase mb-3 flex items-center">
+                    <span className="w-2 h-2 rounded-full bg-green-500 mr-2"></span>
+                    Key Nutrients for Your Goal
+                  </h3>
+                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+                    {micronutrients.map((nutrient, index) => (
+                      <div 
+                        key={`micro-${index}`}
+                        className="bg-green-50 rounded-lg p-3 border border-green-100"
+                      >
+                        <p className="text-xs font-medium text-slate uppercase">{nutrient.name}</p>
                         <p className="text-md font-bold text-navy">{nutrient.value}<span className="text-xs ml-1">{nutrient.unit}</span></p>
                       </div>
-                    );
-                  })}
+                    ))}
+                  </div>
+                </div>
+              )}
+              
+              {/* Other Nutrients - Regular and Negative */}
+              {otherNutrients.length > 0 && (
+                <div className="bg-white border border-slate/20 rounded-xl p-4">
+                  <h3 className="text-navy font-medium text-sm uppercase mb-3">Additional Nutrients</h3>
+                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+                    {otherNutrients.map((nutrient, index) => {
+                      // Determine if this is a negative nutrient (like sugar, sodium, etc.)
+                      const isNegative = ['sugar', 'sodium', 'caffeine', 'saturated', 'cholesterol'].some(
+                        neg => nutrient.name.toLowerCase().includes(neg)
+                      );
+                      
+                      return (
+                        <div 
+                          key={`other-${index}`}
+                          className={`rounded-lg p-3 ${isNegative ? 'bg-amber-50 border border-amber-100' : 'bg-gray-50 border border-gray-100'}`}
+                        >
+                          <div className="flex justify-between items-center">
+                            <p className="text-xs font-medium text-slate uppercase">{nutrient.name}</p>
+                            {isNegative && <span className="w-2 h-2 rounded-full bg-amber-500"></span>}
+                          </div>
+                          <p className="text-md font-bold text-navy">{nutrient.value}<span className="text-xs ml-1">{nutrient.unit}</span></p>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+            </div>
+            
+            {/* Ingredients List */}
+            {analysisResult?.detailedIngredients && analysisResult.detailedIngredients.length > 0 && (
+              <div className="mb-6">
+                <h2 className="font-bold text-navy text-lg mb-3 flex items-center">
+                  <span className="text-teal-600 mr-2">🧪</span>
+                  Identified Ingredients
+                </h2>
+                <div className="bg-white border border-slate/20 rounded-xl p-4">
+                  <IngredientsList ingredients={analysisResult.detailedIngredients} />
                 </div>
               </div>
             )}
-          </div>
-          
-          {/* Ingredients List */}
-          {analysisResult?.detailedIngredients && analysisResult.detailedIngredients.length > 0 && (
-            <div className="mb-6">
-              <h2 className="font-bold text-navy text-lg mb-3 flex items-center">
-                <span className="text-teal-600 mr-2">🧪</span>
-                Identified Ingredients
-              </h2>
-              <div className="bg-white border border-slate/20 rounded-xl p-4">
-                <IngredientsList ingredients={analysisResult.detailedIngredients} />
-              </div>
-            </div>
-          )}
-          
-          {/* Action Buttons */}
-          <div className="flex flex-col sm:flex-row gap-3 mt-8">
-            <Link
-              href="/upload"
-              className="flex-1 bg-primary hover:bg-secondary text-white text-center font-medium py-3 px-4 rounded-lg transition-colors shadow-sm"
-            >
-              Analyze Another Meal
-            </Link>
             
-            {mealSaved ? (
-              <Link
-                href="/history"
-                className="flex-1 bg-white hover:bg-gray-50 text-navy border border-gray-200 text-center font-medium py-3 px-4 rounded-lg transition-colors shadow-sm"
-              >
-                View Meal History
-              </Link>
-            ) : currentUser ? (
+            {/* Action Buttons */}
+            <div className="flex flex-col sm:flex-row gap-3 mt-8">
               <Link
                 href="/upload"
-                className="flex-1 bg-white hover:bg-gray-50 text-navy border border-gray-200 text-center font-medium py-3 px-4 rounded-lg transition-colors shadow-sm"
+                className="flex-1 bg-primary hover:bg-secondary text-white text-center font-medium py-3 px-4 rounded-lg transition-colors shadow-sm"
               >
-                Save Meals to Track Progress
+                Analyze Another Meal
               </Link>
-            ) : (
-              <Link
-                href="/login"
-                className="flex-1 bg-white hover:bg-gray-50 text-navy border border-gray-200 text-center font-medium py-3 px-4 rounded-lg transition-colors shadow-sm"
-              >
-                Sign In to Save Analysis
-              </Link>
-            )}
+              
+              {mealSaved ? (
+                <Link
+                  href="/history"
+                  className="flex-1 bg-white hover:bg-gray-50 text-navy border border-gray-200 text-center font-medium py-3 px-4 rounded-lg transition-colors shadow-sm"
+                >
+                  View Meal History
+                </Link>
+              ) : currentUser ? (
+                <Link
+                  href="/upload"
+                  className="flex-1 bg-white hover:bg-gray-50 text-navy border border-gray-200 text-center font-medium py-3 px-4 rounded-lg transition-colors shadow-sm"
+                >
+                  Save Meals to Track Progress
+                </Link>
+              ) : (
+                <Link
+                  href="/login"
+                  className="flex-1 bg-white hover:bg-gray-50 text-navy border border-gray-200 text-center font-medium py-3 px-4 rounded-lg transition-colors shadow-sm"
+                >
+                  Sign In to Save Analysis
+                </Link>
+              )}
+            </div>
           </div>
         </div>
       </div>
-    </main>
+    </div>
   );
 } 
