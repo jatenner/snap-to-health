@@ -16,6 +16,27 @@ let analytics: Analytics | null = null;
 
 // Make sure we're in the browser before initializing Firebase
 if (typeof window !== 'undefined') {
+  // --- BEGIN DIAGNOSTIC LOG ---
+  const apiKeyFromEnv = process.env.NEXT_PUBLIC_FIREBASE_API_KEY;
+  console.log(
+    `[Firebase Init Check] NEXT_PUBLIC_FIREBASE_API_KEY: ${apiKeyFromEnv
+        ? `${apiKeyFromEnv.substring(0, 6)}... (masked)`
+        : '🔴 UNDEFINED'}`
+  );
+
+  if (!apiKeyFromEnv) {
+    console.warn(
+      '🔴 WARNING: NEXT_PUBLIC_FIREBASE_API_KEY is missing or undefined in the browser environment!'
+    );
+    console.warn(
+      '   This will cause "auth/api-key-not-valid" errors.'
+    );
+    console.warn(
+      '   Verify this variable is set correctly in your Vercel project Environment Variables.'
+    );
+  }
+  // --- END DIAGNOSTIC LOG ---
+
   try {
     // Explicitly log all NEXT_PUBLIC_ Firebase variables for debugging
     console.log('🔍 Firebase Client Env Var Check:');
