@@ -1002,12 +1002,23 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
         timestamp: new Date().toISOString() 
       });
       
+      // Check for specific API key issues to provide more helpful error messages
+      const isApiKeyError = gptResult.error?.includes('API key') || 
+                           gptResult.error?.includes('authentication') ||
+                           gptResult.error?.includes('401') ||
+                           gptResult.error?.includes('auth');
+                           
+      const userMessage = isApiKeyError ? 
+        "API configuration issue. Please contact support." : 
+        "AI analysis could not be completed. Please try again later.";
+      
       // Return a more specific fallback with error details for debugging
       return createAnalysisResponse({
         ...responseData,
         success: false,
         fallback: true,
-        message: "AI analysis could not be completed. Please try again later.",
+        message: userMessage,
+        errorType: isApiKeyError ? 'api_key_error' : 'analysis_failure',
         gptError: gptResult.error, // Add the specific error for client-side debugging
         analysis: createEmptyFallbackAnalysis()
       });

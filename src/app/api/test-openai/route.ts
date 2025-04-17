@@ -1,65 +1,71 @@
 import { NextRequest, NextResponse } from 'next/server';
-import OpenAI from 'openai';
 
 export async function GET(request: NextRequest) {
   try {
-    // Get OpenAI API key
-    const apiKey = process.env.OPENAI_API_KEY;
-    
-    if (!apiKey) {
-      console.error('OPENAI_API_KEY not found in environment variables');
-      return NextResponse.json(
-        { error: 'OpenAI API key not configured' },
-        { status: 500 }
-      );
+    // Get the OpenAI API key from the environment
+    const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
+
+    // Check if the API key is available
+    if (!OPENAI_API_KEY) {
+      console.error('OpenAI API key is not configured');
+      return NextResponse.json({
+        error: 'OpenAI API key is not configured',
+        status: 'error',
+        keyDefined: false,
+        keyMasked: null,
+        timestamp: new Date().toISOString()
+      }, { status: 500 });
     }
-    
-    // Initialize OpenAI client
-    const openai = new OpenAI({
-      apiKey,
+
+    // Create a simple test query to OpenAI API
+    const response = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${OPENAI_API_KEY}`,
+      },
+      body: JSON.stringify({
+        model: 'gpt-3.5-turbo',
+        messages: [{ role: 'user', content: 'Say hello world' }],
+        max_tokens: 10,
+      }),
     });
-    
-    // Make a simple request to test the API key
-    const completion = await openai.chat.completions.create({
-      model: 'gpt-3.5-turbo',
-      messages: [{ role: 'user', content: 'Hello! This is a test message. Please respond with "OpenAI connection successful"' }],
-      max_tokens: 50,
-    });
-    
-    // Get the response content
-    const content = completion.choices[0]?.message?.content || 'No content returned';
-    
+
+    // Get the response data
+    const data = await response.json();
+
+    // Check for errors
+    if (!response.ok) {
+      console.error('OpenAI API Error:', data);
+      return NextResponse.json({
+        error: 'OpenAI API Error',
+        status: 'error',
+        statusCode: response.status,
+        statusText: response.statusText,
+        details: data.error || data,
+        keyDefined: true,
+        keyMasked: OPENAI_API_KEY ? `${OPENAI_API_KEY.substring(0, 7)}...${OPENAI_API_KEY.substring(OPENAI_API_KEY.length - 4)}` : null,
+        timestamp: new Date().toISOString()
+      }, { status: 500 });
+    }
+
     // Return success response
     return NextResponse.json({
+      message: 'OpenAI API key is working properly',
       status: 'success',
-      apiKeyFirstChars: apiKey.substring(0, 7) + '...',
-      apiKeyLength: apiKey.length,
-      response: {
-        content,
-        model: completion.model,
-        usage: completion.usage,
-      },
+      openAiResponse: data,
+      keyDefined: true,
+      keyMasked: OPENAI_API_KEY ? `${OPENAI_API_KEY.substring(0, 7)}...${OPENAI_API_KEY.substring(OPENAI_API_KEY.length - 4)}` : null,
+      timestamp: new Date().toISOString()
     });
-    
   } catch (error: any) {
     console.error('Error testing OpenAI API:', error);
-    
-    // Format error response
-    let errorMessage = error?.message || 'Unknown error';
-    let statusCode = 500;
-    
-    // Check for specific error types
-    if (error?.status === 401) {
-      errorMessage = 'Invalid OpenAI API key';
-      statusCode = 401;
-    } else if (error?.status === 429) {
-      errorMessage = 'OpenAI rate limit exceeded';
-      statusCode = 429;
-    }
-    
-    return NextResponse.json(
-      { error: errorMessage },
-      { status: statusCode }
-    );
+    return NextResponse.json({
+      error: 'Error testing OpenAI API',
+      message: error?.message || 'Unknown error',
+      stack: process.env.NODE_ENV === 'development' ? error?.stack : undefined,
+      status: 'error',
+      timestamp: new Date().toISOString()
+    }, { status: 500 });
   }
 } 
