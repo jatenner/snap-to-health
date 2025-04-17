@@ -2,6 +2,7 @@ import { initializeApp, getApps, cert } from 'firebase-admin/app';
 import { getFirestore } from 'firebase-admin/firestore';
 import { getAuth } from 'firebase-admin/auth';
 import { getStorage } from 'firebase-admin/storage';
+import { assertFirebasePrivateKey } from '../utils/validateEnv';
 
 // Initialize Firebase Admin only if the required environment variables are available
 const apps = getApps();
@@ -28,42 +29,21 @@ if (!apps.length) {
     // Continue execution but Firebase Admin services won't be available
   } else {
     try {
-      // Decode the base64 encoded private key
-      let decodedPrivateKey: string;
+      // Validate the Firebase private key using our new validation function
       try {
-        // Add diagnostic logging for the base64 key (without revealing the full key)
-        const keyLength = privateKeyBase64?.length || 0;
-        console.log(`Processing Firebase private key (base64 length: ${keyLength} chars)`);
-        
-        if (keyLength < 100) {
-          console.warn('⚠️ WARNING: The base64 private key seems unusually short');
-        }
-        
-        decodedPrivateKey = Buffer.from(privateKeyBase64!, 'base64').toString('utf8');
-        
-        // Enhanced validation of the decoded key format
-        const hasPemHeader = decodedPrivateKey.includes('-----BEGIN PRIVATE KEY-----');
-        const hasPemFooter = decodedPrivateKey.includes('-----END PRIVATE KEY-----');
-        const hasNewlines = decodedPrivateKey.includes('\n');
-        const newlineCount = (decodedPrivateKey.match(/\n/g) || []).length;
-        
-        console.log(`Decoded private key validation:
-          - Contains PEM header: ${hasPemHeader ? '✅' : '❌'}
-          - Contains PEM footer: ${hasPemFooter ? '✅' : '❌'}
-          - Contains newlines: ${hasNewlines ? `✅ (${newlineCount} found)` : '❌'}
-          - Decoded length: ${decodedPrivateKey.length} characters
-        `);
-        
-        if (!hasPemHeader || !hasPemFooter || !hasNewlines) {
-          throw new Error('Decoded private key is not in valid PEM format');
-        }
-        
-        console.log('✅ Successfully decoded base64 private key');
+        assertFirebasePrivateKey();
+        console.log('✅ Firebase private key validation passed');
       } catch (error: any) {
-        const errorMessage = `Failed to decode Firebase private key from base64: ${error?.message || 'Unknown error'}`;
-        console.error(errorMessage);
-        throw new Error(errorMessage);
+        console.error('❌ Firebase private key validation failed:', error.message);
+        throw error; // Re-throw to prevent initialization
       }
+      
+      // Decode the base64 encoded private key
+      const decodedPrivateKey = Buffer.from(privateKeyBase64!, 'base64').toString('utf8');
+      
+      // Add diagnostic logging for the base64 key (without revealing the full key)
+      const keyLength = privateKeyBase64?.length || 0;
+      console.log(`Processing Firebase private key (base64 length: ${keyLength} chars)`);
       
       // Simple logging (without revealing sensitive key information)
       console.log(`Initializing Firebase Admin with: 
@@ -96,7 +76,7 @@ if (!apps.length) {
         console.error('Please check that your FIREBASE_PRIVATE_KEY_BASE64 environment variable:');
         console.error('1. Contains a valid base64-encoded Firebase service account private key');
         console.error('2. Is complete (not truncated)');
-        console.error('3. Was generated with: node src/scripts/convertServiceAccountToEnv.js');
+        console.error('3. Was generated with: node scripts/generate-firebase-key.js');
       }
     }
   }
