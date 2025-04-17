@@ -6,6 +6,7 @@ import { trySaveMealServer } from '@/lib/serverMealUtils';
 import { createAnalysisResponse, createEmptyFallbackAnalysis, createErrorResponse } from './analyzer';
 import { isValidAnalysis, createFallbackAnalysis, normalizeAnalysisResult } from '@/lib/utils/analysisValidator';
 import { safeExtractImage } from '@/lib/imageProcessing/safeExtractImage';
+import { GPT_VISION_MODEL } from '@/lib/constants';
 
 // Placeholder image for development fallback
 const PLACEHOLDER_IMAGE = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
@@ -414,7 +415,7 @@ If the image is unclear, provide your best estimates for ALL fields - do not omi
 This is CRITICAL: The system CANNOT handle missing fields.`;
 
       const requestPayload = {
-        model: "gpt-4-vision-preview",
+        model: GPT_VISION_MODEL,
         messages: [
           {
             role: "user",
