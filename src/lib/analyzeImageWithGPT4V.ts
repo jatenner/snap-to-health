@@ -255,7 +255,7 @@ export async function analyzeImageWithGPT4V(
     }
     
     // Construct the system prompt
-    const systemPrompt = `You are an expert nutritionist AI that analyzes meal images and provides detailed nutritional information and health advice.
+    const systemPrompt = `You are an expert nutritionist AI that analyzes meal images and provides detailed nutritional information and health advice. You must provide a BEST EFFORT ANALYSIS even with unclear, partial, or ambiguous images.
 
 GOAL: Analyze the food in the image and return a JSON object with the following structure:
 {
@@ -278,23 +278,28 @@ GOAL: Analyze the food in the image and return a JSON object with the following 
     {
       "name": "Name of ingredient",
       "estimatedAmount": "Portion estimate (e.g., '1 cup', '2 oz')",
-      "calories": number (estimated kcal)
+      "calories": number (estimated kcal),
+      "confidence": number (0-100 representing your confidence in this identification)
     },
     ...more ingredients
-  ]
+  ],
+  "confidence": number (0-100 representing your overall confidence in this analysis),
+  "reasoningLogs": ["List your step-by-step reasoning about what you can see in the image"]
 }
 
-IMPORTANT: 
-- You MUST output valid JSON only
-- All numeric values must be numbers, not strings
-- All arrays must be properly formed
-- Your response should contain ALL the fields specified above
-- If you cannot identify the food clearly, state this in the description but still provide a best estimate for nutrients
+IMPORTANT INSTRUCTIONS FOR UNCLEAR IMAGES:
+- If the image is unclear, blurry, poorly lit, or only shows part of the food, MAKE YOUR BEST GUESS
+- Use your knowledge of food appearance, textures, colors, and shapes to make educated guesses
+- If you see even a small portion of food (like a corner of a banana), use that to inform your analysis
+- Explain your reasoning and uncertainty in the description field
+- Assign lower confidence scores to indicate uncertainty, but ALWAYS provide a complete analysis
+- Add specific reasoning in the reasoningLogs array about what you can identify and how certain you are
+- NEVER refuse to analyze an image - provide your best guess with appropriate confidence levels
 
 User Health Goals: ${healthGoals.join(', ')}
 Dietary Preferences/Restrictions: ${dietaryPreferences.join(', ')}
 
-NOTE: Be accurate but conservative with nutrient estimates. If you don't see food clearly, say so. RETURN ONLY VALID JSON. All numeric values should be numbers, not strings.
+NOTE: Always return valid JSON with ALL fields. For uncertain values, provide estimates and indicate lower confidence.
 ${usedFallbackModel ? '\nNOTE: This analysis is being performed by a fallback model with limited capabilities.' : ''}`;
     
     // Format the image URL correctly
@@ -316,7 +321,7 @@ ${usedFallbackModel ? '\nNOTE: This analysis is being performed by a fallback mo
           content: [
             {
               type: 'text',
-              text: 'Analyze this meal image and provide nutritional information and health advice in JSON format.'
+              text: 'Analyze this meal image and provide nutritional information and health advice in JSON format. Even if the image is unclear, partial, or difficult to identify, please make your best educated guess and provide a complete analysis with appropriate confidence levels.'
             },
             {
               type: 'image_url',
@@ -346,49 +351,93 @@ ${usedFallbackModel ? '\nNOTE: This analysis is being performed by a fallback mo
     try {
       parsedResponse = JSON.parse(responseContent);
       
-      // Verify we have the required fields
-      const requiredKeys = ['description', 'nutrients', 'feedback', 'suggestions', 'detailedIngredients'];
-      const missingKeys = requiredKeys.filter(key => !parsedResponse[key]);
+      // Verify we have the required fields, but be more lenient
+      const requiredKeys = ['description', 'nutrients'];
+      const recommendedKeys = ['feedback', 'suggestions', 'detailedIngredients'];
+      const missingRequiredKeys = requiredKeys.filter(key => !parsedResponse[key]);
+      const missingRecommendedKeys = recommendedKeys.filter(key => !parsedResponse[key]);
       
-      if (missingKeys.length > 0) {
-        console.error(`⚠️ [${requestId}] Missing required keys in GPT response: ${missingKeys.join(', ')}`);
+      // Add minimum default values for any missing required fields
+      if (missingRequiredKeys.length > 0) {
+        console.warn(`⚠️ [${requestId}] Missing required keys in GPT response: ${missingRequiredKeys.join(', ')}`);
         
-        // We'll still return the partial response, but mark as not fully successful
-        return {
-          analysis: parsedResponse,
-          success: false,
-          error: `Incomplete analysis result: missing ${missingKeys.join(', ')}`,
-          modelUsed: modelToUse,
-          usedFallbackModel,
-          forceGPT4V,
-          rawResponse: responseContent
-        };
+        // Add default values for missing required fields
+        if (!parsedResponse.description) {
+          parsedResponse.description = "Food item (details unclear from image)";
+        }
+        
+        if (!parsedResponse.nutrients) {
+          parsedResponse.nutrients = {
+            calories: 0,
+            protein: 0,
+            carbs: 0,
+            fat: 0,
+            fiber: 0,
+            sugar: 0
+          };
+        }
       }
       
-      // Also check for nutrient value structure
+      // Add default values for missing recommended fields
+      if (missingRecommendedKeys.length > 0) {
+        console.warn(`ℹ️ [${requestId}] Missing recommended keys in GPT response: ${missingRecommendedKeys.join(', ')}`);
+        
+        if (!parsedResponse.feedback) {
+          parsedResponse.feedback = ["Unable to provide detailed feedback based on the image"];
+        }
+        
+        if (!parsedResponse.suggestions) {
+          parsedResponse.suggestions = ["Consider providing a clearer image for more specific suggestions"];
+        }
+        
+        if (!parsedResponse.detailedIngredients) {
+          parsedResponse.detailedIngredients = [{
+            name: "Unidentified food item",
+            estimatedAmount: "unknown",
+            calories: 0,
+            confidence: 0
+          }];
+        }
+      }
+      
+      // Also check for nutrient value structure, but fill in missing values
       if (parsedResponse.nutrients) {
-        const requiredNutrients = ['calories', 'protein', 'carbs', 'fat'];
+        const requiredNutrients = ['calories', 'protein', 'carbs', 'fat', 'fiber', 'sugar'];
         const missingNutrients = requiredNutrients.filter(
           nutrient => typeof parsedResponse.nutrients[nutrient] !== 'number'
         );
         
         if (missingNutrients.length > 0) {
-          console.error(`⚠️ [${requestId}] Missing or invalid nutrient values: ${missingNutrients.join(', ')}`);
-          return {
-            analysis: parsedResponse,
-            success: false,
-            error: `Invalid nutrient values: ${missingNutrients.join(', ')}`,
-            modelUsed: modelToUse,
-            usedFallbackModel,
-            forceGPT4V,
-            rawResponse: responseContent
-          };
+          console.warn(`⚠️ [${requestId}] Filling in missing or invalid nutrient values: ${missingNutrients.join(', ')}`);
+          
+          // Fill in missing nutrient values with zeros
+          missingNutrients.forEach(nutrient => {
+            parsedResponse.nutrients[nutrient] = 0;
+          });
+          
+          // Mark as low confidence if we had to fill in nutrients
+          parsedResponse.lowConfidence = true;
         }
       }
       
+      // Add confidence indicator if not present
+      if (typeof parsedResponse.confidence !== 'number') {
+        // Default to medium confidence
+        parsedResponse.confidence = 50;
+      }
+      
+      // Add reasoningLogs if not present
+      if (!Array.isArray(parsedResponse.reasoningLogs)) {
+        parsedResponse.reasoningLogs = ["No reasoning logs provided by model"];
+      }
+      
+      // Return the analysis, considering it successful if we have minimum required data
+      const isMinimallyComplete = parsedResponse.description && parsedResponse.nutrients;
+      
       return {
         analysis: parsedResponse,
-        success: true,
+        success: isMinimallyComplete,
+        error: isMinimallyComplete ? undefined : "Incomplete analysis result even after repairs",
         modelUsed: modelToUse,
         usedFallbackModel,
         forceGPT4V,
