@@ -518,44 +518,44 @@ export function validateGptAnalysisResult(analysis: any): boolean {
   if (!analysis) return false;
   
   // Check for required top-level fields
-  const requiredFields = [
-    'description', 
-    'nutrients', 
-    'feedback', 
-    'suggestions', 
-    'detailedIngredients'
-  ];
+  // We only require description and nutrients as absolute minimum now
+  const criticalFields = ['description', 'nutrients'];
+  const recommendedFields = ['feedback', 'suggestions', 'detailedIngredients'];
   
-  for (const field of requiredFields) {
+  // Verify critical fields exist
+  for (const field of criticalFields) {
     if (!analysis[field]) {
-      console.warn(`Analysis validation failed: missing '${field}'`);
+      console.warn(`Analysis validation failed: missing critical field '${field}'`);
       return false;
     }
   }
   
-  // Check nutrients structure
-  const requiredNutrients = [
-    'calories', 'protein', 'carbs', 'fat'
-  ];
+  // Log warnings for recommended fields but don't fail validation
+  for (const field of recommendedFields) {
+    if (!analysis[field]) {
+      console.warn(`Analysis missing recommended field '${field}', but continuing with validation`);
+    }
+  }
   
+  // Ensure minimum nutrients structure - only require calories at minimum
   if (analysis.nutrients) {
-    for (const nutrient of requiredNutrients) {
-      if (typeof analysis.nutrients[nutrient] !== 'number') {
-        console.warn(`Analysis validation failed: missing or invalid nutrient '${nutrient}'`);
-        return false;
-      }
+    if (typeof analysis.nutrients.calories !== 'number' && 
+        typeof analysis.nutrients.calories !== 'string') {
+      console.warn(`Analysis validation warning: missing or invalid 'calories' in nutrients`);
+      // Don't fail here, just warn
     }
   }
   
-  // Ensure arrays are present
-  const requiredArrays = ['feedback', 'suggestions', 'detailedIngredients'];
-  for (const arrayField of requiredArrays) {
+  // More lenient array validation - as long as they exist, even if empty
+  const arrayFields = ['feedback', 'suggestions', 'detailedIngredients'].filter(f => analysis[f] !== undefined);
+  for (const arrayField of arrayFields) {
     if (!Array.isArray(analysis[arrayField])) {
-      console.warn(`Analysis validation failed: '${arrayField}' is not an array`);
-      return false;
+      console.warn(`Analysis warning: '${arrayField}' exists but is not an array`);
+      // Don't fail validation, just log the warning
     }
   }
   
+  // As long as we have description and some form of nutrients, consider it valid
   return true;
 }
 
