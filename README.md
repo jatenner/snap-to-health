@@ -79,7 +79,7 @@ Create a `.env.local` file in the root directory with the following variables:
 OPENAI_API_KEY=your_openai_api_key_here
 
 # Nutritionix API credentials
-NUTRITIONIX_APP_ID=your_nutritionix_app_id_here
+NUTRITIONIX_APP_ID=your_nutritionix_app_id
 NUTRITIONIX_API_KEY=your_nutritionix_api_key_here
 
 # Firebase Client Configuration
@@ -198,6 +198,39 @@ If you encounter issues with Firebase:
 3. Verify the service account has the necessary permissions
 4. Run the Firebase test script to check connectivity
 5. Check Firebase console for any error logs
+
+#### Firebase Diagnostic Tools
+
+We've added several diagnostic tools to help troubleshoot Firebase issues:
+
+1. **Firebase Diagnostic API Endpoint**
+   ```
+   GET /api/debug/firebase
+   ```
+   This endpoint checks your Firebase configuration and returns detailed diagnostic information about:
+   - Required environment variables
+   - Firebase private key validation
+   - Firebase Admin SDK initialization status
+   - Firestore connectivity test
+
+2. **Firebase Configuration Verification Script**
+   ```bash
+   node scripts/verify-firebase-config.js
+   ```
+   This script validates your Firebase environment variables and private key format without attempting to initialize Firebase. Use this to check if your configuration is properly formatted.
+
+3. **Firebase Private Key Generator**
+   ```bash
+   node scripts/generate-firebase-key.js [path-to-service-account.json]
+   ```
+   This script extracts the private key from your Firebase service account JSON file and generates the base64-encoded version required for environment variables. It also creates:
+   - `firebase-key-base64.txt` - Contains only the base64-encoded key
+   - `.env.local.firebase` - Contains all Firebase Admin environment variables
+
+To regenerate your Firebase private key:
+1. Download a fresh service account JSON file from Firebase Console
+2. Run the key generator script
+3. Update your `.env.local` file with the generated variables
 
 ## Future Enhancements
 
