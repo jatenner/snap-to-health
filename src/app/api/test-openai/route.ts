@@ -17,15 +17,15 @@ export async function GET(request: NextRequest) {
     // Check USE_GPT4_VISION setting
     const forceGPT4V = process.env.USE_GPT4_VISION !== 'false';
     
-    // Initialize the OpenAI client
+    // Initialize the OpenAI client - we'll keep this for the models list
     const openai = new OpenAI({
       apiKey: openAIApiKey
     });
     
-    // Check models
-    const gpt4vResult = await checkModelAvailability(openai, 'gpt-4-vision-preview', requestId);
-    const gpt4oResult = await checkModelAvailability(openai, 'gpt-4o', requestId);
-    const gpt35Result = await checkModelAvailability(openai, 'gpt-3.5-turbo', requestId);
+    // Check models (updated to match new function signature)
+    const gpt4vResult = await checkModelAvailability('gpt-4-vision-preview', requestId);
+    const gpt4oResult = await checkModelAvailability('gpt-4o', requestId);
+    const gpt35Result = await checkModelAvailability('gpt-3.5-turbo', requestId);
     
     // List available models (only a subset for brevity)
     let availableModels: string[] = [];
