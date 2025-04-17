@@ -1,10 +1,21 @@
 // src/utils/storageUtils.ts
-import { getStorage, ref, uploadBytes, getDownloadURL, UploadMetadata } from "firebase/storage";
-import { app } from "@/lib/firebase";
+import { getStorage, ref, uploadBytes, getDownloadURL, UploadMetadata, FirebaseStorage } from "firebase/storage";
+import { app } from "@/lib/firebase"; // app can be null
 import axios from 'axios';
 
-// Initialize Firebase Storage
-const storage = getStorage(app);
+// Initialize Firebase Storage lazily inside functions after checking app
+let storage: FirebaseStorage | null = null;
+
+function getInitializedStorage(): FirebaseStorage {
+  if (!app) {
+    console.error("Firebase app is not initialized. Cannot get Storage instance.");
+    throw new Error('[Firebase] App is null. Storage operations cannot proceed.');
+  }
+  if (!storage) {
+    storage = getStorage(app);
+  }
+  return storage;
+}
 
 /**
  * Upload a file to Firebase Storage with CORS proxy support for local development
@@ -18,12 +29,10 @@ export async function uploadFileWithCors(file: File | Blob, path: string, progre
     throw new Error('File and path are required');
   }
   
-  if (!storage) {
-    throw new Error('Firebase Storage is not initialized');
-  }
+  const currentStorage = getInitializedStorage(); // Get or initialize storage safely
   
   // Create a storage reference
-  const storageRef = ref(storage, path);
+  const storageRef = ref(currentStorage, path);
   
   // Set default metadata if not provided
   const finalMetadata = {
@@ -105,12 +114,10 @@ export async function getFileUrlWithCors(path: string) {
     throw new Error('Path is required');
   }
   
-  if (!storage) {
-    throw new Error('Firebase Storage is not initialized');
-  }
+  const currentStorage = getInitializedStorage(); // Get or initialize storage safely
   
   // Create a storage reference
-  const storageRef = ref(storage, path);
+  const storageRef = ref(currentStorage, path);
   
   try {
     // Get the download URL
