@@ -70,7 +70,7 @@ function createEmptyFallbackAnalysis(): any {
 /**
  * Check if a model is available for the OpenAI API key
  * @param openai Initialized OpenAI client
- * @param modelId Model ID to check (e.g., "gpt-4-vision-preview")
+ * @param modelId Model ID to check (e.g., "gpt-4o")
  * @param requestId Request ID for logging
  * @returns Object with availability status and fallback model if needed
  */
@@ -104,9 +104,9 @@ export async function checkModelAvailability(
         errorMessage.includes('access')) {
       fallbackModel = 'gpt-3.5-turbo';
       errorDetail = `No access to ${modelId} (permission denied). Using ${fallbackModel} as fallback.`;
-    } else if (statusCode === 404 || errorMessage.includes('not found')) {
+    } else if (statusCode === 404 || errorMessage.includes('not found') || errorMessage.includes('deprecated')) {
       fallbackModel = 'gpt-3.5-turbo';
-      errorDetail = `Model ${modelId} not found. Using ${fallbackModel} as fallback.`;
+      errorDetail = `Model ${modelId} not found or deprecated. Using ${fallbackModel} as fallback.`;
     } else {
       // For other errors, still try to use the fallback model
       fallbackModel = 'gpt-3.5-turbo';
@@ -119,7 +119,7 @@ export async function checkModelAvailability(
 }
 
 /**
- * Analyze an image with GPT-4-Vision model, with fallback to GPT-3.5-Turbo if needed
+ * Analyze an image with GPT-4o model (with vision capabilities), with fallback to GPT-3.5-Turbo if needed
  * @param base64Image Base64 encoded image to analyze
  * @param healthGoals User's health goals to consider
  * @param dietaryPreferences User's dietary preferences (allergies, avoidances)
@@ -139,14 +139,14 @@ export async function analyzeImageWithGPT4V(
   usedFallbackModel: boolean;
   forceGPT4V: boolean;
 }> {
-  console.log(`📸 [${requestId}] Starting image analysis with GPT4V...`);
+  console.log(`📸 [${requestId}] Starting image analysis with GPT4o...`);
   console.log(`📊 [${requestId}] Goals: ${healthGoals.join(', ')}`);
   console.log(`🍽️ [${requestId}] Preferences: ${dietaryPreferences.join(', ')}`);
   console.log(`🖼️ [${requestId}] Image size: ~${Math.round(base64Image.length / 1024)}KB`);
   
   // Check if USE_GPT4_VISION is explicitly set (defaulting to true if not set)
   const forceGPT4V = process.env.USE_GPT4_VISION !== 'false';
-  console.log(`⚙️ [${requestId}] GPT-4-Vision Mode: ${forceGPT4V ? 'FORCED' : 'FALLBACK ALLOWED'}`);
+  console.log(`⚙️ [${requestId}] GPT-4o Mode: ${forceGPT4V ? 'FORCED' : 'FALLBACK ALLOWED'}`);
   
   // Check for the OpenAI API key
   const openAIApiKey = process.env.OPENAI_API_KEY;
@@ -174,18 +174,18 @@ export async function analyzeImageWithGPT4V(
     console.log(`🔗 [${requestId}] OpenAI client initialized successfully`);
     
     // Default model and backup option
-    const preferredModel = 'gpt-4-vision-preview';
+    const preferredModel = 'gpt-4o';
     let modelToUse = preferredModel;
     let usedFallbackModel = false;
     
     // Handle model selection based on USE_GPT4_VISION flag
     if (forceGPT4V) {
-      // If GPT-4-Vision is forced, check availability but don't fallback
+      // If GPT-4o is forced, check availability but don't fallback
       const modelCheck = await checkModelAvailability(openai, preferredModel, requestId);
       
       if (!modelCheck.available) {
         // If force mode is on but model isn't available, fail rather than fallback
-        const error = `GPT-4-Vision is forced (USE_GPT4_VISION=true) but ${preferredModel} is not available: ${modelCheck.error}`;
+        const error = `GPT-4o is forced (USE_GPT4_VISION=true) but ${preferredModel} is not available: ${modelCheck.error}`;
         console.error(`❌ [${requestId}] ${error}`);
         
         return {
@@ -337,7 +337,7 @@ ${usedFallbackModel ? '\nNOTE: This analysis is being performed by a fallback mo
     }
   } catch (error: any) {
     const errorMessage = error?.message || 'Unknown error';
-    console.error(`❌ [${requestId}] GPT4V analysis failed: ${errorMessage}`);
+    console.error(`❌ [${requestId}] GPT4o analysis failed: ${errorMessage}`);
     
     return {
       analysis: createEmptyFallbackAnalysis(),
