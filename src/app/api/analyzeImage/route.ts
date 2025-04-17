@@ -4,7 +4,7 @@ import crypto from 'crypto';
 import { adminStorage } from '@/lib/firebaseAdmin';
 import { trySaveMealServer } from '@/lib/serverMealUtils';
 import { createAnalysisResponse, createEmptyFallbackAnalysis, createErrorResponse } from './analyzer';
-import { isValidAnalysis, createFallbackAnalysis } from '@/lib/utils/analysisValidator';
+import { isValidAnalysis, createFallbackAnalysis, normalizeAnalysisResult } from '@/lib/utils/analysisValidator';
 import { safeExtractImage } from '@/lib/imageProcessing/safeExtractImage';
 
 // Placeholder image for development fallback
@@ -356,7 +356,7 @@ Focus specifically on:
 2. The main nutritional components (protein, carbs, fat, calories)
 3. Health impact relative to the user's goals: ${healthGoalString}
 
-IMPORTANT: You must strictly follow the specified JSON format with ALL required fields, even if you're uncertain.
+CRITICAL REQUIREMENT: Return ONLY properly formatted JSON data. No explanations, no markdown, no text outside of the JSON object.
 For unclear or low-quality images, make your best educated guess based on visible elements.`;
 
       const fallbackSystemPrompt = attempt === 1 ? primarySystemPrompt 
@@ -368,6 +368,7 @@ Even with limited visual information, please:
 2. Provide reasonable nutritional estimates even if uncertain
 3. Never refuse to analyze - always provide your best guess with appropriate confidence levels
 4. STRICT REQUIREMENT: Return ONLY valid JSON with ALL required fields - description and nutrients must be present
+5. DO NOT include any explanations or text outside the JSON structure
 
 The user's health goals are: ${healthGoalString}`;
 
@@ -406,7 +407,8 @@ STRICT REQUIREMENTS:
 5. Feedback and suggestions arrays must be present (at least one item in each)
 6. goalScore must be a number between 1-10
 7. DO NOT include any explanatory text outside the JSON structure
-8. Your entire response must be valid JSON only
+8. DO NOT use markdown formatting or code blocks - return the raw JSON only
+9. Your entire response must be valid JSON only, no prefixes or suffixes
 
 If the image is unclear, provide your best estimates for ALL fields - do not omit any required fields.
 This is CRITICAL: The system CANNOT handle missing fields.`;
@@ -470,178 +472,206 @@ This is CRITICAL: The system CANNOT handle missing fields.`;
           continue;
         }
         
-        // Attempt to parse JSON content
-        let parsedResult;
-        try {
-          const content = responseData.choices[0].message.content;
+        // Get the raw content
+        const content = responseData.choices[0].message.content;
+        
+        // Log raw GPT response for debugging
+        console.log(`[${requestId}] RAW GPT RESPONSE:`, content);
+        rawGptResponse = content;
+        
+        // Enhanced JSON extraction - Try multiple approaches to parse the JSON
+        let parsedResult = extractJSONFromText(content, requestId);
           
-          // Log raw GPT response for debugging
-          console.log(`[${requestId}] RAW GPT RESPONSE:`, content);
-          rawGptResponse = content;
-          
-          parsedResult = JSON.parse(content);
-        } catch (parseError: unknown) {
-          console.error(`[${requestId}] JSON parse error:`, parseError);
-          
-          // On first attempt, retry
-          if (attempt === 1) {
-            console.log(`[${requestId}] JSON parsing failed on first attempt, retrying with more explicit instructions...`);
-            lastError = new Error(`Failed to parse JSON response (attempt ${attempt}): ${parseError instanceof Error ? parseError.message : 'Unknown parsing error'}`);
-            attempt++;
-            continue;
-          }
-          
-          // On second attempt, attempt manual parsing/extraction
-          console.log(`[${requestId}] Attempting manual JSON extraction on final attempt...`);
-          const content = responseData.choices[0].message.content;
-          parsedResult = attemptManualJsonExtraction(content, requestId);
-          if (!parsedResult) {
-            throw new Error(`Failed to parse GPT-4V response as JSON after ${MAX_ATTEMPTS} attempts`);
-          }
+        // If parsing failed and this is the first attempt, retry
+        if (!parsedResult && attempt === 1) {
+          console.log(`[${requestId}] JSON parsing failed on first attempt, retrying with more explicit instructions...`);
+          lastError = new Error(`Failed to parse JSON response on attempt ${attempt}`);
+          attempt++;
+          continue;
         }
         
-        // Validate required fields exist
-        if (!parsedResult.description || 
-            !parsedResult.nutrients || 
-            !parsedResult.nutrients.calories || 
-            !parsedResult.nutrients.protein || 
-            !parsedResult.nutrients.carbs || 
-            !parsedResult.nutrients.fat) {
-          console.error(`[${requestId}] Missing required fields in parsed result:`, parsedResult);
-          
-          // Build detailed debug info
-          const missingFields = [];
-          if (!parsedResult.description) missingFields.push('description');
-          if (!parsedResult.nutrients) {
-            missingFields.push('nutrients');
+        // If we still couldn't parse JSON after all attempts, create a fallback response
+        if (!parsedResult) {
+          console.error(`[${requestId}] Failed to parse GPT-4V response as JSON after ${MAX_ATTEMPTS} attempts`);
+          return {
+            success: false,
+            fallback: true,
+            result: createEmptyFallbackAnalysis(),
+            error: `Failed to parse JSON response after ${MAX_ATTEMPTS} attempts`,
+            rawResponse: content
+          };
+        }
+
+        // Validate and normalize parsed result
+        parsedResult = normalizeAnalysisResult(parsedResult);
+        
+        // Validate required fields exist - enhanced validation
+        if (!validateRequiredFields(parsedResult)) {
+          if (attempt === 1) {
+            console.log(`[${requestId}] Required fields missing in first attempt, retrying...`);
+            lastError = new Error(`Missing required fields in GPT-4V response (attempt ${attempt})`);
+            attempt++;
+            continue;
           } else {
-            if (!parsedResult.nutrients.calories) missingFields.push('nutrients.calories');
-            if (!parsedResult.nutrients.protein) missingFields.push('nutrients.protein');
-            if (!parsedResult.nutrients.carbs) missingFields.push('nutrients.carbs');
-            if (!parsedResult.nutrients.fat) missingFields.push('nutrients.fat');
+            console.error(`[${requestId}] Required fields missing after ${MAX_ATTEMPTS} attempts`);
+            return {
+              success: false,
+              fallback: true,
+              result: createEmptyFallbackAnalysis(),
+              error: `Missing required fields in GPT-4V response after ${MAX_ATTEMPTS} attempts`,
+              rawResponse: content
+            };
           }
-          
-          console.error(`[${requestId}] Missing required fields: ${missingFields.join(', ')}`);
-          
-          if (attempt === 1) {
-            lastError = new Error(`Missing required fields in response (attempt ${attempt}): ${missingFields.join(', ')}`);
-            attempt++;
-            continue;
-          }
-          
-          // Add missing fields with fallback values on second attempt
-          parsedResult = ensureRequiredFields(parsedResult);
         }
         
-        // Convert nutrient values to consistent format if needed
+        // Standardize numeric values that might be returned as numbers
         parsedResult = standardizeNutrientValues(parsedResult);
         
         // Return the validated and parsed result
         return {
+          success: true,
           result: parsedResult,
-          rawResponse: rawGptResponse
+          rawResponse: content
         };
         
-      } catch (fetchError: unknown) {
-        // Clear timeout to prevent memory leaks
+      } catch (fetchError) {
+        // Clear the timeout if it hasn't fired yet
         clearTimeout(timeoutId);
         
-        console.error(`[${requestId}] Error during OpenAI API request (attempt ${attempt}):`, fetchError);
+        console.error(`[${requestId}] Network error during GPT-4V request:`, fetchError);
+        lastError = fetchError instanceof Error ? fetchError : new Error(String(fetchError));
         
-        if (fetchError instanceof Error && fetchError.name === 'AbortError') {
-          lastError = new Error(`Request timed out after 30 seconds (attempt ${attempt})`);
-        } else {
-          lastError = fetchError instanceof Error ? fetchError : new Error('Unknown fetch error');
-        }
-        
+        // Retry on network errors
         attempt++;
+        continue;
       }
-    } catch (overallError: unknown) {
-      console.error(`[${requestId}] General error in GPT-4V analysis:`, overallError);
-      lastError = overallError instanceof Error ? overallError : new Error('Unknown error in GPT-4V analysis');
+    } catch (error) {
+      console.error(`[${requestId}] Error during GPT-4V analysis:`, error);
+      lastError = error instanceof Error ? error : new Error(String(error));
+      
+      // Retry on any errors
       attempt++;
+      continue;
     }
   }
+
+  // If we get here, all attempts failed
+  console.error(`[${requestId}] All ${MAX_ATTEMPTS} attempts to analyze with GPT-4V failed`);
   
-  // If we've exhausted all attempts, create a fallback response
-  console.error(`[${requestId}] All GPT-4V attempts failed, returning fallback response. Last error:`, lastError);
-  
-  // Create a minimal valid response with the required fields
+  // Include raw response for debugging if available
   return {
-    result: {
-      description: "Unable to analyze the image properly",
-      nutrients: {
-        calories: "Unknown",
-        protein: "Unknown",
-        carbs: "Unknown",
-        fat: "Unknown"
-      },
-      feedback: ["We couldn't properly analyze this meal. Please try again with a clearer photo."],
-      suggestions: ["Take a photo with better lighting", "Make sure all food items are visible"],
-      goalScore: 5,
-      healthImpact: "Could not determine health impact due to analysis failure",
-      fallback: true,
-      error: lastError?.message || "Unknown error during analysis"
-    },
+    success: false,
+    fallback: true,
+    result: createEmptyFallbackAnalysis(),
+    error: lastError?.message || "Unknown error during image analysis",
     rawResponse: rawGptResponse
   };
 }
 
-// Helper function to attempt manual JSON extraction when parsing fails
-function attemptManualJsonExtraction(content: string, requestId: string): any | null {
-  try {
-    // Log the content we're trying to extract from
-    console.log(`[${requestId}] Attempting JSON extraction from:`, content.substring(0, 200) + "...");
-    
-    // Look for content that appears to be JSON
-    const jsonMatch = content.match(/\{[\s\S]*\}/);
-    if (jsonMatch) {
-      const extractedJson = jsonMatch[0];
-      console.log(`[${requestId}] Extracted JSON-like content:`, extractedJson.substring(0, 200) + "...");
-      return JSON.parse(extractedJson);
-    }
-    
-    return null;
-  } catch (error: unknown) {
-    console.error(`[${requestId}] Manual JSON extraction failed:`, error);
+/**
+ * Extracts JSON from possibly malformed text that might contain markdown or other formatting
+ */
+function extractJSONFromText(text: string, requestId: string): any | null {
+  if (!text || typeof text !== 'string') {
+    console.error(`[${requestId}] Text to extract JSON from is empty or not a string`);
     return null;
   }
+
+  // First try: simple JSON.parse if it's already valid JSON
+  try {
+    return JSON.parse(text);
+  } catch (e) {
+    console.log(`[${requestId}] Initial JSON.parse failed, trying alternative extraction methods`);
+  }
+  
+  // Second try: Look for JSON between code blocks or backticks
+  try {
+    // Try to extract JSON from markdown code blocks
+    const codeBlockMatch = text.match(/```(?:json)?([\s\S]*?)```/);
+    if (codeBlockMatch && codeBlockMatch[1]) {
+      const jsonContent = codeBlockMatch[1].trim();
+      console.log(`[${requestId}] Found JSON in code block, attempting to parse`);
+      return JSON.parse(jsonContent);
+    }
+  } catch (e) {
+    console.log(`[${requestId}] Code block extraction failed:`, e);
+  }
+  
+  // Third try: Look for anything that looks like a JSON object
+  try {
+    const possibleJson = text.match(/(\{[\s\S]*\})/);
+    if (possibleJson && possibleJson[1]) {
+      const jsonContent = possibleJson[1].trim();
+      console.log(`[${requestId}] Found possible JSON object, attempting to parse`);
+      return JSON.parse(jsonContent);
+    }
+  } catch (e) {
+    console.log(`[${requestId}] Object extraction failed:`, e);
+  }
+  
+  // Final attempt: Aggressive cleaning - remove all non-JSON characters
+  try {
+    // Remove any non-JSON characters at the beginning of the string
+    let cleanedText = text.replace(/^[^{]*/, '');
+    
+    // Remove any non-JSON characters at the end of the string
+    cleanedText = cleanedText.replace(/[^}]*$/, '');
+    
+    // Try to parse the cleaned text
+    if (cleanedText.startsWith('{') && cleanedText.endsWith('}')) {
+      console.log(`[${requestId}] Attempting to parse aggressively cleaned text`);
+      return JSON.parse(cleanedText);
+    }
+  } catch (e) {
+    console.log(`[${requestId}] Aggressive cleaning failed:`, e);
+  }
+  
+  console.error(`[${requestId}] All JSON extraction methods failed`);
+  return null;
 }
 
-// Helper function to ensure all required fields exist
-function ensureRequiredFields(result: any): any {
-  if (!result) result = {};
-  
-  if (!result.description) {
-    result.description = "Food items could not be clearly identified";
+/**
+ * Validates that all required fields exist in the analysis
+ */
+function validateRequiredFields(result: any): boolean {
+  if (!result || typeof result !== 'object') {
+    return false;
   }
   
-  if (!result.nutrients) {
-    result.nutrients = {};
+  // Check for required string fields
+  if (typeof result.description !== 'string' || !result.description.trim()) {
+    return false;
   }
   
+  // Check for required nutrients object
+  if (!result.nutrients || typeof result.nutrients !== 'object') {
+    return false;
+  }
+  
+  // Check for required nutrient fields
   const nutrients = result.nutrients;
-  if (!nutrients.calories) nutrients.calories = "Unknown";
-  if (!nutrients.protein) nutrients.protein = "Unknown";
-  if (!nutrients.carbs) nutrients.carbs = "Unknown";
-  if (!nutrients.fat) nutrients.fat = "Unknown";
-  
-  if (!result.feedback || !Array.isArray(result.feedback) || result.feedback.length === 0) {
-    result.feedback = ["We couldn't properly analyze this meal. Please try again with a clearer photo."];
+  if (!('calories' in nutrients) || 
+      !('protein' in nutrients) || 
+      !('carbs' in nutrients) || 
+      !('fat' in nutrients)) {
+    return false;
   }
   
-  if (!result.suggestions || !Array.isArray(result.suggestions) || result.suggestions.length === 0) {
-    result.suggestions = ["Take a photo with better lighting", "Make sure all food items are visible"];
+  // Check for required array fields
+  if (!Array.isArray(result.feedback) || result.feedback.length === 0) {
+    return false;
   }
   
+  if (!Array.isArray(result.suggestions) || result.suggestions.length === 0) {
+    return false;
+  }
+  
+  // Check for goalScore
   if (typeof result.goalScore !== 'number') {
-    result.goalScore = 5;
+    return false;
   }
   
-  // Mark as fallback when we had to add fields
-  result.fallback = true;
-  
-  return result;
+  return true;
 }
 
 // Helper function to standardize nutrient values
@@ -962,69 +992,62 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
         responseData.debug.rawGptResponse = analysisResult.rawResponse;
       }
       
+      // First apply normalization to ensure consistent structure
+      const normalizedAnalysis = normalizeAnalysisResult(analysis);
+      
       // Enhanced validation with more precise checks
-      const isInvalidAnalysis = !analysis || 
-        typeof analysis !== 'object' ||
-        !analysis.description || 
-        typeof analysis.description !== 'string' ||
-        !analysis.nutrients || 
-        typeof analysis.nutrients !== 'object' ||
-        !(
-          'calories' in analysis.nutrients && 
-          'protein' in analysis.nutrients && 
-          'carbs' in analysis.nutrients && 
-          'fat' in analysis.nutrients
-        ) ||
-        (
-          Array.isArray(analysis.feedback) && analysis.feedback.length === 0
-        ) ||
-        (
-          Array.isArray(analysis.suggestions) && analysis.suggestions.length === 0
-        );
+      const isInvalidAnalysis = !isValidAnalysis(normalizedAnalysis);
 
       // Check if GPT returned a fallback result (marked by the GPT4V function)
-      const isGptFallback = analysis?.fallback === true;
+      const isGptFallback = normalizedAnalysis?.fallback === true || analysisResult.fallback === true;
       
       if (isInvalidAnalysis || isGptFallback) {
         // Enhanced logging for debugging
         console.warn(`🔥 [${requestId}] INVALID OR FALLBACK GPT RESULT DETECTED`);
         
-        // Log what's missing for debugging
+        // Log what's missing for debugging if validation failed
         const missingFields = [];
-        if (!analysis) missingFields.push('entire analysis object');
+        if (!normalizedAnalysis) missingFields.push('entire analysis object');
         else {
-          if (!analysis.description) missingFields.push('description');
-          if (typeof analysis.description !== 'string') missingFields.push('description (not a string)');
-          if (!analysis.nutrients || typeof analysis.nutrients !== 'object') {
+          if (!normalizedAnalysis.description) missingFields.push('description');
+          if (typeof normalizedAnalysis.description !== 'string') missingFields.push('description (not a string)');
+          
+          if (!normalizedAnalysis.nutrients || typeof normalizedAnalysis.nutrients !== 'object') {
             missingFields.push('nutrients object');
           } else {
-            if (!('calories' in analysis.nutrients)) missingFields.push('nutrients.calories');
-            if (!('protein' in analysis.nutrients)) missingFields.push('nutrients.protein');
-            if (!('carbs' in analysis.nutrients)) missingFields.push('nutrients.carbs');
-            if (!('fat' in analysis.nutrients)) missingFields.push('nutrients.fat');
+            if (!('calories' in normalizedAnalysis.nutrients)) missingFields.push('nutrients.calories');
+            if (!('protein' in normalizedAnalysis.nutrients)) missingFields.push('nutrients.protein');
+            if (!('carbs' in normalizedAnalysis.nutrients)) missingFields.push('nutrients.carbs');
+            if (!('fat' in normalizedAnalysis.nutrients)) missingFields.push('nutrients.fat');
           }
-          if (Array.isArray(analysis.feedback) && analysis.feedback.length === 0) missingFields.push('feedback (empty array)');
-          if (Array.isArray(analysis.suggestions) && analysis.suggestions.length === 0) missingFields.push('suggestions (empty array)');
+          
+          if (!Array.isArray(normalizedAnalysis.feedback) || normalizedAnalysis.feedback.length === 0) {
+            missingFields.push('feedback (empty array)');
+          }
+          if (!Array.isArray(normalizedAnalysis.suggestions) || normalizedAnalysis.suggestions.length === 0) {
+            missingFields.push('suggestions (empty array)');
+          }
         }
         
+        // Log detailed debug information
         console.error(`❌ [${requestId}] FATAL: HARD EXIT - BLOCKING ALL FIRESTORE OPERATIONS - Missing fields:`, missingFields);
-        console.error(`❌ [${requestId}] DEBUG - GPT Analysis Dump:`, JSON.stringify(analysis, null, 2).substring(0, 500) + '...');
+        console.error(`❌ [${requestId}] DEBUG - GPT Analysis Dump:`, JSON.stringify(normalizedAnalysis, null, 2).substring(0, 500) + '...');
         console.error(`📛 [${requestId}] DEBUG - Response Data Dump:`, JSON.stringify(responseData, null, 2).substring(0, 500) + '...');
         
         // Try to reveal if there's any trace of null/undefined issues
         console.error(`🔍 [${requestId}] DEBUG - Type Checks: 
           isInvalidAnalysis=${isInvalidAnalysis}, 
           isGptFallback=${isGptFallback},
-          analysis type=${typeof analysis}, 
-          description exists=${Boolean(analysis?.description)}, 
-          description type=${typeof analysis?.description},
-          nutrients is object=${typeof analysis?.nutrients === 'object'},
-          has calories=${Boolean(analysis?.nutrients?.calories)},
-          has protein=${Boolean(analysis?.nutrients?.protein)},
-          has carbs=${Boolean(analysis?.nutrients?.carbs)},
-          has fat=${Boolean(analysis?.nutrients?.fat)},
-          feedback.length=${analysis?.feedback?.length},
-          suggestions.length=${analysis?.suggestions?.length}`);
+          analysis type=${typeof normalizedAnalysis}, 
+          description exists=${Boolean(normalizedAnalysis?.description)}, 
+          description type=${typeof normalizedAnalysis?.description},
+          nutrients is object=${typeof normalizedAnalysis?.nutrients === 'object'},
+          has calories=${Boolean(normalizedAnalysis?.nutrients?.calories)},
+          has protein=${Boolean(normalizedAnalysis?.nutrients?.protein)},
+          has carbs=${Boolean(normalizedAnalysis?.nutrients?.carbs)},
+          has fat=${Boolean(normalizedAnalysis?.nutrients?.fat)},
+          feedback.length=${normalizedAnalysis?.feedback?.length},
+          suggestions.length=${normalizedAnalysis?.suggestions?.length}`);
 
         // CRITICAL: Return from the main POST handler immediately
         // This prevents ANY further execution in this route
@@ -1040,9 +1063,9 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
           success: false,
           fallback: true,
           message: "GPT analysis failed — missing required fields or bad format",
-          analysis: createEmptyFallbackAnalysis(),
+          analysis: createFallbackAnalysis(),
           payload: {
-            originalAnalysis: analysis,
+            originalAnalysis: normalizedAnalysis,
             missingFields,
             requestId,
             trigger: isGptFallback ? 'GPT marked as fallback' : 'Schema validation failed'
@@ -1063,10 +1086,13 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
         return fallbackResponse;
       }
 
+      // Use the normalized analysis for the response
+      const validatedAnalysis = normalizedAnalysis;
+
       // Log successful validation
       console.log(`✅ [${requestId}] Firestore logic executing after valid analysis`);
       console.log(`🧠 [${requestId}] STEP: Passed GPT validation check - Preparing for Firestore save`);
-      console.log(`🧠 GPT Analysis Snapshot:`, JSON.stringify(analysis, null, 2).substring(0, 300) + '...');
+      console.log(`🧠 GPT Analysis Snapshot:`, JSON.stringify(validatedAnalysis, null, 2).substring(0, 300) + '...');
       
       // If we get here, we have a valid analysis
       console.log(`✅ [${requestId}] Valid analysis detected – proceeding to save`);
@@ -1074,7 +1100,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       // Only set responseData.analysis AFTER validation passed
       responseData.success = true; 
       responseData.message = 'Analysis completed'; 
-      responseData.analysis = analysis; 
+      responseData.analysis = validatedAnalysis; 
       responseData.imageUrl = imageUrl;
       responseData.requestId = requestId;
       
@@ -1085,7 +1111,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       // --- Save Meal Logic (Only AFTER valid analysis confirmed) --- 
       const shouldSave = userId && typeof imageUrl === 'string';
       
-      if (shouldSave) { 
+      if (shouldSave) {
         try {
           console.log(`✅ [${requestId}] Starting Firestore save attempt - valid analysis confirmed`);
           // Explicit type check inside the block to satisfy TypeScript
