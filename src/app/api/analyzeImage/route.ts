@@ -963,7 +963,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       }
     }
     
-    // Analyze the image using GPT-4 Vision
+    // Call the GPT-4-Vision model to analyze the image
     console.log(`🚀 [${requestId}] Calling analyzeImageWithGPT4V...`);
     const gptResult = await analyzeImageWithGPT4V(
       base64Image,
@@ -971,147 +971,41 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       dietaryPreferences,
       requestId
     );
-    
-    // --- BEGIN ENHANCED LOGGING & VALIDATION ---
-    // Enhanced logging: Only log the truncated response to avoid flooding logs 
-    // but include a full error dump in case of failure
-    console.log(`🧠 [${requestId}] Raw GPT Response Status: ${gptResult.success ? 'SUCCESS' : 'FAILURE'}`);
-    
-    // Store raw response for debugging (truncate to avoid excessive log size)
-    const truncatedResponse = gptResult.rawResponse ? 
-      gptResult.rawResponse.substring(0, 4000) + (gptResult.rawResponse.length > 4000 ? '...(truncated)' : '') : 
-      'N/A';
-    responseData.debug.rawGptResponse = truncatedResponse;
-    
-    // Add additional debug information
-    responseData.debug.gptStatus = gptResult.success;
-    if (gptResult.error) {
-      responseData.debug.gptErrorMessage = gptResult.error;
-    }
 
-    // Check if the GPT call itself failed (e.g., network error, API key issue)
+    // Log the raw GPT response status (success/failure and model info)
+    console.log(`📊 [${requestId}] GPT Analysis complete - Success: ${gptResult.success}, Model: ${gptResult.modelUsed}${gptResult.usedFallbackModel ? ' (fallback)' : ''}`);
+    
+    // If there was an error with the analysis, log it in detail
     if (!gptResult.success) {
-      // Detailed error logging
-      const errorMsg = `GPT analysis request failed: ${gptResult.error || 'Unknown GPT error'}`;
-      console.error(`❌ [${requestId}] ${errorMsg}`);
-      console.error(`⚠️ [${requestId}] Full error context:`, gptResult.error);
-      responseData.errors.push(errorMsg);
-      responseData.debug.errorDetails.push({ 
-        step: 'gptAnalysis', 
-        error: gptResult.error,
-        timestamp: new Date().toISOString() 
-      });
+      console.error(`❌ [${requestId}] GPT Analysis failed: ${gptResult.error}`);
       
-      // Check for specific API key issues to provide more helpful error messages
-      const isApiKeyError = gptResult.error?.includes('API key') || 
-                           gptResult.error?.includes('authentication') ||
-                           gptResult.error?.includes('401') ||
-                           gptResult.error?.includes('auth');
-                           
-      const userMessage = isApiKeyError ? 
-        "API configuration issue. Please contact support." : 
-        "AI analysis could not be completed. Please try again later.";
-      
-      // Return a more specific fallback with error details for debugging
-      return createAnalysisResponse({
-        ...responseData,
-        success: false,
-        fallback: true,
-        message: userMessage,
-        errorType: isApiKeyError ? 'api_key_error' : 'analysis_failure',
-        gptError: gptResult.error, // Add the specific error for client-side debugging
-        analysis: createEmptyFallbackAnalysis()
-      });
+      // Add error details to debug info
+      responseData.debug.gptError = gptResult.error;
+      responseData.debug.modelUsed = gptResult.modelUsed;
+      responseData.debug.usedFallbackModel = gptResult.usedFallbackModel;
     }
     
-    // Attempt to extract structured data from the GPT result
-    const analysisResult = gptResult.result; // Assuming gptResult contains the structured data
+    // Extract the GPT analysis result
+    const analysisResult = gptResult.result;
     
-    // Log analysis result structure and content summary
-    console.log(`💡 [${requestId}] Analysis structure validation`);
-    // Log analysis details if available
-    if (analysisResult) {
-      if (typeof analysisResult.description === 'string') {
-        console.log(`📋 [${requestId}] Description: ${analysisResult.description.substring(0, 100)}...`);
-      }
-      
-      if (analysisResult.nutrients) {
-        console.log(`🍎 [${requestId}] Nutrients detected:`, Object.keys(analysisResult.nutrients).join(', '));
-      }
-      
-      if (typeof analysisResult.goalScore === 'number') {
-        console.log(`🎯 [${requestId}] Goal Score: ${analysisResult.goalScore}/10`);
-      }
-    } else {
-      console.error(`❌ [${requestId}] No analysis result structure available`);
-    }
+    // Always log truncated analysis structure for debugging
+    const truncatedAnalysis = JSON.stringify(analysisResult).substring(0, 500) + '...';
+    console.log(`🔍 [${requestId}] Analysis structure: ${truncatedAnalysis}`);
 
-    // Extended validation - checking required fields with more detailed logging
-    const requiredFields = ['description', 'nutrients', 'feedback', 'suggestions', 'goalScore'];
-    const missingFields = requiredFields.filter(field => 
-      !analysisResult || 
-      analysisResult[field] === undefined || 
-      analysisResult[field] === null || 
-      (typeof analysisResult[field] === 'string' && analysisResult[field].trim() === '') ||
-      (Array.isArray(analysisResult[field]) && analysisResult[field].length === 0)
-    );
+    // Check if we have a valid analysis result with required fields
+    const isValidAnalysis = validateGptAnalysisResult(analysisResult);
     
-    // Checking required nutrient fields if nutrients object exists
-    let missingNutrients: string[] = [];
-    if (analysisResult && analysisResult.nutrients) {
-      const requiredNutrients = ['calories', 'protein', 'carbs', 'fat'];
-      missingNutrients = requiredNutrients.filter(field => 
-        !analysisResult.nutrients[field] || 
-        typeof analysisResult.nutrients[field] !== 'string' || 
-        analysisResult.nutrients[field].trim() === ''
+    if (!isValidAnalysis) {
+      console.warn(`⚠️ [${requestId}] Invalid analysis structure received from GPT. Using fallback response.`);
+      
+      // Add more debug info about the model used
+      responseData.debug.modelUsed = gptResult.modelUsed;
+      responseData.debug.usedFallbackModel = gptResult.usedFallbackModel;
+      
+      return createFallbackResponse(
+        "Invalid analysis structure",
+        analysisResult
       );
-      
-      if (missingNutrients.length > 0) {
-        console.error(`❌ [${requestId}] Nutrients object missing required fields: ${missingNutrients.join(', ')}`);
-      }
-    } else if (!missingFields.includes('nutrients')) {
-      // If nutrients is present but not an object
-      console.error(`❌ [${requestId}] Nutrients is not a valid object`);
-      missingFields.push('nutrients'); // Add to missing fields
-    }
-    
-    if (missingFields.length > 0 || missingNutrients.length > 0) {
-      const errorMsg = `GPT analysis result is incomplete or invalid. Missing fields: ${missingFields.join(', ')}${missingNutrients.length > 0 ? `, Missing nutrients: ${missingNutrients.join(', ')}` : ''}`;
-      console.error(`❌ [${requestId}] ${errorMsg}`);
-      console.error(`🧩 [${requestId}] Analysis structure:`, JSON.stringify(analysisResult, null, 2));
-      responseData.errors.push(errorMsg);
-      responseData.debug.errorDetails.push({ 
-        step: 'gptValidation', 
-        error: errorMsg, 
-        missing: missingFields,
-        missingNutrients: missingNutrients.length > 0 ? missingNutrients : undefined,
-        analysisSnapshot: analysisResult ? JSON.stringify(analysisResult).substring(0, 500) : 'null'
-      });
-      
-      // Construct a user-friendly message
-      let userMessage = "The AI couldn't fully analyze this meal. ";
-      if (missingFields.includes('description')) {
-        userMessage += "It couldn't describe the food clearly. Try a better photo. ";
-      } else if (missingFields.includes('nutrients')) {
-        userMessage += "Nutritional information is missing. ";
-      } else if (missingNutrients.length > 0) {
-        userMessage += "Some nutritional values are missing. ";
-      } else {
-        userMessage += "Key analysis details are missing. ";
-      }
-      userMessage += "Please try again or upload a different image.";
-      
-      // Return fallback response with detailed debug info
-      return createAnalysisResponse({
-        ...responseData,
-        success: false,
-        fallback: true,
-        message: userMessage,
-        fallbackReason: errorMsg,
-        missingFields: missingFields.length > 0 ? missingFields : undefined,
-        missingNutrients: missingNutrients.length > 0 ? missingNutrients : undefined,
-        analysis: createEmptyFallbackAnalysis()
-      });
     }
 
     console.log(`✅ [${requestId}] GPT analysis result passed all validation checks`);
