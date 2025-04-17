@@ -216,4 +216,32 @@ The app requires proper CORS configuration for Firebase Storage to work correctl
 gsutil cors set cors.json gs://snaphealth-39b14.appspot.com
 ```
 
-For detailed instructions on CORS configuration, see the `README-CORS-UPDATE.md` file. 
+For detailed instructions on CORS configuration, see the `README-CORS-UPDATE.md` file.
+
+## GPT-4-Vision Configuration
+
+This app uses OpenAI's GPT-4-Vision model to analyze food images. You can control the behavior of the model using the environment variable:
+
+```
+USE_GPT4_VISION=true|false
+```
+
+### Behavior:
+
+- **`USE_GPT4_VISION=true`** (default): Forces the use of GPT-4-Vision model only. If the model is not available with your API key, the analysis will fail rather than use a fallback model.
+
+- **`USE_GPT4_VISION=false`**: Allows fallback to GPT-3.5-Turbo if GPT-4-Vision is not available. This will show a warning banner in the UI to indicate that the analysis may be less accurate.
+
+### Testing Model Availability:
+
+You can check which models are available with your API key by accessing the test endpoint:
+
+```
+/api/test-openai
+```
+
+This endpoint returns information about:
+- Your OpenAI API key configuration
+- Whether GPT-4-Vision is being forced
+- Availability of GPT-4-Vision, GPT-4o, and GPT-3.5-Turbo models
+- A list of available GPT models for your API key 
