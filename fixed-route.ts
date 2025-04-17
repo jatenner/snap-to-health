@@ -2955,10 +2955,6 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       responseData.imageUrl = imageUrl;
       responseData.requestId = requestId;
       
-      if (analysisResult.reasoning) {
-        responseData.debug.reasoning = analysisResult.reasoning;
-      }
-      
       console.log(`✅ [${requestId}] Analysis completed successfully`);
     } catch (analysisError: any) {
       console.timeEnd(`⏱️ [${requestId}] GPT analysis`);
