@@ -4,6 +4,12 @@ import { getStorage, ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import { app } from '@/lib/firebase';
 
 export async function GET(request: NextRequest) {
+  // Ensure Firebase app is initialized before proceeding
+  if (!app) {
+    console.error('API Error: Firebase app is not initialized in GET /api/proxy/storage');
+    return NextResponse.json({ error: 'Firebase not configured' }, { status: 500 });
+  }
+  
   try {
     // Extract URL parameters
     const url = new URL(request.url);
@@ -55,6 +61,12 @@ export async function GET(request: NextRequest) {
 }
 
 export async function POST(request: NextRequest) {
+  // Ensure Firebase app is initialized before proceeding
+  if (!app) {
+    console.error('API Error: Firebase app is not initialized in POST /api/proxy/storage');
+    return NextResponse.json({ error: 'Firebase not configured' }, { status: 500 });
+  }
+  
   try {
     // Parse formData
     const formData = await request.formData();
