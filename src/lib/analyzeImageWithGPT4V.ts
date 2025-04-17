@@ -137,11 +137,16 @@ export async function analyzeImageWithGPT4V(
   error?: string;
   modelUsed: string;
   usedFallbackModel: boolean;
+  forceGPT4V: boolean;
 }> {
   console.log(`📸 [${requestId}] Starting image analysis with GPT4V...`);
   console.log(`📊 [${requestId}] Goals: ${healthGoals.join(', ')}`);
   console.log(`🍽️ [${requestId}] Preferences: ${dietaryPreferences.join(', ')}`);
   console.log(`🖼️ [${requestId}] Image size: ~${Math.round(base64Image.length / 1024)}KB`);
+  
+  // Check if USE_GPT4_VISION is explicitly set (defaulting to true if not set)
+  const forceGPT4V = process.env.USE_GPT4_VISION !== 'false';
+  console.log(`⚙️ [${requestId}] GPT-4-Vision Mode: ${forceGPT4V ? 'FORCED' : 'FALLBACK ALLOWED'}`);
   
   // Check for the OpenAI API key
   const openAIApiKey = process.env.OPENAI_API_KEY;
@@ -155,7 +160,8 @@ export async function analyzeImageWithGPT4V(
       success: false,
       error,
       modelUsed: 'none',
-      usedFallbackModel: false
+      usedFallbackModel: false,
+      forceGPT4V
     };
   }
   
@@ -172,13 +178,36 @@ export async function analyzeImageWithGPT4V(
     let modelToUse = preferredModel;
     let usedFallbackModel = false;
     
-    // Check if our preferred model is available
-    const modelCheck = await checkModelAvailability(openai, preferredModel, requestId);
-    
-    if (!modelCheck.available && modelCheck.fallbackModel) {
-      modelToUse = modelCheck.fallbackModel;
-      usedFallbackModel = true;
-      console.warn(`⚠️ [${requestId}] Using fallback model: ${modelToUse}`);
+    // Handle model selection based on USE_GPT4_VISION flag
+    if (forceGPT4V) {
+      // If GPT-4-Vision is forced, check availability but don't fallback
+      const modelCheck = await checkModelAvailability(openai, preferredModel, requestId);
+      
+      if (!modelCheck.available) {
+        // If force mode is on but model isn't available, fail rather than fallback
+        const error = `GPT-4-Vision is forced (USE_GPT4_VISION=true) but ${preferredModel} is not available: ${modelCheck.error}`;
+        console.error(`❌ [${requestId}] ${error}`);
+        
+        return {
+          analysis: createEmptyFallbackAnalysis(),
+          success: false,
+          error,
+          modelUsed: 'error',
+          usedFallbackModel: false,
+          forceGPT4V
+        };
+      }
+      
+      console.log(`✅ [${requestId}] Using forced ${preferredModel} model`);
+    } else {
+      // If fallbacks are allowed, check availability and use fallback if needed
+      const modelCheck = await checkModelAvailability(openai, preferredModel, requestId);
+      
+      if (!modelCheck.available && modelCheck.fallbackModel) {
+        modelToUse = modelCheck.fallbackModel;
+        usedFallbackModel = true;
+        console.warn(`⚠️ [${requestId}] Using fallback model: ${modelToUse} (USE_GPT4_VISION=false)`);
+      }
     }
     
     // Construct the system prompt
@@ -281,7 +310,8 @@ ${usedFallbackModel ? '\nNOTE: This analysis is being performed by a fallback mo
           success: false,
           error: `Incomplete analysis result: missing ${missingKeys.join(', ')}`,
           modelUsed: modelToUse,
-          usedFallbackModel
+          usedFallbackModel,
+          forceGPT4V
         };
       }
       
@@ -289,7 +319,8 @@ ${usedFallbackModel ? '\nNOTE: This analysis is being performed by a fallback mo
         analysis: parsedResponse,
         success: true,
         modelUsed: modelToUse,
-        usedFallbackModel
+        usedFallbackModel,
+        forceGPT4V
       };
     } catch (parseError) {
       console.error(`❌ [${requestId}] Failed to parse GPT response as JSON: ${(parseError as Error).message}`);
@@ -300,7 +331,8 @@ ${usedFallbackModel ? '\nNOTE: This analysis is being performed by a fallback mo
         success: false,
         error: `Failed to parse response: ${(parseError as Error).message}`,
         modelUsed: modelToUse,
-        usedFallbackModel
+        usedFallbackModel,
+        forceGPT4V
       };
     }
   } catch (error: any) {
@@ -312,7 +344,8 @@ ${usedFallbackModel ? '\nNOTE: This analysis is being performed by a fallback mo
       success: false,
       error: errorMessage,
       modelUsed: 'error',
-      usedFallbackModel: false
+      usedFallbackModel: false,
+      forceGPT4V
     };
   }
 }

@@ -973,7 +973,12 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     );
 
     // Log the raw GPT response status (success/failure and model info)
-    console.log(`📊 [${requestId}] GPT Analysis complete - Success: ${gptResult.success}, Model: ${gptResult.modelUsed}${gptResult.usedFallbackModel ? ' (fallback)' : ''}`);
+    console.log(`📊 [${requestId}] GPT Analysis complete - Success: ${gptResult.success}, Model: ${gptResult.modelUsed}${gptResult.usedFallbackModel ? ' (fallback)' : ''}${gptResult.forceGPT4V ? ' (forced)' : ''}`);
+    
+    // Add model information to the debug info
+    responseData.debug.modelUsed = gptResult.modelUsed;
+    responseData.debug.usedFallbackModel = gptResult.usedFallbackModel;
+    responseData.debug.forceGPT4V = gptResult.forceGPT4V;
     
     // If there was an error with the analysis, log it in detail
     if (!gptResult.success) {
@@ -981,8 +986,6 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       
       // Add error details to debug info
       responseData.debug.gptError = gptResult.error;
-      responseData.debug.modelUsed = gptResult.modelUsed;
-      responseData.debug.usedFallbackModel = gptResult.usedFallbackModel;
     }
     
     // Extract the GPT analysis result
@@ -998,17 +1001,43 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     if (!isValidAnalysis) {
       console.warn(`⚠️ [${requestId}] Invalid analysis structure received from GPT. Using fallback response.`);
       
-      // Add more debug info about the model used
-      responseData.debug.modelUsed = gptResult.modelUsed;
-      responseData.debug.usedFallbackModel = gptResult.usedFallbackModel;
-      
-      return createFallbackResponse(
+      // Create a fallback response with model information
+      const fallbackResponse = createFallbackResponse(
         "Invalid analysis structure",
         analysisResult
       );
+      
+      // Add model information to the fallback response
+      fallbackResponse.modelInfo = {
+        model: gptResult.modelUsed,
+        usedFallback: gptResult.usedFallbackModel,
+        forceGPT4V: gptResult.forceGPT4V
+      };
+      
+      // Return the fallback response
+      return createAnalysisResponse({
+        ...responseData,
+        success: false,
+        fallback: true,
+        message: "Analysis couldn't be completed. Please try again with a clearer image.",
+        analysis: fallbackResponse,
+        modelInfo: {
+          model: gptResult.modelUsed,
+          usedFallback: gptResult.usedFallbackModel,
+          forceGPT4V: gptResult.forceGPT4V
+        }
+      });
     }
 
     console.log(`✅ [${requestId}] GPT analysis result passed all validation checks`);
+    
+    // Add model information to the final analysis
+    analysisResult.modelInfo = {
+      model: gptResult.modelUsed,
+      usedFallback: gptResult.usedFallbackModel,
+      forceGPT4V: gptResult.forceGPT4V
+    };
+    
     // --- END ENHANCED LOGGING & VALIDATION ---
     
     responseData.debug.processingSteps.push('GPT Analysis Validated');
