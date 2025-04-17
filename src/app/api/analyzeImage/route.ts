@@ -706,8 +706,49 @@ async function enrichAnalysisResult(
 }
 
 // Mock implementation for backward compatibility during migration
-function validateGptAnalysisResult(analysis: any): { valid: boolean; reason?: string } {
-  return { valid: true };
+function validateGptAnalysisResult(analysis: any): boolean {
+  if (!analysis) return false;
+  
+  // Check for required top-level fields
+  const requiredFields = [
+    'description', 
+    'nutrients', 
+    'feedback', 
+    'suggestions', 
+    'detailedIngredients'
+  ];
+  
+  for (const field of requiredFields) {
+    if (!analysis[field]) {
+      console.warn(`Analysis validation failed: missing '${field}'`);
+      return false;
+    }
+  }
+  
+  // Check nutrients structure if present
+  const requiredNutrients = [
+    'calories', 'protein', 'carbs', 'fat'
+  ];
+  
+  if (analysis.nutrients) {
+    for (const nutrient of requiredNutrients) {
+      if (typeof analysis.nutrients[nutrient] !== 'number') {
+        console.warn(`Analysis validation failed: missing or invalid nutrient '${nutrient}'`);
+        return false;
+      }
+    }
+  }
+  
+  // Ensure arrays are present
+  const requiredArrays = ['feedback', 'suggestions', 'detailedIngredients'];
+  for (const arrayField of requiredArrays) {
+    if (!Array.isArray(analysis[arrayField])) {
+      console.warn(`Analysis validation failed: '${arrayField}' is not an array`);
+      return false;
+    }
+  }
+  
+  return true;
 }
 
 // Mock implementation for backward compatibility during migration

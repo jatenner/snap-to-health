@@ -2916,19 +2916,18 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       
       // Validate the analysis result
       try {
-        const validationResult = validateGptAnalysisResult(analysisResult.analysis);
+        const isValidAnalysis = validateGptAnalysisResult(analysisResult.analysis);
         
-        if (!validationResult.valid) {
-          console.warn(`⚠️ [${requestId}] Analysis validation failed: ${validationResult.reason}`);
+        if (!isValidAnalysis) {
+          console.warn(`⚠️ [${requestId}] Analysis validation failed`);
           responseData.debug.processingSteps.push('Analysis validation failed');
           responseData.debug.validationFailed = true;
-          responseData.debug.validationReason = validationResult.reason;
+          responseData.debug.validationReason = 'Analysis validation failed';
           
           // Create fallback for invalid results
           const fallbackResponse = createFallbackResponse(
-            validationResult.reason || 'unknown_error',
-            'general',
-            requestId
+            'invalid_analysis_structure',
+            analysisResult.analysis // Pass the partial analysis as second parameter
           );
           analysisResult.analysis = fallbackResponse;
           
