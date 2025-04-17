@@ -132,6 +132,7 @@ interface FallbackAnalysis {
   _meta?: {
     error: string;
     timestamp?: string; // Optional timestamp field
+    isPartial?: boolean; // Whether this is partial analysis data
   };
 }
 
@@ -546,13 +547,15 @@ export function createFallbackResponse(
     // Try to salvage any valid feedback
     if (Array.isArray(partialAnalysis.feedback) && 
         partialAnalysis.feedback.length > 0) {
-      fallback.feedback = [...fallback.feedback, ...partialAnalysis.feedback];
+      // Convert string array to single string
+      fallback.feedback = partialAnalysis.feedback.join(". ");
     }
     
     // Try to salvage any valid suggestions
     if (Array.isArray(partialAnalysis.suggestions) && 
         partialAnalysis.suggestions.length > 0) {
-      fallback.suggestions = [...fallback.suggestions, ...partialAnalysis.suggestions];
+      // Convert array of strings to array with single string
+      fallback.suggestions = partialAnalysis.suggestions;
     }
   }
   
