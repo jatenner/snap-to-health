@@ -33,4 +33,4 @@ yarn-error.log*
 next-env.d.ts
 
 # Firebase Service Account
-firebase-service-account.json
+firebase-service-account.json .env.local

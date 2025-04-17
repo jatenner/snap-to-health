@@ -1,59 +1,75 @@
-// Test script for Firebase Admin SDK initialization
-require('dotenv').config({ path: '.env.local.firebase' });
-const admin = require('firebase-admin');
+require('dotenv').config({ path: '.env.local' });
+const { initializeApp, cert } = require('firebase-admin/app');
+const { getFirestore } = require('firebase-admin/firestore');
 
-// Function to check if a string looks like a PEM private key
-function isPEMPrivateKey(key) {
-  return (
-    key.includes('-----BEGIN PRIVATE KEY-----') &&
-    key.includes('-----END PRIVATE KEY-----')
-  );
-}
-
-// Extract and decode the private key from environment
+const projectId = process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID;
+const clientEmail = process.env.FIREBASE_CLIENT_EMAIL;
 const privateKeyBase64 = process.env.FIREBASE_PRIVATE_KEY_BASE64;
-const privateKey = Buffer.from(privateKeyBase64, 'base64').toString('utf8');
 
-console.log('Private key obtained from environment:');
-console.log('- Base64 encoded key length:', privateKeyBase64?.length || 0);
-console.log('- Decoded key length:', privateKey?.length || 0);
-console.log('- Is valid PEM format:', isPEMPrivateKey(privateKey));
-console.log('- First 20 chars of decoded key:', privateKey.substring(0, 20) + '...');
+console.log('Testing Firebase Admin initialization...');
+console.log(`Project ID: ${projectId}`);
+console.log(`Client Email: ${clientEmail ? clientEmail.substring(0, 10) + '...' : 'missing'}`);
+console.log(`Private Key Base64 Length: ${privateKeyBase64 ? privateKeyBase64.length : 0} chars`);
 
-// Attempt to initialize Firebase Admin
 try {
-  console.log('\nInitializing Firebase Admin...');
+  // Decode the base64 private key
+  const decodedPrivateKey = Buffer.from(privateKeyBase64, 'base64').toString('utf8');
   
-  // Check if already initialized
+  // Check the decoded key format
+  const hasPemHeader = decodedPrivateKey.includes('-----BEGIN PRIVATE KEY-----');
+  const hasPemFooter = decodedPrivateKey.includes('-----END PRIVATE KEY-----');
+  const hasNewlines = decodedPrivateKey.includes('\n');
+  const newlineCount = (decodedPrivateKey.match(/\n/g) || []).length;
+  
+  console.log(`Decoded private key validation:
+    - Contains PEM header: ${hasPemHeader ? '✅' : '❌'}
+    - Contains PEM footer: ${hasPemFooter ? '✅' : '❌'} 
+    - Contains newlines: ${hasNewlines ? `✅ (${newlineCount} found)` : '❌'}
+    - Decoded length: ${decodedPrivateKey.length} characters
+  `);
+  
+  // Parse the JSON to extract just the private key if it's a full service account JSON
+  let privateKey = decodedPrivateKey;
   try {
-    admin.app();
-    console.log('Firebase Admin already initialized.');
-  } catch (error) {
-    // Not initialized yet, proceed with initialization
-    admin.initializeApp({
-      credential: admin.credential.cert({
-        projectId: process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID,
-        clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
-        privateKey: privateKey
-      })
-    });
-    console.log('Firebase Admin initialized successfully.');
+    const serviceAccount = JSON.parse(decodedPrivateKey);
+    if (serviceAccount.private_key) {
+      privateKey = serviceAccount.private_key;
+      console.log('✅ Successfully extracted private_key from service account JSON');
+    }
+  } catch (e) {
+    // Not JSON, assume it's already the PEM key format
+    console.log('Decoded content is not JSON. Assuming direct PEM format.');
   }
   
-  // Test Firestore access
-  console.log('\nTesting Firestore access...');
-  const db = admin.firestore();
-  
-  // Attempt to query a small collection
-  db.collection('test-collection').limit(1).get()
-    .then(snapshot => {
-      console.log(`Firestore query successful. Found ${snapshot.size} documents.`);
-      console.log('Firebase Admin initialization test completed successfully! ✅');
+  // Initialize Firebase Admin
+  const app = initializeApp({
+    credential: cert({
+      projectId,
+      clientEmail,
+      privateKey
     })
-    .catch(error => {
-      console.error('Error querying Firestore:', error);
+  });
+  
+  console.log('✅ Firebase Admin initialized successfully!');
+  
+  // Test Firestore connection
+  const db = getFirestore();
+  console.log('✅ Firestore instance created');
+  
+  // Test a simple query
+  db.collection('test')
+    .limit(1)
+    .get()
+    .then(() => {
+      console.log('✅ Successfully connected to Firestore');
+      process.exit(0);
+    })
+    .catch(err => {
+      console.error('❌ Error querying Firestore:', err);
+      process.exit(1);
     });
-    
+  
 } catch (error) {
-  console.error('Error initializing Firebase Admin:', error);
+  console.error('❌ Error initializing Firebase Admin:', error);
+  process.exit(1);
 } 
