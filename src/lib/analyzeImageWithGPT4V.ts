@@ -70,35 +70,34 @@ export async function checkModelAvailability(modelName: string, requestId: strin
     } else {
       console.warn(`⚠️ [${requestId}] Model ${modelName} is not available`);
       
-      // Determine fallback model based on capabilities
-      if (modelName.includes('vision')) {
-        // For vision models, check alternatives
-        const visionModels = models.data
-          .filter(model => 
-            model.id.includes('vision') || 
-            (model.id.includes('gpt-4') && model.id.includes('vision'))
-          )
-          .map(model => model.id);
-        
-        if (visionModels.length > 0) {
-          result.fallbackModel = visionModels[0]; // Use the first available vision model
-          console.log(`🔄 [${requestId}] Found fallback vision model: ${result.fallbackModel}`);
+      // Create a list of models that have vision capabilities
+      // GPT-4o and GPT-4-Vision are known to have vision capabilities
+      const visionCapableModels = models.data
+        .filter(model => 
+          model.id === 'gpt-4o' || 
+          model.id === 'gpt-4-vision-preview' ||
+          model.id.includes('vision')
+        )
+        .map(model => model.id);
+      
+      console.log(`ℹ️ [${requestId}] Vision-capable models available: ${visionCapableModels.join(', ') || 'none'}`);
+      
+      // Try to find a fallback from our preferred list
+      for (const fallbackModel of FALLBACK_MODELS) {
+        if (models.data.some(model => model.id === fallbackModel)) {
+          result.fallbackModel = fallbackModel;
+          console.log(`🔄 [${requestId}] Found fallback model: ${result.fallbackModel}`);
+          break;
+        }
+      }
+      
+      if (!result.fallbackModel) {
+        // If no fallback found, check if any vision-capable models are available
+        if (visionCapableModels.length > 0) {
+          result.fallbackModel = visionCapableModels[0]; // Use the first available vision model
+          console.log(`🔄 [${requestId}] Using alternate vision model: ${result.fallbackModel}`);
         } else {
           result.error = 'No vision-capable models available';
-          console.error(`❌ [${requestId}] ${result.error}`);
-        }
-      } else {
-        // For non-vision models, fallback to stable alternatives
-        for (const fallbackModel of FALLBACK_MODELS) {
-          if (models.data.some(model => model.id === fallbackModel)) {
-            result.fallbackModel = fallbackModel;
-            console.log(`🔄 [${requestId}] Found fallback model: ${result.fallbackModel}`);
-            break;
-          }
-        }
-        
-        if (!result.fallbackModel) {
-          result.error = 'No suitable fallback models available';
           console.error(`❌ [${requestId}] ${result.error}`);
         }
       }
@@ -106,6 +105,15 @@ export async function checkModelAvailability(modelName: string, requestId: strin
   } catch (error: any) {
     result.error = error.message || 'Error checking model availability';
     console.error(`❌ [${requestId}] Error checking model availability: ${result.error}`);
+    
+    // On error, try the fallback models in sequence without checking availability
+    for (const fallbackModel of FALLBACK_MODELS) {
+      if (fallbackModel !== modelName) { // Don't use the same model that failed
+        result.fallbackModel = fallbackModel;
+        console.log(`🔄 [${requestId}] Using blind fallback model: ${result.fallbackModel}`);
+        break;
+      }
+    }
   }
 
   return result;
@@ -183,14 +191,14 @@ export async function analyzeImageWithGPT4V(
   forceGPT4V: boolean;
   rawResponse?: string;
 }> {
-  console.log(`📸 [${requestId}] Starting image analysis with GPT4o...`);
+  console.log(`📸 [${requestId}] Starting image analysis with GPT-4o...`);
   console.log(`📊 [${requestId}] Goals: ${healthGoals.join(', ')}`);
   console.log(`🍽️ [${requestId}] Preferences: ${dietaryPreferences.join(', ')}`);
   console.log(`🖼️ [${requestId}] Image size: ~${Math.round(base64Image.length / 1024)}KB`);
   
   // Check if USE_GPT4_VISION is explicitly set (defaulting to true if not set)
   const forceGPT4V = process.env.USE_GPT4_VISION !== 'false';
-  console.log(`⚙️ [${requestId}] GPT-4o Mode: ${forceGPT4V ? 'FORCED' : 'FALLBACK ALLOWED'}`);
+  console.log(`⚙️ [${requestId}] Advanced Model Mode: ${forceGPT4V ? 'FORCED' : 'FALLBACK ALLOWED'}`);
   
   // Check for the OpenAI API key
   const openAIApiKey = process.env.OPENAI_API_KEY;
@@ -218,7 +226,7 @@ export async function analyzeImageWithGPT4V(
     console.log(`🔗 [${requestId}] OpenAI client initialized successfully`);
     
     // Default model and backup option
-    const preferredModel = 'gpt-4o';
+    const preferredModel = GPT_VISION_MODEL; // Using GPT_VISION_MODEL constant (gpt-4o)
     let modelToUse = preferredModel;
     let usedFallbackModel = false;
     
@@ -229,7 +237,7 @@ export async function analyzeImageWithGPT4V(
       
       if (!modelCheck.available) {
         // If force mode is on but model isn't available, fail rather than fallback
-        const error = `GPT-4o is forced (USE_GPT4_VISION=true) but ${preferredModel} is not available: ${modelCheck.error}`;
+        const error = `Advanced model is forced (USE_GPT4_VISION=true) but ${preferredModel} is not available: ${modelCheck.error}`;
         console.error(`❌ [${requestId}] ${error}`);
         
         return {

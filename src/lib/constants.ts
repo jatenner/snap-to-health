@@ -3,13 +3,14 @@
  */
 
 // Default GPT model for image analysis
-export const GPT_MODEL = 'gpt-4-vision-preview';
+export const GPT_MODEL = 'gpt-4o';
 
 // Modern vision model (when available)
 export const GPT_VISION_MODEL = 'gpt-4o';
 
 // Fallback models in order of preference
 export const FALLBACK_MODELS = [
+  'gpt-4o',
   'gpt-4-vision-preview',
   'gpt-4-turbo',
   'gpt-4',
