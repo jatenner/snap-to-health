@@ -2861,7 +2861,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       responseData.debug.processingSteps.push('GPT-4V analysis completed');
       
       // Check if analysis was successful
-      if (!analysisResult || !analysisResult.result) {
+      if (!analysisResult || !analysisResult.analysis) {
         const error = 'GPT-4V analysis failed to return results';
         responseData.errors.push(error);
         responseData.debug.errorDetails.push({ step: 'gpt_analysis', error });
@@ -2872,19 +2872,19 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       }
       
       // Check for low confidence results that need enrichment
-      const needsEnrichment = needsConfidenceEnrichment(analysisResult.result);
+      const needsEnrichment = needsConfidenceEnrichment(analysisResult.analysis);
       
       // If we need to enrich, perform a second pass
       if (needsEnrichment) {
         console.log(`🔄 [${requestId}] Low confidence detected, performing enrichment pass`);
         responseData.debug.processingSteps.push('Low confidence detected, performing enrichment');
-        responseData.debug.originalConfidence = analysisResult.result?.confidence || 'unknown';
+        responseData.debug.originalConfidence = analysisResult.analysis?.confidence || 'unknown';
         
         console.time(`⏱️ [${requestId}] GPT enrichment`);
         
         try {
           const enrichedResult = await enrichAnalysisResult(
-            analysisResult.result,
+            analysisResult.analysis,
             effectiveHealthGoals,
             effectiveDietaryPreferences,
             requestId
@@ -2892,7 +2892,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
           
           if (enrichedResult) {
             // Combine the enriched analysis with the original
-            analysisResult.result = enrichedResult;
+            analysisResult.analysis = enrichedResult;
             responseData.debug.processingSteps.push('Enrichment completed successfully');
             responseData.debug.wasEnriched = true;
           } else {
@@ -2916,7 +2916,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       
       // Validate the analysis result
       try {
-        const validationResult = validateGptAnalysisResult(analysisResult.result);
+        const validationResult = validateGptAnalysisResult(analysisResult.analysis);
         
         if (!validationResult.valid) {
           console.warn(`⚠️ [${requestId}] Analysis validation failed: ${validationResult.reason}`);
@@ -2930,7 +2930,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
             'general',
             requestId
           );
-          analysisResult.result = fallbackResponse;
+          analysisResult.analysis = fallbackResponse;
           
           console.log(`♻️ [${requestId}] Using fallback analysis response`);
           responseData.debug.processingSteps.push('Using fallback analysis response');
@@ -2951,7 +2951,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       // Prepare final response
       responseData.success = true;
       responseData.message = 'Analysis completed successfully';
-      responseData.analysis = analysisResult.result;
+      responseData.analysis = analysisResult.analysis;
       responseData.imageUrl = imageUrl;
       responseData.requestId = requestId;
       

@@ -989,7 +989,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     }
     
     // Extract the GPT analysis result
-    const analysisResult = gptResult.result;
+    const analysisResult = gptResult.analysis;
     
     // Always log truncated analysis structure for debugging
     const truncatedAnalysis = JSON.stringify(analysisResult).substring(0, 500) + '...';
