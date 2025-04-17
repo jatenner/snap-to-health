@@ -678,16 +678,58 @@ function validateRequiredFields(result: any): boolean {
 function standardizeNutrientValues(result: any): any {
   if (!result || !result.nutrients) return result;
   
-  const nutrients = result.nutrients;
+  // Create a copy to avoid modifying the original
+  const standardized = { ...result };
+  const nutrients = { ...standardized.nutrients };
   
-  // Convert any numeric-only values to strings
-  Object.keys(nutrients).forEach(key => {
+  // Ensure all expected nutrient fields exist
+  const expectedNutrients = ['calories', 'protein', 'carbs', 'fat', 'fiber', 'sugar', 'sodium'];
+  
+  expectedNutrients.forEach(key => {
+    // Create the field if it doesn't exist
+    if (nutrients[key] === undefined) {
+      nutrients[key] = 0;
+      console.log(`Added missing nutrient: ${key}`);
+    }
+    
+    // Handle if it's already a string
+    if (typeof nutrients[key] === 'string') {
+      // If it's a string with numeric content, try to parse it
+      const numericValue = parseFloat(nutrients[key]);
+      if (!isNaN(numericValue)) {
+        nutrients[key] = numericValue;
+      }
+    }
+    
+    // Ensure all values are strings for consistent frontend handling
     if (typeof nutrients[key] === 'number') {
       nutrients[key] = nutrients[key].toString();
     }
   });
   
-  return result;
+  // Handle possible nested or array-based nutrient structures
+  if (Array.isArray(result.nutrients)) {
+    console.log('Converting array-based nutrients to object format');
+    const nutrientsObj: Record<string, string> = {};
+    
+    result.nutrients.forEach((item: any) => {
+      if (item && item.name) {
+        const name = item.name.toLowerCase().replace(/\s+/g, '');
+        nutrientsObj[name] = item.value?.toString() || '0';
+      }
+    });
+    
+    // Ensure required nutrients exist
+    expectedNutrients.forEach(key => {
+      if (!nutrientsObj[key]) nutrientsObj[key] = '0';
+    });
+    
+    standardized.nutrients = nutrientsObj;
+  } else {
+    standardized.nutrients = nutrients;
+  }
+  
+  return standardized;
 }
 
 // Mock implementation for backward compatibility during migration
@@ -710,44 +752,44 @@ function validateGptAnalysisResult(analysis: any): boolean {
   if (!analysis) return false;
   
   // Check for required top-level fields
-  const requiredFields = [
-    'description', 
-    'nutrients', 
-    'feedback', 
-    'suggestions', 
-    'detailedIngredients'
-  ];
+  // We only require description and nutrients as absolute minimum now
+  const criticalFields = ['description', 'nutrients'];
+  const recommendedFields = ['feedback', 'suggestions', 'detailedIngredients'];
   
-  for (const field of requiredFields) {
+  // Verify critical fields exist
+  for (const field of criticalFields) {
     if (!analysis[field]) {
-      console.warn(`Analysis validation failed: missing '${field}'`);
+      console.warn(`Analysis validation failed: missing critical field '${field}'`);
       return false;
     }
   }
   
-  // Check nutrients structure if present
-  const requiredNutrients = [
-    'calories', 'protein', 'carbs', 'fat'
-  ];
+  // Log warnings for recommended fields but don't fail validation
+  for (const field of recommendedFields) {
+    if (!analysis[field]) {
+      console.warn(`Analysis missing recommended field '${field}', but continuing with validation`);
+    }
+  }
   
+  // Ensure minimum nutrients structure - only require calories at minimum
   if (analysis.nutrients) {
-    for (const nutrient of requiredNutrients) {
-      if (typeof analysis.nutrients[nutrient] !== 'number') {
-        console.warn(`Analysis validation failed: missing or invalid nutrient '${nutrient}'`);
-        return false;
-      }
+    if (typeof analysis.nutrients.calories !== 'number' && 
+        typeof analysis.nutrients.calories !== 'string') {
+      console.warn(`Analysis validation warning: missing or invalid 'calories' in nutrients`);
+      // Don't fail here, just warn
     }
   }
   
-  // Ensure arrays are present
-  const requiredArrays = ['feedback', 'suggestions', 'detailedIngredients'];
-  for (const arrayField of requiredArrays) {
+  // More lenient array validation - as long as they exist, even if empty
+  const arrayFields = ['feedback', 'suggestions', 'detailedIngredients'].filter(f => analysis[f] !== undefined);
+  for (const arrayField of arrayFields) {
     if (!Array.isArray(analysis[arrayField])) {
-      console.warn(`Analysis validation failed: '${arrayField}' is not an array`);
-      return false;
+      console.warn(`Analysis warning: '${arrayField}' exists but is not an array`);
+      // Don't fail validation, just log the warning
     }
   }
   
+  // As long as we have description and some form of nutrients, consider it valid
   return true;
 }
 
@@ -1073,34 +1115,85 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     const isValidAnalysis = validateGptAnalysisResult(analysisResult);
     
     if (!isValidAnalysis) {
-      console.warn(`⚠️ [${requestId}] Invalid analysis structure received from GPT. Using fallback response.`);
+      console.warn(`⚠️ [${requestId}] Invalid analysis structure received from GPT. Attempting partial recovery.`);
       
-      // Create a fallback response with model information
-      const fallbackResponse = createFallbackResponse(
-        "Invalid analysis structure",
-        analysisResult
-      );
+      // Log the raw response for debugging
+      if (gptResult.rawResponse) {
+        const truncatedResponse = gptResult.rawResponse.length > 300 
+          ? `${gptResult.rawResponse.substring(0, 300)}... (truncated)`
+          : gptResult.rawResponse;
+        console.warn(`⚠️ [${requestId}] Raw response from invalid analysis: ${truncatedResponse}`);
+      }
       
-      // Add model information to the fallback response
-      fallbackResponse.modelInfo = {
-        model: gptResult.modelUsed,
-        usedFallback: gptResult.usedFallbackModel,
-        forceGPT4V: gptResult.forceGPT4V
-      };
+      // Check if we have at least a description (minimal content)
+      const hasMinimalContent = analysisResult && 
+        (analysisResult.description || 
+         (analysisResult.detailedIngredients && analysisResult.detailedIngredients.length) ||
+         (analysisResult.feedback && analysisResult.feedback.length));
       
-      // Return the fallback response
-      return createAnalysisResponse({
-        ...responseData,
-        success: false,
-        fallback: true,
-        message: "Analysis couldn't be completed. Please try again with a clearer image.",
-        analysis: fallbackResponse,
-        modelInfo: {
+      if (hasMinimalContent) {
+        console.log(`ℹ️ [${requestId}] Analysis has minimal content, proceeding with partial data`);
+        
+        // Create a partial response with what we have, only using the fallback for missing fields
+        const partialResponse = createFallbackResponse(
+          "Partial analysis structure",
+          analysisResult
+        );
+        
+        // Add model information to the partial response
+        partialResponse.modelInfo = {
           model: gptResult.modelUsed,
           usedFallback: gptResult.usedFallbackModel,
           forceGPT4V: gptResult.forceGPT4V
-        }
-      });
+        };
+        
+        // Use partialResponse as our analysis result and continue
+        console.log(`✅ [${requestId}] Using partial data with recovery`);
+        
+        // Return a properly structured response but indicate it's partial
+        return createAnalysisResponse({
+          ...responseData,
+          success: true, // We consider this a partial success
+          partialResults: true, // Flag to indicate partial results
+          analysis: partialResponse,
+          message: "Analysis was partially completed. Some details might be estimated.",
+          modelInfo: {
+            model: gptResult.modelUsed,
+            usedFallback: gptResult.usedFallbackModel,
+            forceGPT4V: gptResult.forceGPT4V
+          }
+        });
+      } else {
+        // We don't have enough data to even create a partial response
+        console.error(`❌ [${requestId}] No usable content in GPT response - using fallback`);
+        
+        // Create a fallback response with model information
+        const fallbackResponse = createFallbackResponse(
+          "Invalid analysis structure - no usable content",
+          analysisResult
+        );
+        
+        // Add model information to the fallback response
+        fallbackResponse.modelInfo = {
+          model: gptResult.modelUsed,
+          usedFallback: gptResult.usedFallbackModel,
+          forceGPT4V: gptResult.forceGPT4V
+        };
+        
+        // Return the fallback response with clear error message
+        return createAnalysisResponse({
+          ...responseData,
+          success: false,
+          fallback: true,
+          message: "Analysis couldn't be completed. Please try again with a clearer image.",
+          analysis: fallbackResponse,
+          modelInfo: {
+            model: gptResult.modelUsed,
+            usedFallback: gptResult.usedFallbackModel,
+            forceGPT4V: gptResult.forceGPT4V
+          }
+        });
+      }
     }
 
     console.log(`✅ [${requestId}] GPT analysis result passed all validation checks`);
