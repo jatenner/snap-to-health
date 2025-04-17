@@ -27,6 +27,23 @@ if (!process.env.OPENAI_API_KEY) {
   }
 }
 
+// Function to validate that the OpenAI API key is properly formatted
+function validateOpenAIApiKey(apiKey: string | undefined): boolean {
+  if (!apiKey) return false;
+  
+  // OpenAI API keys start with 'sk-'
+  // New format keys start with 'sk-org-' or 'sk-proj-'
+  const isValidFormat = 
+    apiKey.startsWith('sk-') || 
+    apiKey.startsWith('sk-org-') ||
+    apiKey.startsWith('sk-proj-');
+    
+  // Basic validation of key length
+  const hasValidLength = apiKey.length > 20;
+  
+  return isValidFormat && hasValidLength;
+}
+
 /**
  * Analyzes an image using GPT-4 Vision API.
  */
@@ -36,8 +53,39 @@ export async function analyzeImageWithGPT4V(
   dietaryPreferences: string[] = [],
   requestId: string
 ): Promise<{ success: boolean; result: any; error?: string; rawResponse?: string }> {
-  console.log(`📸 [${requestId}] Starting GPT-4 Vision analysis...`);
-  console.log(`📊 [${requestId}] Goals: [${healthGoals.join(', ')}], Preferences: [${dietaryPreferences.join(', ')}]`);
+  console.log(`📸 [${requestId}] Starting analysis with GPT-4V...`);
+  console.log(`📊 [${requestId}] Health goals: ${healthGoals.join(', ') || 'None specified'}`);
+  console.log(`🥗 [${requestId}] Dietary preferences: ${dietaryPreferences.join(', ') || 'None specified'}`);
+  
+  // Get OpenAI API key from environment with enhanced validation
+  const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
+  
+  // Enhanced validation of the API key
+  if (!OPENAI_API_KEY) {
+    const errorMsg = `[${requestId}] OpenAI API key is missing. Check environment variables.`;
+    console.error(errorMsg);
+    return {
+      success: false,
+      error: 'OpenAI API key is not configured',
+      result: null,
+      rawResponse: undefined
+    };
+  }
+  
+  if (!validateOpenAIApiKey(OPENAI_API_KEY)) {
+    const errorMsg = `[${requestId}] OpenAI API key has invalid format. Should start with 'sk-' or 'sk-*-' and have sufficient length.`;
+    console.error(errorMsg);
+    return {
+      success: false,
+      error: 'OpenAI API key has invalid format',
+      result: null,
+      rawResponse: undefined
+    };
+  }
+
+  // Log approximate size of the base64 image for debugging
+  const imageSizeKB = Math.round(base64Image.length * 0.75 / 1024);
+  console.log(`📷 [${requestId}] Processing image (approx. ${imageSizeKB}KB)...`);
 
   // Check if OpenAI client failed to initialize
   if (openAIInitializationError || !openai) {
@@ -63,33 +111,42 @@ export async function analyzeImageWithGPT4V(
   console.log(`📦 [${requestId}] Image approximate size: ${approxSizeKB}KB`);
 
   // Construct a more explicit and structured prompt
-  const systemPrompt = `You are a nutrition analysis assistant that analyzes food images and returns structured data to help users track their meals.
+  const systemPrompt = `You are a nutrition-focused food analysis expert. Analyze this food image and provide detailed information.
+Focus specifically on:
+1. What foods are visible in the image (be specific and detailed)
+2. The main nutritional components (protein, carbs, fat, calories)
+3. Health impact relative to the user's goals: ${healthGoals.join(', ')}
 
-IMPORTANT REQUIREMENTS:
-1. Your ONLY response must be a valid JSON object with the EXACT structure specified below.
-2. Do NOT include any markdown formatting, explanations, or any text outside the JSON object.
-3. If you cannot clearly identify the food items, be conservative in your analysis and focus on what you can see.
-4. All fields are REQUIRED - you must provide values for each field specified.
+CRITICAL REQUIREMENTS:
+- Return ONLY valid JSON that can be parsed with JSON.parse()
+- Include all required fields in the response:
+  * description: A clear description of all visible food items
+  * nutrients: Object with calories, protein, carbs, fat (all required)
+  * feedback: Array of feedback points (at least 2 items)
+  * suggestions: Array of improvement suggestions (at least 2 items)
+  * goalScore: Number from 1-10 rating how well this meal supports the user's health goals
 
-JSON STRUCTURE:
+The JSON structure must follow this exact format:
 {
-  "description": "string (detailed description of all visible food items)",
+  "description": "Detailed description of the visible food items",
   "nutrients": {
-    "calories": "string (e.g., '350 kcal')",
-    "protein": "string (e.g., '15g')",
-    "carbs": "string (e.g., '45g')",
-    "fat": "string (e.g., '12g')",
-    "fiber": "string (e.g., '5g')",
-    "sugar": "string (e.g., '8g')"
+    "calories": "300-350 calories",
+    "protein": "20g",
+    "carbs": "45g",
+    "fat": "12g"
   },
-  "feedback": ["array of strings (3-5 relevant observations about nutrition value)"],
-  "suggestions": ["array of strings (2-4 actionable suggestions for improvement)"],
-  "goalScore": number (0-10 score indicating alignment with user's health goals),
-  "scoreExplanation": "string (brief explanation of the score)",
-  "warnings": ["array of strings (potential issues or allergens, can be empty array if none)"]
+  "feedback": [
+    "This meal has good protein content from the chicken",
+    "The vegetables provide essential vitamins and fiber"
+  ],
+  "suggestions": [
+    "Consider adding more whole grains",
+    "Adding healthy fat sources like avocado would improve this meal"
+  ],
+  "goalScore": 8
 }
 
-Remember, accurate structure is critical - the system requires these exact fields to function correctly.`;
+For unclear images, NEVER refuse to analyze - always provide your best estimate with all required fields.`;
   
   const userMessageContent: OpenAI.Chat.Completions.ChatCompletionContentPart[] = [
     {
