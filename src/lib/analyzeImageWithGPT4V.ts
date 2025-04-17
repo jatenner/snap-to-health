@@ -5,6 +5,7 @@
 
 import OpenAI from 'openai';
 import crypto from 'crypto';
+import { GPT_MODEL, GPT_VISION_MODEL, FALLBACK_MODELS, API_CONFIG } from './constants';
 
 // Initialize OpenAI client
 let openai: OpenAI | null = null;
@@ -27,95 +28,136 @@ if (!process.env.OPENAI_API_KEY) {
   }
 }
 
-// Helper function to validate OPENAI API Key format
-const validateOpenAIApiKey = (apiKey: string): boolean => {
-  return (
-    apiKey.startsWith('sk-') &&
-    apiKey.length > 20
-  );
-};
+/**
+ * Validates OpenAI API key format
+ */
+function validateOpenAIApiKey(apiKey: string | undefined): boolean {
+  if (!apiKey) return false;
+  return /^sk-[A-Za-z0-9]{32,}$/.test(apiKey);
+}
 
 /**
- * Create an empty fallback analysis when no GPT result is available
+ * Checks if the specified model is available with the current OpenAI API key
+ * Falls back to an alternative model if the specified model is unavailable
  */
-function createEmptyFallbackAnalysis(): any {
+export async function checkModelAvailability(modelName: string, requestId: string) {
+  console.log(`🔍 [${requestId}] Checking availability of model: ${modelName}`);
+  const openaiApiKey = process.env.OPENAI_API_KEY;
+
+  const result = {
+    available: false,
+    fallbackModel: null as string | null,
+    error: null as string | null
+  };
+
+  if (!validateOpenAIApiKey(openaiApiKey)) {
+    result.error = 'Invalid or missing OpenAI API key';
+    console.error(`❌ [${requestId}] ${result.error}`);
+    return result;
+  }
+
+  try {
+    // TypeScript validation is handled by validateOpenAIApiKey
+    const openai = new OpenAI({ apiKey: openaiApiKey as string });
+    const models = await openai.models.list();
+    
+    // Check if the specified model is available
+    const isModelAvailable = models.data.some(model => model.id === modelName);
+    result.available = isModelAvailable;
+    
+    if (isModelAvailable) {
+      console.log(`✅ [${requestId}] Model ${modelName} is available`);
+    } else {
+      console.warn(`⚠️ [${requestId}] Model ${modelName} is not available`);
+      
+      // Determine fallback model based on capabilities
+      if (modelName.includes('vision')) {
+        // For vision models, check alternatives
+        const visionModels = models.data
+          .filter(model => 
+            model.id.includes('vision') || 
+            (model.id.includes('gpt-4') && model.id.includes('vision'))
+          )
+          .map(model => model.id);
+        
+        if (visionModels.length > 0) {
+          result.fallbackModel = visionModels[0]; // Use the first available vision model
+          console.log(`🔄 [${requestId}] Found fallback vision model: ${result.fallbackModel}`);
+        } else {
+          result.error = 'No vision-capable models available';
+          console.error(`❌ [${requestId}] ${result.error}`);
+        }
+      } else {
+        // For non-vision models, fallback to stable alternatives
+        for (const fallbackModel of FALLBACK_MODELS) {
+          if (models.data.some(model => model.id === fallbackModel)) {
+            result.fallbackModel = fallbackModel;
+            console.log(`🔄 [${requestId}] Found fallback model: ${result.fallbackModel}`);
+            break;
+          }
+        }
+        
+        if (!result.fallbackModel) {
+          result.error = 'No suitable fallback models available';
+          console.error(`❌ [${requestId}] ${result.error}`);
+        }
+      }
+    }
+  } catch (error: any) {
+    result.error = error.message || 'Error checking model availability';
+    console.error(`❌ [${requestId}] Error checking model availability: ${result.error}`);
+  }
+
+  return result;
+}
+
+/**
+ * Type definition for fallback analysis result
+ */
+interface FallbackAnalysis {
+  description: string;
+  nutrients: {
+    calories: number;
+    protein: number;
+    carbs: number;
+    fat: number;
+    fiber: number;
+    sugar: number;
+    [key: string]: number; // Allow for additional nutrient fields
+  };
+  feedback: string;
+  suggestions: string[];
+  detailedIngredients: string[];
+  goalScore: number;
+  _meta?: {
+    error: string;
+    timestamp?: string; // Optional timestamp field
+  };
+}
+
+/**
+ * Creates a fallback analysis result when model is unavailable
+ */
+function createEmptyFallbackAnalysis(reason: string): FallbackAnalysis {
   return {
-    description: "Unable to analyze the image. Our AI analysis system encountered an issue.",
+    description: `Unable to analyze image: ${reason}`,
     nutrients: {
       calories: 0,
       protein: 0,
       carbs: 0,
       fat: 0,
       fiber: 0,
-      sugar: 0,
-      sodium: 0
+      sugar: 0
     },
-    feedback: [
-      "We couldn't analyze your meal image at this time.",
-      "Please try again or contact support if the issue persists."
-    ],
-    suggestions: [
-      "Try uploading a clearer image of your meal",
-      "Ensure the image shows the food items clearly"
-    ],
-    warnings: [
-      "This is a fallback analysis due to a system error"
-    ],
+    feedback: "I couldn't analyze this image due to a system limitation. Please try again later.",
+    suggestions: ["Try again later when the service is fully operational."],
+    detailedIngredients: ["Could not identify ingredients"],
     goalScore: 0,
-    scoreExplanation: "No score available due to analysis failure",
-    detailedIngredients: []
-  };
-}
-
-/**
- * Check if a model is available for the OpenAI API key
- * @param openai Initialized OpenAI client
- * @param modelId Model ID to check (e.g., "gpt-4o")
- * @param requestId Request ID for logging
- * @returns Object with availability status and fallback model if needed
- */
-export async function checkModelAvailability(
-  openai: OpenAI,
-  modelId: string,
-  requestId: string
-): Promise<{ available: boolean; fallbackModel?: string; error?: string }> {
-  try {
-    console.log(`🔍 [${requestId}] Checking availability of model: ${modelId}`);
-    
-    // Try to retrieve the model to see if it's available to this API key
-    await openai.models.retrieve(modelId);
-    
-    console.log(`✅ [${requestId}] Model ${modelId} is available`);
-    return { available: true };
-  } catch (error: any) {
-    // Check the specific error to determine if it's a permissions issue
-    const errorMessage = error?.message || 'Unknown error';
-    const statusCode = error?.status || error?.statusCode || null;
-    
-    console.error(`❌ [${requestId}] Model availability check failed: ${errorMessage} (Status: ${statusCode})`);
-    
-    // Determine if this is a permissions issue (401/403) or if the model doesn't exist (404)
-    let fallbackModel: string | undefined = undefined;
-    let errorDetail = errorMessage;
-    
-    if (statusCode === 401 || statusCode === 403 || 
-        errorMessage.includes('permission') || 
-        errorMessage.includes('unauthorized') || 
-        errorMessage.includes('access')) {
-      fallbackModel = 'gpt-4-vision-preview';
-      errorDetail = `No access to ${modelId} (permission denied). Using ${fallbackModel} as fallback.`;
-    } else if (statusCode === 404 || errorMessage.includes('not found') || errorMessage.includes('deprecated')) {
-      fallbackModel = 'gpt-4-vision-preview';
-      errorDetail = `Model ${modelId} not found or deprecated. Using ${fallbackModel} as fallback.`;
-    } else {
-      // For other errors, still try to use the fallback model
-      fallbackModel = 'gpt-4-vision-preview';
-      errorDetail = `Error checking model: ${errorMessage}. Using ${fallbackModel} as fallback.`;
+    _meta: {
+      error: reason,
+      timestamp: new Date().toISOString()
     }
-    
-    console.warn(`⚠️ [${requestId}] ${errorDetail}`);
-    return { available: false, fallbackModel, error: errorDetail };
-  }
+  };
 }
 
 /**
@@ -157,7 +199,7 @@ export async function analyzeImageWithGPT4V(
     const error = `Invalid or missing OpenAI API key format`;
     console.error(`❌ [${requestId}] ${error}`);
     return {
-      analysis: createEmptyFallbackAnalysis(),
+      analysis: createEmptyFallbackAnalysis(error),
       success: false,
       error,
       modelUsed: 'none',
@@ -182,7 +224,7 @@ export async function analyzeImageWithGPT4V(
     // Handle model selection based on USE_GPT4_VISION flag
     if (forceGPT4V) {
       // If GPT-4o is forced, check availability but don't fallback
-      const modelCheck = await checkModelAvailability(openai, preferredModel, requestId);
+      const modelCheck = await checkModelAvailability(preferredModel, requestId);
       
       if (!modelCheck.available) {
         // If force mode is on but model isn't available, fail rather than fallback
@@ -190,7 +232,7 @@ export async function analyzeImageWithGPT4V(
         console.error(`❌ [${requestId}] ${error}`);
         
         return {
-          analysis: createEmptyFallbackAnalysis(),
+          analysis: createEmptyFallbackAnalysis(error),
           success: false,
           error,
           modelUsed: 'error',
@@ -202,7 +244,7 @@ export async function analyzeImageWithGPT4V(
       console.log(`✅ [${requestId}] Using forced ${preferredModel} model`);
     } else {
       // If fallbacks are allowed, check availability and use fallback if needed
-      const modelCheck = await checkModelAvailability(openai, preferredModel, requestId);
+      const modelCheck = await checkModelAvailability(preferredModel, requestId);
       
       if (!modelCheck.available && modelCheck.fallbackModel) {
         modelToUse = modelCheck.fallbackModel;
@@ -357,7 +399,7 @@ ${usedFallbackModel ? '\nNOTE: This analysis is being performed by a fallback mo
       
       // If we can't parse the JSON, return an empty analysis
       return {
-        analysis: createEmptyFallbackAnalysis(),
+        analysis: createEmptyFallbackAnalysis(`Failed to parse response: ${(parseError as Error).message}`),
         success: false,
         error: `Failed to parse response: ${(parseError as Error).message}`,
         modelUsed: modelToUse,
@@ -377,7 +419,7 @@ ${usedFallbackModel ? '\nNOTE: This analysis is being performed by a fallback mo
     }
     
     return {
-      analysis: createEmptyFallbackAnalysis(),
+      analysis: createEmptyFallbackAnalysis(`GPT4o analysis failed: ${errorMessage}`),
       success: false,
       error: errorMessage,
       modelUsed: 'error',
@@ -469,22 +511,7 @@ export function createFallbackResponse(
   reason: string,
   partialAnalysis: any = null
 ): any {
-  const fallback = createEmptyFallbackAnalysis();
-  
-  // Add the reason to the fallback analysis
-  fallback.warnings = [
-    `Analysis failed: ${reason}`,
-    "Our AI system encountered an issue analyzing your image."
-  ];
-  
-  // Add specific user-friendly message based on the error type
-  if (reason.includes('parse') || reason.includes('JSON')) {
-    fallback.warnings.push("The analysis produced invalid data format.");
-  } else if (reason.includes('missing') || reason.includes('invalid')) {
-    fallback.warnings.push("The analysis was incomplete or had missing information.");
-  } else if (reason.includes('confidence') || reason.includes('unclear')) {
-    fallback.warnings.push("The image may be unclear or the food items difficult to identify.");
-  }
+  const fallback = createEmptyFallbackAnalysis(reason);
   
   // Add error metadata for debugging
   fallback._meta = {
@@ -536,5 +563,5 @@ export function createFallbackResponse(
  * Create an emergency fallback response for unexpected errors
  */
 export function createEmergencyFallbackResponse(): any {
-  return createEmptyFallbackAnalysis();
+  return createEmptyFallbackAnalysis('Unexpected error');
 }
