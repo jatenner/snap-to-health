@@ -1,3 +1,5 @@
+#!/usr/bin/env node
+
 // Script to fix the Firebase private key encoding
 // This extracts the private key from a service account JSON and encodes it properly
 
@@ -8,52 +10,47 @@ const dotenv = require('dotenv');
 // Load environment variables from .env.local
 dotenv.config({ path: path.resolve(process.cwd(), '.env.local') });
 
-// Get the base64 encoded service account from .env.local
-const encodedServiceAccount = process.env.FIREBASE_PRIVATE_KEY_BASE64;
+// Path to the service account file
+const serviceAccountPath = process.argv[2] || '/Users/jonahtenner/Downloads/snaphealth-39b14-firebase-adminsdk-fbsvc-d32fe5731b.json';
 
-if (!encodedServiceAccount) {
-  console.error('❌ FIREBASE_PRIVATE_KEY_BASE64 not found in .env.local');
-  process.exit(1);
-}
-
+// Read the service account file
 try {
-  // Decode the service account JSON
-  const serviceAccountJson = Buffer.from(encodedServiceAccount, 'base64').toString('utf8');
-  const serviceAccount = JSON.parse(serviceAccountJson);
+  console.log(`Reading service account file: ${serviceAccountPath}`);
+  const serviceAccount = JSON.parse(fs.readFileSync(serviceAccountPath));
   
   // Extract the private key
   const privateKey = serviceAccount.private_key;
   
-  if (!privateKey) {
-    console.error('❌ private_key not found in the decoded service account JSON');
+  // Check if the private key is in the correct format
+  if (!privateKey.startsWith('-----BEGIN PRIVATE KEY-----') || !privateKey.endsWith('-----END PRIVATE KEY-----\n')) {
+    console.error('ERROR: Private key is not in the expected PEM format.');
     process.exit(1);
   }
   
-  // Check that it's a proper PEM format
-  if (!privateKey.includes('-----BEGIN PRIVATE KEY-----') || 
-      !privateKey.includes('-----END PRIVATE KEY-----')) {
-    console.error('❌ Extracted private key is not in PEM format');
-    process.exit(1);
-  }
+  // Encode to base64
+  const base64PrivateKey = Buffer.from(privateKey).toString('base64');
   
-  // Encode the private key directly
-  const privateKeyBase64 = Buffer.from(privateKey).toString('base64');
+  // Output the result
+  console.log('\nService account details:');
+  console.log(`- project_id: ${serviceAccount.project_id}`);
+  console.log(`- client_email: ${serviceAccount.client_email}`);
+  console.log(`- client_id: ${serviceAccount.client_id}`);
   
-  console.log('✅ Successfully extracted private key from service account');
-  console.log('✅ Private key is in PEM format');
-  console.log(`✅ Base64 encoded private key length: ${privateKeyBase64.length} characters`);
+  console.log('\nBase64 encoded private key:');
+  console.log(base64PrivateKey);
   
-  // Output the encoded key without revealing it
-  console.log('\nUpdate your .env.local file with:');
-  console.log('FIREBASE_PRIVATE_KEY_BASE64=' + privateKeyBase64);
+  console.log('\nVerification:');
+  // Verify by decoding back
+  const decodedKey = Buffer.from(base64PrivateKey, 'base64').toString();
+  console.log(`- Contains header: ${decodedKey.includes('-----BEGIN PRIVATE KEY-----') ? 'Yes' : 'No'}`);
+  console.log(`- Contains footer: ${decodedKey.includes('-----END PRIVATE KEY-----') ? 'Yes' : 'No'}`);
+  console.log(`- Original key length: ${privateKey.length}`);
+  console.log(`- Decoded key length: ${decodedKey.length}`);
   
-  // Also save to a temporary file for easy copying
-  const outputPath = path.resolve(process.cwd(), 'private-key-base64.txt');
-  fs.writeFileSync(outputPath, privateKeyBase64);
-  console.log(`\n✅ Saved encoded private key to: ${outputPath}`);
-  console.log('Copy this value to your .env.local file');
+  console.log('\nAdd this to your .env.local, .env.local.firebase, and .env.local.example:');
+  console.log(`FIREBASE_PRIVATE_KEY_BASE64=${base64PrivateKey}`);
   
 } catch (error) {
-  console.error('❌ Error processing the service account JSON:', error.message);
+  console.error(`ERROR: ${error.message}`);
   process.exit(1);
 } 
