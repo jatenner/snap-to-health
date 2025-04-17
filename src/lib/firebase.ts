@@ -13,210 +13,168 @@ let auth: Auth | null = null;
 let db: Firestore | null = null;
 let storage: FirebaseStorage | null = null;
 let analytics: Analytics | null = null;
+let firebaseInitializationError: Error | null = null;
 
 // Make sure we're in the browser before initializing Firebase
 if (typeof window !== 'undefined') {
-  // --- BEGIN DIAGNOSTIC LOG ---
-  const apiKeyFromEnv = process.env.NEXT_PUBLIC_FIREBASE_API_KEY;
-  console.log(
-    `[Firebase Init Check] NEXT_PUBLIC_FIREBASE_API_KEY: ${apiKeyFromEnv
-        ? `${apiKeyFromEnv.substring(0, 6)}... (masked)`
-        : '🔴 UNDEFINED'}`
-  );
+  // --- BEGIN DIAGNOSTIC LOG & VALIDATION ---
+  const envConfig = {
+    apiKey: process.env.NEXT_PUBLIC_FIREBASE_API_KEY,
+    authDomain: process.env.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN,
+    projectId: process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID,
+    storageBucket: process.env.NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET,
+    messagingSenderId: process.env.NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID,
+    appId: process.env.NEXT_PUBLIC_FIREBASE_APP_ID,
+    measurementId: process.env.NEXT_PUBLIC_FIREBASE_MEASUREMENT_ID, // Optional
+  };
 
-  if (!apiKeyFromEnv) {
-    console.warn(
-      '🔴 WARNING: NEXT_PUBLIC_FIREBASE_API_KEY is missing or undefined in the browser environment!'
-    );
-    console.warn(
-      '   This will cause "auth/api-key-not-valid" errors.'
-    );
-    console.warn(
-      '   Verify this variable is set correctly in your Vercel project Environment Variables.'
-    );
+  console.log(`[Startup Firebase Check] Raw Env Values:`, {
+      apiKey: envConfig.apiKey ? 'Exists (masked)' : '🔴 MISSING',
+      authDomain: envConfig.authDomain || '🔴 MISSING',
+      projectId: envConfig.projectId || '🔴 MISSING',
+      // Add others if needed for debugging
+  });
+
+  // Validate required fields *before* proceeding
+  const requiredKeys: (keyof typeof envConfig)[] = [
+    'apiKey', 'authDomain', 'projectId', 'storageBucket', 'messagingSenderId', 'appId'
+  ];
+  const missingKeys = requiredKeys.filter(key => !envConfig[key]);
+
+  if (missingKeys.length > 0) {
+    const errorMsg = `🔴 CRITICAL ERROR: Missing required Firebase env vars: ${missingKeys.join(', ')}. Check .env.local & Vercel.`;
+    console.error(errorMsg);
+    firebaseInitializationError = new Error(errorMsg); // Store error to prevent app usage
+  } else if (envConfig.apiKey && !envConfig.apiKey.startsWith('AIza')) {
+     const errorMsg = `🔴 CRITICAL ERROR: NEXT_PUBLIC_FIREBASE_API_KEY seems invalid (doesn't start with AIza). Value: ${envConfig.apiKey.substring(0,10)}...`;
+     console.error(errorMsg);
+     firebaseInitializationError = new Error(errorMsg);
+  } else {
+     console.log("✅ All required Firebase environment variables seem present.");
   }
-  // --- END DIAGNOSTIC LOG ---
+  // --- END DIAGNOSTIC LOG & VALIDATION ---
 
-  try {
-    // Explicitly log all NEXT_PUBLIC_ Firebase variables for debugging
-    console.log('🔍 Firebase Client Env Var Check:');
-    const envVars = {
-      NEXT_PUBLIC_FIREBASE_API_KEY: process.env.NEXT_PUBLIC_FIREBASE_API_KEY,
-      NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN: process.env.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN,
-      NEXT_PUBLIC_FIREBASE_PROJECT_ID: process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID,
-      NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET: process.env.NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET,
-      NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID: process.env.NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID,
-      NEXT_PUBLIC_FIREBASE_APP_ID: process.env.NEXT_PUBLIC_FIREBASE_APP_ID,
-      NEXT_PUBLIC_FIREBASE_MEASUREMENT_ID: process.env.NEXT_PUBLIC_FIREBASE_MEASUREMENT_ID,
-    };
+  // Only proceed if no critical errors were found during validation
+  if (!firebaseInitializationError) {
+    try {
+      // Use validated config
+      const firebaseConfig = {
+        apiKey: envConfig.apiKey!, // Assert non-null based on checks above
+        authDomain: envConfig.authDomain!,
+        projectId: envConfig.projectId!,
+        storageBucket: envConfig.storageBucket!,
+        messagingSenderId: envConfig.messagingSenderId!,
+        appId: envConfig.appId!,
+        measurementId: envConfig.measurementId, // Can be undefined
+      };
 
-    // Log each variable, indicating if it's missing
-    for (const [key, value] of Object.entries(envVars)) {
-      if (key === 'NEXT_PUBLIC_FIREBASE_API_KEY' && value) {
-        console.log(`  ✅ ${key}: ${value.substring(0, 6)}... (masked)`);
-      } else {
-        console.log(`  ${value ? '✅' : '❌ MISSING:'} ${key}: ${value || 'undefined'}`);
-      }
-    }
-
-    // Use the storage bucket directly from env var with fallback
-    const STORAGE_BUCKET = envVars.NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET || 'snaphealth-39b14.appspot.com';
-
-    // Firebase configuration from environment variables
-    const firebaseConfig = {
-      apiKey: envVars.NEXT_PUBLIC_FIREBASE_API_KEY,
-      authDomain: envVars.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN,
-      projectId: envVars.NEXT_PUBLIC_FIREBASE_PROJECT_ID,
-      storageBucket: STORAGE_BUCKET,
-      messagingSenderId: envVars.NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID,
-      appId: envVars.NEXT_PUBLIC_FIREBASE_APP_ID,
-      measurementId: envVars.NEXT_PUBLIC_FIREBASE_MEASUREMENT_ID,
-    };
-
-    // Check all *required* Firebase config values before attempting initialization
-    const missingRequiredValues = [];
-    if (!firebaseConfig.apiKey) missingRequiredValues.push('NEXT_PUBLIC_FIREBASE_API_KEY');
-    if (!firebaseConfig.authDomain) missingRequiredValues.push('NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN');
-    if (!firebaseConfig.projectId) missingRequiredValues.push('NEXT_PUBLIC_FIREBASE_PROJECT_ID');
-    if (!firebaseConfig.storageBucket) missingRequiredValues.push('NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET'); // Assuming storage is essential
-    if (!firebaseConfig.messagingSenderId) missingRequiredValues.push('NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID');
-    if (!firebaseConfig.appId) missingRequiredValues.push('NEXT_PUBLIC_FIREBASE_APP_ID');
-
-    if (missingRequiredValues.length > 0) {
-      console.error("🛑 CRITICAL ERROR: Missing required Firebase config values:", missingRequiredValues.join(", "));
-      console.error("   Firebase cannot be initialized. Check your .env.local file and Vercel environment variables.");
-      // Optionally throw an error to halt further execution if Firebase is critical
-      // throw new Error(`Missing Firebase config: ${missingRequiredValues.join(", ")}`);
-    } else {
-      console.log("✅ All required Firebase config values appear to be present.");
-    }
-
-    // Initialize Firebase - use existing app if already initialized (prevents duplicate apps)
-    const apps = getApps();
-    if (!apps.length) {
-       // Only attempt initialization if essential variables are present
-      if (firebaseConfig.apiKey && firebaseConfig.projectId) {
-        console.log("🔥 Initializing Firebase app for the first time with config:");
-        // Log the config being used (mask API key)
-        // console.log(JSON.stringify({ ...firebaseConfig, apiKey: `${firebaseConfig.apiKey.substring(0, 6)}...` }, null, 2));
-        
-        // Add the requested diagnostic log just before initialization
-        console.log('[Firebase Init Check]', {
-          apiKey: process.env.NEXT_PUBLIC_FIREBASE_API_KEY ? `${process.env.NEXT_PUBLIC_FIREBASE_API_KEY.substring(0, 6)}... (masked)` : 'MISSING',
-          projectId: process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID,
-          authDomain: process.env.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN,
-        });
-
-        app = initializeApp(firebaseConfig);
-
-        // Verify the app was initialized with the correct config
-        console.log("🔍 Checking initialized app options:");
-        console.log(`  App Name: ${app.name}`);
-        console.log(`  API Key (from app.options): ${app.options.apiKey ? `${app.options.apiKey.substring(0, 6)}...` : 'MISSING'}`);
-        console.log(`  Project ID (from app.options): ${app.options.projectId || 'MISSING'}`);
-        console.log(`  Storage Bucket (from app.options): ${app.options.storageBucket || 'MISSING'}`);
-
-        // Double-check API key match after initialization
-        if (app.options.apiKey !== firebaseConfig.apiKey) {
-           console.error("🔴 CRITICAL WARNING: API Key mismatch after initialization!");
-           console.error(`   Expected: ${firebaseConfig.apiKey.substring(0, 6)}...`);
-           console.error(`   Initialized with: ${app.options.apiKey ? app.options.apiKey.substring(0, 6) + '...' : 'MISSING'}`);
-        }
-
-      } else {
-        console.error("🛑 Cannot initialize Firebase - API key or Project ID is missing in the config object.");
-        // Handle the error appropriately, maybe set a global error state
-      }
-    } else {
-      console.log("🔥 Reusing existing Firebase app instance.");
-      app = apps[0];
-       // Optionally log the existing app's config for comparison
-       console.log("   Existing app Project ID:", app.options.projectId);
-       console.log("   Existing app Storage Bucket:", app.options.storageBucket);
-    }
-
-    // Verify config is correctly set
-    if (app && app.options.projectId !== firebaseConfig.projectId) {
-      console.error(`⚠️ Project ID mismatch: Env var ${firebaseConfig.projectId}, App config ${app.options.projectId}`);
-    }
-
-    if (app && app.options.storageBucket !== STORAGE_BUCKET) {
-      console.error(`⚠️ Storage bucket mismatch: Env var ${STORAGE_BUCKET}, App config ${app.options.storageBucket}`);
-    } else if (app) {
-      console.log(`✅ Storage bucket correctly set to: ${app.options.storageBucket}`);
-    }
-
-    // Initialize Firebase services (only if app was successfully initialized or retrieved)
-    if (app) {
-      try {
-        auth = getAuth(app);
-        console.log("✅ Firebase Auth initialized");
-
-        // Set persistence to local for better user experience
-        try {
-          import('firebase/auth').then(({setPersistence, browserLocalPersistence}) => {
-            if (auth) {
-              setPersistence(auth, browserLocalPersistence)
-                .then(() => console.log("✅ Auth persistence set to local"))
-                .catch(err => console.error("Error setting auth persistence:", err));
-            }
+      // Initialize Firebase - use existing app if already initialized
+      const apps = getApps();
+      if (!apps.length) {
+          console.log("🔥 Initializing Firebase app for the first time...");
+          // Add the requested diagnostic log just before initialization
+          console.log('[Firebase Init Check]', {
+            apiKey: firebaseConfig.apiKey ? `${firebaseConfig.apiKey.substring(0, 6)}... (masked)` : 'MISSING',
+            projectId: firebaseConfig.projectId,
+            authDomain: firebaseConfig.authDomain,
+            appWasInitialized: false, // Logging before init
           });
-        } catch (err) {
-          console.warn("Could not set auth persistence:", err);
-        }
-      } catch (error) {
-        console.error("❌ Error initializing Firebase Auth:", error);
-        // Log the specific error code if available, e.g., auth/api-key-not-valid
-        if ((error as any).code) {
-           console.error(`   Auth Error Code: ${(error as any).code}`);
-           if ((error as any).code === 'auth/invalid-api-key') {
-               console.error("   🔴 This indicates the API Key passed to Firebase is invalid. Check NEXT_PUBLIC_FIREBASE_API_KEY.")
-           }
-        }
+
+          app = initializeApp(firebaseConfig);
+
+          console.log("✅ Firebase app initialized.");
+          console.log('[Firebase Init Check]', { // Log again after init
+            apiKey: app.options.apiKey ? `${app.options.apiKey.substring(0, 6)}... (masked)` : 'MISSING',
+            projectId: app.options.projectId,
+            authDomain: app.options.authDomain,
+            appWasInitialized: true,
+          });
+
+          // Verify API key match after initialization
+          if (app.options.apiKey !== firebaseConfig.apiKey) {
+             console.error("🔴 CRITICAL WARNING: API Key mismatch after initialization!");
+             console.error(`   Env Var: ${firebaseConfig.apiKey.substring(0, 6)}...`);
+             console.error(`   Initialized App: ${app.options.apiKey ? app.options.apiKey.substring(0, 6) + '...' : 'MISSING'}`);
+          }
+
+      } else {
+        console.log("🔥 Reusing existing Firebase app instance.");
+        app = apps[0];
+         // Log config of existing app for comparison
+         console.log('[Firebase Init Check - Existing App]', {
+            apiKey: app.options.apiKey ? `${app.options.apiKey.substring(0, 6)}... (masked)` : 'MISSING',
+            projectId: app.options.projectId,
+            authDomain: app.options.authDomain,
+            appWasInitialized: true,
+         });
       }
 
-      // Initialize other services...
-      try {
-        db = getFirestore(app);
-        console.log("✅ Firestore initialized");
-      } catch (error) {
-        console.error("❌ Error initializing Firestore:", error);
-      }
-
-      try {
-        storage = getStorage(app);
-        console.log("✅ Firebase Storage initialized");
-      } catch (error) {
-        console.error("❌ Error initializing Firebase Storage:", error);
-      }
-
-      // Initialize analytics in production only
-      if (process.env.NODE_ENV === 'production') {
+      // Initialize Firebase services (only if app object exists)
+      if (app) {
         try {
-          analytics = getAnalytics(app);
-          console.log("✅ Firebase Analytics initialized");
-        } catch (error) {
-          console.warn("Firebase Analytics initialization skipped:", error);
+          auth = getAuth(app); // Pass the guaranteed non-null app
+          console.log("✅ Firebase Auth service initialized.");
+        } catch (authError: any) {
+          console.error("❌ Error initializing Firebase Auth:", authError);
+          if (authError.code === 'auth/invalid-api-key') {
+             console.error("   🔴 Auth Error Code: auth/invalid-api-key. The API Key used is invalid. Check Vercel Environment Variables.");
+          } else {
+             console.error(`   Auth Error Code: ${authError.code || 'N/A'}`);
+          }
+          firebaseInitializationError = authError; // Store auth error
         }
-      }
 
-      // Use emulators in development
-      if (process.env.NODE_ENV === 'development' && window.location.hostname === 'localhost') {
         try {
-          if (auth) connectAuthEmulator(auth, 'http://localhost:9099');
-          if (db) connectFirestoreEmulator(db, 'localhost', 8080);
-          if (storage) connectStorageEmulator(storage, 'localhost', 9199);
-          console.log("✅ Connected to Firebase emulators");
-        } catch (error) {
-          console.error("Error connecting to Firebase emulators:", error);
+          db = getFirestore(app); // Pass the guaranteed non-null app
+          console.log("✅ Firestore service initialized.");
+        } catch (dbError: any) {
+          console.error("❌ Error initializing Firestore:", dbError);
+          firebaseInitializationError = firebaseInitializationError || dbError; // Store first error
         }
+
+        try {
+          storage = getStorage(app); // Pass the guaranteed non-null app
+          console.log("✅ Firebase Storage service initialized.");
+        } catch (storageError: any) {          console.error("❌ Error initializing Firebase Storage:", storageError);
+          firebaseInitializationError = firebaseInitializationError || storageError; // Store first error
+        }
+
+        // Initialize analytics (optional, only in production)
+        if (process.env.NODE_ENV === 'production' && firebaseConfig.measurementId) {
+          try {
+            analytics = getAnalytics(app); // Pass the guaranteed non-null app
+            console.log("✅ Firebase Analytics initialized.");
+          } catch (analyticsError) {
+            console.warn("Firebase Analytics initialization skipped/failed:", analyticsError);
+          }
+        }
+
+        // Connect to emulators in development
+        if (process.env.NODE_ENV === 'development' && window.location.hostname === 'localhost') {
+          try {
+            // Services might be null if their specific init failed
+            if (auth) connectAuthEmulator(auth, 'http://localhost:9099');
+            if (db) connectFirestoreEmulator(db, 'localhost', 8080);
+            if (storage) connectStorageEmulator(storage, 'localhost', 9199);
+            console.log("✅ Connected to Firebase emulators (if running).");
+          } catch (emulatorError) {
+            console.error("Error connecting to Firebase emulators:", emulatorError);
+          }
+        }
+      } else {
+         // This case should now be prevented by the initial validation, but added for safety
+         console.error("🛑 Firebase app object is unexpectedly null after initialization check.");
+         firebaseInitializationError = firebaseInitializationError || new Error("Firebase app object is null after checks.");
       }
-    } else {
-       console.error("🛑 Firebase app object is null, cannot initialize services.");
+    } catch (initError: any) {
+      console.error("❌ CRITICAL ERROR during Firebase initialization block:", initError);
+      firebaseInitializationError = initError; // Store the init error
     }
-  } catch (error) {
-    console.error("❌ CRITICAL ERROR during Firebase initialization process:", error);
+  } else {
+      // Log that initialization was skipped due to missing env vars
+      console.error("🛑 Firebase initialization skipped due to missing environment variables detected earlier.");
   }
 }
 
-export { app, auth, db, storage, analytics }; 
+// Export the potentially null services and the error state
+export { app, auth, db, storage, analytics, firebaseInitializationError }; 
