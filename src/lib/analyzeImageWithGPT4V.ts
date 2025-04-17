@@ -372,27 +372,95 @@ export async function enrichAnalysisResult(
 }
 
 /**
- * Stub implementation to validate GPT analysis results
- * (Might be redundant now as validation happens in route.ts)
+ * Validate that a GPT analysis result has all required fields
+ * @param analysis Analysis result to validate
+ * @returns Boolean indicating if the analysis is valid
  */
-export function validateGptAnalysisResult(analysis: any): { valid: boolean; reason?: string } {
-  // console.log("[Stub] validateGptAnalysisResult called");
-  return { valid: true };
+export function validateGptAnalysisResult(analysis: any): boolean {
+  if (!analysis) return false;
+  
+  // Check for required top-level fields
+  const requiredFields = [
+    'description', 
+    'nutrients', 
+    'feedback', 
+    'suggestions', 
+    'detailedIngredients'
+  ];
+  
+  for (const field of requiredFields) {
+    if (!analysis[field]) {
+      console.warn(`Analysis validation failed: missing '${field}'`);
+      return false;
+    }
+  }
+  
+  // Check nutrients structure
+  const requiredNutrients = [
+    'calories', 'protein', 'carbs', 'fat'
+  ];
+  
+  if (analysis.nutrients) {
+    for (const nutrient of requiredNutrients) {
+      if (typeof analysis.nutrients[nutrient] !== 'number') {
+        console.warn(`Analysis validation failed: missing or invalid nutrient '${nutrient}'`);
+        return false;
+      }
+    }
+  }
+  
+  // Ensure arrays are present
+  const requiredArrays = ['feedback', 'suggestions', 'detailedIngredients'];
+  for (const arrayField of requiredArrays) {
+    if (!Array.isArray(analysis[arrayField])) {
+      console.warn(`Analysis validation failed: '${arrayField}' is not an array`);
+      return false;
+    }
+  }
+  
+  return true;
 }
 
 /**
- * Stub implementation to create a fallback response
- * (Might be redundant now)
+ * Create a fallback response for when GPT analysis fails
+ * @param reason Reason for creating fallback
+ * @param partialAnalysis Any partial analysis data that might be available
+ * @returns Structured fallback analysis
  */
-export function createFallbackResponse(reason: string, healthGoal: string, requestId?: string): any {
-  // console.log("[Stub] createFallbackResponse called");
-  return createEmptyFallbackAnalysis();
+export function createFallbackResponse(
+  reason: string,
+  partialAnalysis: any = null
+): any {
+  const fallback = createEmptyFallbackAnalysis();
+  
+  // Add the reason to the fallback analysis
+  fallback.warnings = [`Analysis failed: ${reason}`];
+  
+  // If we have partial data, try to incorporate valid parts
+  if (partialAnalysis) {
+    if (partialAnalysis.description && typeof partialAnalysis.description === 'string') {
+      fallback.description = partialAnalysis.description;
+    }
+    
+    // Try to salvage any valid detailed ingredients
+    if (Array.isArray(partialAnalysis.detailedIngredients) && 
+        partialAnalysis.detailedIngredients.length > 0) {
+      fallback.detailedIngredients = partialAnalysis.detailedIngredients;
+    }
+    
+    // Try to salvage any valid feedback
+    if (Array.isArray(partialAnalysis.feedback) && 
+        partialAnalysis.feedback.length > 0) {
+      fallback.feedback = [...fallback.feedback, ...partialAnalysis.feedback];
+    }
+  }
+  
+  return fallback;
 }
 
 /**
- * Stub implementation for emergency fallback response
+ * Create an emergency fallback response for unexpected errors
  */
 export function createEmergencyFallbackResponse(): any {
-  // console.log("[Stub] createEmergencyFallbackResponse called");
   return createEmptyFallbackAnalysis();
 }
