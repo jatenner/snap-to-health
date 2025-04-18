@@ -84,8 +84,9 @@ if (!process.env.OPENAI_API_KEY) {
 function validateOpenAIApiKey(apiKey: string | undefined): boolean {
   if (!apiKey) return false;
   
+  // Check if API key matches expected format
   return (
-    apiKey.startsWith('sk-proj-') || 
+    apiKey.startsWith('sk-') || 
     apiKey.startsWith('sk-org-') || 
     /^sk-[A-Za-z0-9]{48,}$/.test(apiKey)
   );
@@ -205,25 +206,21 @@ export function createEmptyFallbackAnalysis(
   requestId: string, 
   modelUsed: string, 
   errorMessage: string
-): AnalysisResult {
+): any {
+  console.log(`[${requestId}] Creating empty fallback analysis due to: ${errorMessage}`);
+  
   return {
-    description: "Unable to analyze the image at this time.",
+    description: "We couldn't analyze this meal properly. Please try again with a clearer photo.",
     nutrients: [],
-    feedback: "We couldn't process your image. Please try again with a clearer photo of your meal.",
-    suggestions: ["Try taking the photo in better lighting", "Make sure your meal is clearly visible"],
-    detailedIngredients: [],
-    goalScore: {
-      overall: 0,
-      specific: {} as Record<string, number>,
-    },
-    metadata: {
-      requestId,
-      modelUsed,
-      usedFallbackModel: true,
-      processingTime: 0,
-      confidence: 0,
-      error: errorMessage,
-      imageQuality: "unknown"
+    feedback: ["Unable to analyze the image."],
+    suggestions: ["Try taking the photo with better lighting and make sure the food is clearly visible."],
+    fallback: true,
+    lowConfidence: true,
+    message: errorMessage || "Analysis failed",
+    modelInfo: {
+      model: modelUsed || "none",
+      usedFallback: true,
+      forceGPT4V: false
     }
   };
 }
@@ -432,10 +429,14 @@ Prioritize accuracy over completeness - if you're unsure about specific nutrient
 
     console.log(`⏳ [${requestId}] Sending request to OpenAI API with model: ${modelToUse}`);
     
-    // Add retry mechanism with exponential backoff
+    // Add retry mechanism with exponential backoff and timeout handling
     const MAX_RETRIES = 3;
     let retryAttempt = 0;
     let lastError: Error | null = null;
+    
+    // Get timeout value from environment or use default of 45 seconds
+    const timeoutMs = parseInt(process.env.OPENAI_TIMEOUT_MS || '', 10) || 45000;
+    console.log(`⏱️ [${requestId}] Using API timeout of ${timeoutMs}ms (${timeoutMs / 1000}s)`);
     
     while (retryAttempt < MAX_RETRIES) {
       try {
@@ -445,147 +446,221 @@ Prioritize accuracy over completeness - if you're unsure about specific nutrient
         }
         
         console.log(`🤖 [${requestId}] Making OpenAI API request with model: ${modelToUse}`);
-        const startTime = Date.now();
-        const completion = await openai.chat.completions.create({
-          model: modelToUse,
-          messages: [
-            { role: 'system', content: systemMessage },
-            { 
-              role: 'user', 
-              content: [
-                { type: 'text', text: userMessage },
-                { 
-                  type: 'image_url', 
-                  image_url: {
-                    url: formattedImage,
-                    detail: 'high'
-                  }
-                }
-              ]
-            }
-          ],
-          max_tokens: API_CONFIG.MAX_TOKENS,
-          temperature: API_CONFIG.TEMPERATURE,
-          top_p: API_CONFIG.TOP_P,
-          frequency_penalty: API_CONFIG.FREQUENCY_PENALTY,
-          presence_penalty: API_CONFIG.PRESENCE_PENALTY,
-          response_format: { type: 'json_object' }
-        });
-        const endTime = Date.now();
-        console.log(`✅ [${requestId}] OpenAI API request completed in ${endTime - startTime}ms`);
-
-        // Log the raw response
-        console.log(`📊 [${requestId}] Raw OpenAI response:`, JSON.stringify(completion));
-
-        // Validate response structure
-        if (!completion.choices || completion.choices.length === 0) {
-          console.error(`❌ [${requestId}] OpenAI API returned empty choices array`);
-          throw new Error('OpenAI API returned empty choices array');
-        }
-
-        const choice = completion.choices[0];
-        if (!choice.message || !choice.message.content) {
-          console.error(`❌ [${requestId}] OpenAI API response missing message content`);
-          throw new Error('OpenAI API response missing message content');
-        }
         
-        let parsedResult: any;
+        // Create an AbortController for timeout management
+        const controller = new AbortController();
+        let timeoutId: NodeJS.Timeout | null = setTimeout(() => {
+          controller.abort();
+          console.error(`⏱️ [${requestId}] OpenAI request aborted due to timeout (${timeoutMs}ms)`);
+        }, timeoutMs);
+        
+        // Function to safely clear the timeout
+        const clearTimeoutSafe = () => {
+          if (timeoutId) {
+            clearTimeout(timeoutId);
+            timeoutId = null;
+          }
+        };
+        
+        const startApiTime = Date.now();
+        
         try {
-          console.log(`🔍 [${requestId}] Attempting to parse JSON response`);
-          parsedResult = JSON.parse(choice.message.content);
-          console.log(`✅ [${requestId}] Successfully parsed JSON response`);
-        } catch (parseError) {
-          console.error(`❌ [${requestId}] Failed to parse JSON response: ${parseError instanceof Error ? parseError.message : String(parseError)}`);
-          console.log(`🧩 [${requestId}] Raw content being parsed: ${choice.message.content}`);
+          const completion = await openai.chat.completions.create({
+            model: modelToUse,
+            messages: [
+              { role: 'system', content: systemMessage },
+              { 
+                role: 'user', 
+                content: [
+                  { type: 'text', text: userMessage },
+                  { 
+                    type: 'image_url', 
+                    image_url: {
+                      url: formattedImage,
+                      detail: 'high'
+                    }
+                  }
+                ]
+              }
+            ],
+            max_tokens: API_CONFIG.MAX_TOKENS,
+            temperature: API_CONFIG.TEMPERATURE,
+            top_p: API_CONFIG.TOP_P,
+            frequency_penalty: API_CONFIG.FREQUENCY_PENALTY,
+            presence_penalty: API_CONFIG.PRESENCE_PENALTY,
+            response_format: { type: 'json_object' }
+          }, { signal: controller.signal });
           
-          // If on the last retry attempt, try to create a partial fallback analysis
-          if (retryAttempt === MAX_RETRIES - 1) {
-            const fallbackAnalysis = createPartialFallbackAnalysis(choice.message.content, requestId, modelToUse, true, parsedResult);
-            return {
-              analysis: fallbackAnalysis,
-              success: false,
-              error: `Failed to parse response: ${parseError instanceof Error ? parseError.message : String(parseError)}`,
-              modelUsed: modelToUse,
-              usedFallbackModel,
-              forceGPT4V,
-              rawResponse: choice.message.content
-            };
+          // Clear timeout since the request completed successfully
+          clearTimeoutSafe();
+          
+          const endApiTime = Date.now();
+          console.log(`✅ [${requestId}] OpenAI API request completed in ${endApiTime - startApiTime}ms`);
+
+          // Log the raw response
+          console.log(`📊 [${requestId}] Raw OpenAI response:`, JSON.stringify(completion));
+
+          // Validate response structure
+          if (!completion.choices || completion.choices.length === 0) {
+            console.error(`❌ [${requestId}] OpenAI API returned empty choices array`);
+            throw new Error('OpenAI API returned empty choices array');
+          }
+
+          const choice = completion.choices[0];
+          if (!choice.message || !choice.message.content) {
+            console.error(`❌ [${requestId}] OpenAI API response missing message content`);
+            throw new Error('OpenAI API response missing message content');
           }
           
-          // Increment retry attempt and continue
-          retryAttempt++;
-          lastError = parseError instanceof Error ? parseError : new Error(String(parseError));
-          
-          // Exponential backoff
-          const delayMs = 1000 * Math.pow(2, retryAttempt);
-          console.log(`⏳ [${requestId}] Waiting ${delayMs}ms before retry ${retryAttempt}/${MAX_RETRIES}`);
-          await new Promise(resolve => setTimeout(resolve, delayMs));
-          continue;
-        }
-        
-        // Validate required fields
-        const validationResult = validateRequiredFields(parsedResult);
-        if (!validationResult.isValid) {
-          console.error(`❌ [${requestId}] Validation failed: Missing required fields: ${validationResult.missingFields.join(', ')}`);
-          
-          // If on the last retry attempt, try to use what we have with a fallback for missing fields
-          if (retryAttempt === MAX_RETRIES - 1) {
-            const fallbackAnalysis = createPartialFallbackAnalysis(choice.message.content, requestId, modelToUse, false, parsedResult);
-            return {
-              analysis: fallbackAnalysis,
-              success: false,
-              error: `Missing required fields: ${validationResult.missingFields.join(', ')}`,
-              modelUsed: modelToUse,
-              usedFallbackModel,
-              forceGPT4V,
-              rawResponse: choice.message.content
-            };
+          let parsedResult: any;
+          try {
+            console.log(`🔍 [${requestId}] Attempting to parse JSON response`);
+            parsedResult = JSON.parse(choice.message.content);
+            console.log(`✅ [${requestId}] Successfully parsed JSON response`);
+          } catch (parseError) {
+            console.error(`❌ [${requestId}] Failed to parse JSON response: ${parseError instanceof Error ? parseError.message : String(parseError)}`);
+            console.log(`🧩 [${requestId}] Raw content being parsed: ${choice.message.content}`);
+            
+            // If on the last retry attempt, try to create a partial fallback analysis
+            if (retryAttempt === MAX_RETRIES - 1) {
+              const fallbackAnalysis = createPartialFallbackAnalysis(choice.message.content, requestId, modelToUse, true, parsedResult);
+              return {
+                analysis: fallbackAnalysis,
+                success: false,
+                error: `Failed to parse response: ${parseError instanceof Error ? parseError.message : String(parseError)}`,
+                modelUsed: modelToUse,
+                usedFallbackModel,
+                forceGPT4V,
+                rawResponse: choice.message.content
+              };
+            }
+            
+            // Increment retry attempt and continue
+            retryAttempt++;
+            lastError = parseError instanceof Error ? parseError : new Error(String(parseError));
+            
+            // Exponential backoff
+            const delayMs = 1000 * Math.pow(2, retryAttempt);
+            console.log(`⏳ [${requestId}] Waiting ${delayMs}ms before retry ${retryAttempt}/${MAX_RETRIES}`);
+            await new Promise(resolve => setTimeout(resolve, delayMs));
+            continue;
           }
           
-          // Increment retry attempt and continue
-          retryAttempt++;
-          lastError = new Error(`Missing required fields: ${validationResult.missingFields.join(', ')}`);
+          // Validate required fields
+          const validationResult = validateRequiredFields(parsedResult);
+          if (!validationResult.isValid) {
+            console.error(`❌ [${requestId}] Validation failed: Missing required fields: ${validationResult.missingFields.join(', ')}`);
+            
+            // If on the last retry attempt, try to use what we have with a fallback for missing fields
+            if (retryAttempt === MAX_RETRIES - 1) {
+              const fallbackAnalysis = createPartialFallbackAnalysis(choice.message.content, requestId, modelToUse, false, parsedResult);
+              return {
+                analysis: fallbackAnalysis,
+                success: false,
+                error: `Missing required fields: ${validationResult.missingFields.join(', ')}`,
+                modelUsed: modelToUse,
+                usedFallbackModel,
+                forceGPT4V,
+                rawResponse: choice.message.content
+              };
+            }
+            
+            // Increment retry attempt and continue
+            retryAttempt++;
+            lastError = new Error(`Missing required fields: ${validationResult.missingFields.join(', ')}`);
+            
+            // Exponential backoff
+            const delayMs = 1000 * Math.pow(2, retryAttempt);
+            console.log(`⏳ [${requestId}] Waiting ${delayMs}ms before retry ${retryAttempt}/${MAX_RETRIES}`);
+            await new Promise(resolve => setTimeout(resolve, delayMs));
+            continue;
+          }
           
-          // Exponential backoff
-          const delayMs = 1000 * Math.pow(2, retryAttempt);
-          console.log(`⏳ [${requestId}] Waiting ${delayMs}ms before retry ${retryAttempt}/${MAX_RETRIES}`);
-          await new Promise(resolve => setTimeout(resolve, delayMs));
-          continue;
-        }
-        
-        // Success! Return the valid result
-        const analysisResult = {
-          ...parsedResult,
-          metadata: {
-            requestId,
+          // Success! Return the valid result
+          const analysisResult = {
+            ...parsedResult,
+            metadata: {
+              requestId,
+              modelUsed: modelToUse,
+              usedFallbackModel,
+              processingTime: endApiTime - startApiTime,
+              confidence: parsedResult.confidence || 0,
+              error: '',
+              imageQuality: qualityInfo.qualityLevel
+            },
+          };
+          
+          return {
+            analysis: analysisResult,
+            success: true,
             modelUsed: modelToUse,
             usedFallbackModel,
-            processingTime: endTime - startTime,
-            confidence: parsedResult.confidence || 0,
-            error: '',
-            imageQuality: qualityInfo.qualityLevel
-          },
-        };
-        
-        return {
-          analysis: analysisResult,
-          success: true,
-          modelUsed: modelToUse,
-          usedFallbackModel,
-          forceGPT4V,
-          rawResponse: choice.message.content
-        };
-      } catch (apiError) {
-        console.error(`❌ [${requestId}] OpenAI API error:`, apiError instanceof Error ? apiError.message : String(apiError));
+            forceGPT4V,
+            rawResponse: choice.message.content
+          };
+        } catch (apiError) {
+          // Clear timeout to prevent memory leaks
+          clearTimeoutSafe();
+          
+          // Check if this was an abort error due to timeout
+          if (apiError instanceof Error && apiError.name === 'AbortError') {
+            console.error(`⏱️ [${requestId}] OpenAI request timed out after ${timeoutMs}ms`);
+            
+            // If this is the last retry, create a specific timeout error response
+            if (retryAttempt === MAX_RETRIES - 1) {
+              const timeoutError = `Request timed out after ${timeoutMs}ms (retry ${retryAttempt + 1}/${MAX_RETRIES})`;
+              const fallbackAnalysis = createEmptyFallbackAnalysis(requestId, modelToUse, timeoutError);
+              return {
+                analysis: fallbackAnalysis,
+                success: false,
+                error: timeoutError,
+                modelUsed: modelToUse,
+                usedFallbackModel,
+                forceGPT4V,
+                rawResponse: JSON.stringify({ error: timeoutError })
+              };
+            }
+            
+            // Increment retry attempt and continue
+            retryAttempt++;
+            lastError = new Error(`Request timed out after ${timeoutMs}ms`);
+            
+            // Exponential backoff
+            const delayMs = 1000 * Math.pow(2, retryAttempt);
+            console.log(`⏳ [${requestId}] Waiting ${delayMs}ms before retry ${retryAttempt}/${MAX_RETRIES} after timeout`);
+            await new Promise(resolve => setTimeout(resolve, delayMs));
+            continue;
+          }
+          
+          // Handle other API errors
+          console.error(`❌ [${requestId}] OpenAI API error:`, apiError instanceof Error ? apiError.message : String(apiError));
+          
+          // If this is the last retry, we'll fall through to the outer catch block
+          if (retryAttempt === MAX_RETRIES - 1) {
+            throw apiError;
+          }
+          
+          // Increment retry attempt and continue
+          retryAttempt++;
+          lastError = apiError instanceof Error ? apiError : new Error(String(apiError));
+          
+          // Exponential backoff
+          const delayMs = 1000 * Math.pow(2, retryAttempt);
+          console.log(`⏳ [${requestId}] Waiting ${delayMs}ms before retry ${retryAttempt}/${MAX_RETRIES}`);
+          await new Promise(resolve => setTimeout(resolve, delayMs));
+        }
+      } catch (outerError) {
+        console.error(`❌ [${requestId}] Error during retry attempt ${retryAttempt + 1}/${MAX_RETRIES}:`, 
+          outerError instanceof Error ? outerError.message : String(outerError));
         
         // If this is the last retry, we'll fall through to the outer catch block
         if (retryAttempt === MAX_RETRIES - 1) {
-          throw apiError;
+          throw outerError;
         }
         
         // Increment retry attempt and continue
         retryAttempt++;
-        lastError = apiError instanceof Error ? apiError : new Error(String(apiError));
+        lastError = outerError instanceof Error ? outerError : new Error(String(outerError));
         
         // Exponential backoff
         const delayMs = 1000 * Math.pow(2, retryAttempt);
@@ -602,16 +677,39 @@ Prioritize accuracy over completeness - if you're unsure about specific nutrient
     // This should never be reached, but TypeScript needs it
     throw new Error('Unknown error in OpenAI API request');
   } catch (error) {
-    console.error(`❌ [${requestId}] Error in analyzeImageWithGPT4V:`, error instanceof Error ? error.message : String(error));
-    const fallbackAnalysis = createEmptyFallbackAnalysis(requestId, 'error', error instanceof Error ? error.message : String(error));
+    // Get detailed error information
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    const errorName = error instanceof Error ? error.name : 'Unknown';
+    
+    console.error(`❌ [${requestId}] Error in analyzeImageWithGPT4V: ${errorName} - ${errorMessage}`);
+    
+    // Create a descriptive error message based on error type
+    let descriptiveError = errorMessage;
+    if (error instanceof Error) {
+      if (error.name === 'AbortError') {
+        descriptiveError = `Request timed out after ${parseInt(process.env.OPENAI_TIMEOUT_MS || '', 10) || 45000}ms`;
+      } else if (error.name === 'TypeError' && errorMessage.includes('fetch')) {
+        descriptiveError = `Network error: Unable to connect to OpenAI API`;
+      } else if (errorMessage.includes('429')) {
+        descriptiveError = `OpenAI API rate limit exceeded`;
+      } else if (errorMessage.includes('401')) {
+        descriptiveError = `Authentication error: Invalid API key or unauthorized access`;
+      }
+    }
+    
+    const fallbackAnalysis = createEmptyFallbackAnalysis(requestId, 'error', descriptiveError);
     return {
       analysis: fallbackAnalysis,
       success: false,
-      error: `API error: ${error instanceof Error ? error.message : String(error)}`,
+      error: `API error: ${descriptiveError}`,
       modelUsed: 'error',
       usedFallbackModel: false,
       forceGPT4V: false,
-      rawResponse: JSON.stringify(error)
+      rawResponse: JSON.stringify({
+        error: descriptiveError,
+        name: errorName,
+        originalMessage: errorMessage
+      })
     };
   }
 }
