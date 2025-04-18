@@ -7,6 +7,54 @@ import OpenAI from 'openai';
 import crypto from 'crypto';
 import { GPT_MODEL, GPT_VISION_MODEL, FALLBACK_MODELS, API_CONFIG } from './constants';
 
+// Define the interface for the analysis result, matching what's used in the components
+interface Nutrient {
+  name: string;
+  value: string;
+  unit: string;
+  isHighlight: boolean;
+  percentOfDailyValue?: number;
+  amount?: number;
+}
+
+interface DetailedIngredient {
+  name: string;
+  category: string;
+  confidence: number;
+  confidenceEmoji?: string;
+}
+
+interface AnalysisResult {
+  description?: string;
+  nutrients?: Nutrient[];
+  feedback?: string;
+  suggestions?: string[];
+  detailedIngredients?: DetailedIngredient[];
+  goalScore: {
+    overall: number;
+    specific: Record<string, number>;
+  };
+  metadata: {
+    requestId: string;
+    modelUsed: string;
+    usedFallbackModel: boolean;
+    processingTime: number;
+    confidence: number;
+    error: string;
+    imageQuality: string;
+  };
+}
+
+interface HealthGoals {
+  primary: string;
+  additional: string[];
+}
+
+interface DietaryPreferences {
+  allergies: string[];
+  avoidances: string[];
+}
+
 // Initialize OpenAI client
 let openai: OpenAI | null = null;
 let openAIInitializationError: Error | null = null;
@@ -87,122 +135,60 @@ export async function validateAndTestAPIKey(apiKey: string | undefined, requestI
 
 /**
  * Check if a model is available for the current OpenAI API key
- * Returns availability status, fallback model, and error message
  */
 export async function checkModelAvailability(
-  modelToCheck: string,
-  requestId?: string
-): Promise<{ available: boolean; fallbackModel: string | null; error: string | null }> {
-  const id = requestId || crypto.randomUUID();
-  console.log(`🔍 [${id}] Checking availability for model: ${modelToCheck}`);
-  
-  // First, validate the API key format
-  const openAIApiKey = process.env.OPENAI_API_KEY;
-  if (!openAIApiKey) {
-    console.error(`❌ [${id}] OpenAI API key is not set in environment variables`);
-    return {
-      available: false,
-      fallbackModel: null,
-      error: 'OpenAI API key is not set'
-    };
-  }
-  
-  // Project API keys are longer and have different format
-  // Modern key format: sk-proj-{projectId}_{random string}
-  const isValidKeyFormat = 
-    openAIApiKey.startsWith('sk-proj-') || 
-    openAIApiKey.startsWith('sk-org-') || 
-    /^sk-[A-Za-z0-9]{48,}$/.test(openAIApiKey);
-    
-  if (!isValidKeyFormat) {
-    console.error(`❌ [${id}] OpenAI API key has invalid format`);
-    return {
-      available: false,
-      fallbackModel: null,
-      error: 'Invalid API key format'
-    };
-  }
-  
+  modelName: string,
+  apiKey: string
+): Promise<{
+  isAvailable: boolean;
+  fallbackModel: string | null;
+  errorMessage: string | null;
+}> {
   try {
-    // Initialize OpenAI client
-    const openai = new OpenAI({
-      apiKey: openAIApiKey
-    });
+    const openai = new OpenAI({ apiKey });
+    const models = await openai.models.list();
     
-    // Check available models
-    console.log(`🔍 [${id}] Retrieving model list to verify ${modelToCheck} availability...`);
-    const modelList = await openai.models.list();
-    
-    // Check if the requested model is available
-    const isModelAvailable = modelList.data.some(model => model.id === modelToCheck);
-    if (isModelAvailable) {
-      console.log(`✅ [${id}] Model ${modelToCheck} is available`);
-      return { available: true, fallbackModel: null, error: null };
+    const isAvailable = models.data.some(model => model.id === modelName);
+    if (isAvailable) {
+      console.info(`Model ${modelName} is available`);
+      return { isAvailable: true, fallbackModel: null, errorMessage: null };
     }
     
-    // Find the first available fallback model
-    console.log(`⚠️ [${id}] Model ${modelToCheck} not available, checking fallbacks...`);
-    for (const fallbackModel of FALLBACK_MODELS) {
-      if (modelList.data.some(model => model.id === fallbackModel)) {
-        console.log(`🔄 [${id}] Using fallback model: ${fallbackModel}`);
-        return { 
-          available: false, 
-          fallbackModel: fallbackModel,
-          error: `Model ${modelToCheck} not available, using ${fallbackModel} instead`
-        };
-      }
-    }
+    // Find fallback model from available models
+    const availableFallbackModel = FALLBACK_MODELS.find(fallbackModel => 
+      models.data.some(model => model.id === fallbackModel)
+    );
     
-    // No fallback model available
-    console.error(`❌ [${id}] No suitable models available`);
-    return {
-      available: false,
-      fallbackModel: null,
-      error: 'No suitable models available for analysis'
+    console.warn(`Model ${modelName} is not available, fallback: ${availableFallbackModel || 'none'}`);
+    return { 
+      isAvailable: false, 
+      fallbackModel: availableFallbackModel || null,
+      errorMessage: `Model ${modelName} is not available` 
     };
-  } catch (error: any) {
-    // Handle specific API key errors
-    if (error.message?.includes('401') || 
-        error.message?.includes('Incorrect API key') ||
-        error.message?.includes('invalid_api_key')) {
-      console.error(`🔑 [${id}] API key authentication failed: ${error.message}`);
-      return {
-        available: false,
-        fallbackModel: null,
-        error: 'API key authentication failed: Invalid API key or permissions'
-      };
-    }
-    
-    // Rate limit errors
-    if (error.message?.includes('429') || 
-        error.message?.includes('rate limit')) {
-      console.error(`⏱️ [${id}] Rate limit exceeded: ${error.message}`);
-      return {
-        available: false,
-        fallbackModel: null,
-        error: 'Rate limit exceeded, please try again later'
-      };
-    }
-    
-    // Network or other errors
-    console.error(`❌ [${id}] Error checking model availability: ${error.message}`);
-    return {
-      available: false,
-      fallbackModel: null,
-      error: `Error checking model availability: ${error.message}`
-    };
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    console.error(`Error checking model availability: ${errorMessage}`);
+    return { isAvailable: false, fallbackModel: null, errorMessage };
   }
 }
 
 /**
  * Define types for analysis results
  */
-interface GoalScore {
+export interface GoalScore {
   overall: number;
   specific: Record<string, number>;
 }
 
-interface AnalysisFallback {
+export interface AnalysisMetadata {
+  requestId: string;
+  model: string | null;
+  usedFallback: boolean;
+  processingTime: number;
+  error: string;
+}
+
+export interface AnalysisFallback {
   success: boolean;
   description: string;
   nutrients: any[];
@@ -211,40 +197,31 @@ interface AnalysisFallback {
   detailedIngredients: any[];
   healthScore: number;
   goalScore: GoalScore;
-  metadata: {
-    requestId: string;
-    model: string | null;
-    usedFallback: boolean;
-    processingTime: number;
-    error: string;
-  };
+  metadata: AnalysisMetadata;
 }
 
 /**
- * Create an empty fallback analysis when models are unavailable
+ * Creates an empty fallback analysis when analysis fails
  */
-export function createEmptyFallbackAnalysis(
-  requestId: string, 
-  error: string
-): AnalysisFallback {
+export function createEmptyFallbackAnalysis(requestId: string, errorMessage: string): AnalysisResult {
   return {
-    success: false,
-    description: "We couldn't analyze your image due to API service issues.",
+    description: "Unable to analyze the image at this time.",
     nutrients: [],
-    feedback: "Our image analysis service is currently experiencing technical difficulties. Please try again later.",
-    suggestions: ["Try again later", "Check if your image is clear and contains food items"],
+    feedback: "We couldn't process your image. Please try again with a clearer photo of your meal.",
+    suggestions: ["Try taking the photo in better lighting", "Make sure your meal is clearly visible"],
     detailedIngredients: [],
-    healthScore: 0,
     goalScore: {
       overall: 0,
-      specific: {}
+      specific: Object.create(null) as Record<string, number>,
     },
     metadata: {
       requestId,
-      model: null,
-      usedFallback: true,
+      modelUsed: "fallback",
+      usedFallbackModel: true,
       processingTime: 0,
-      error
+      confidence: 0,
+      error: errorMessage,
+      imageQuality: "unknown"
     }
   };
 }
@@ -271,148 +248,199 @@ export async function analyzeImageWithGPT4V(
   forceGPT4V: boolean;
   rawResponse?: string;
 }> {
-  console.log(`📸 [${requestId}] Starting image analysis with GPT-4o...`);
-  console.log(`📊 [${requestId}] Goals: ${healthGoals.join(', ')}`);
-  console.log(`🍽️ [${requestId}] Preferences: ${dietaryPreferences.join(', ')}`);
-  console.log(`🖼️ [${requestId}] Image size: ~${Math.round(base64Image.length / 1024)}KB`);
+  // Start timing for performance metrics
+  const startTime = Date.now();
   
-  // Check if USE_GPT4_VISION is explicitly set (defaulting to true if not set)
-  const forceGPT4V = process.env.USE_GPT4_VISION !== 'false';
-  console.log(`⚙️ [${requestId}] Advanced Model Mode: ${forceGPT4V ? 'FORCED' : 'FALLBACK ALLOWED'}`);
+  // Log the request details
+  console.log(`🔍 [${requestId}] Starting image analysis...`);
+  console.log(`🎯 [${requestId}] Goals: ${healthGoals.join(', ') || 'None specified'}`);
+  console.log(`🍽️ [${requestId}] Preferences: ${dietaryPreferences.join(', ') || 'None specified'}`);
   
   // Check for the OpenAI API key
   const openAIApiKey = process.env.OPENAI_API_KEY;
-  
-  // Validate the API key
-  if (!openAIApiKey || !validateOpenAIApiKey(openAIApiKey)) {
-    const error = `Invalid or missing OpenAI API key format`;
+  if (!openAIApiKey) {
+    const error = 'OpenAI API key not found in environment variables';
     console.error(`❌ [${requestId}] ${error}`);
+    
     return {
       analysis: createEmptyFallbackAnalysis(requestId, error),
       success: false,
       error,
       modelUsed: 'none',
       usedFallbackModel: false,
-      forceGPT4V
+      forceGPT4V: false
+    };
+  }
+  
+  if (!validateOpenAIApiKey(openAIApiKey)) {
+    const error = 'Invalid OpenAI API key format';
+    console.error(`❌ [${requestId}] ${error}`);
+    
+    return {
+      analysis: createEmptyFallbackAnalysis(requestId, error),
+      success: false,
+      error,
+      modelUsed: 'none',
+      usedFallbackModel: false,
+      forceGPT4V: false
+    };
+  }
+  
+  // If openai client wasn't initialized properly or had an error
+  if (!openai) {
+    const error = openAIInitializationError?.message || 'OpenAI client not initialized';
+    console.error(`❌ [${requestId}] ${error}`);
+    
+    return {
+      analysis: createEmptyFallbackAnalysis(requestId, error),
+      success: false,
+      error,
+      modelUsed: 'none',
+      usedFallbackModel: false,
+      forceGPT4V: false
+    };
+  }
+  
+  // Check if image data is provided
+  if (!base64Image) {
+    const error = 'No image data provided';
+    console.error(`❌ [${requestId}] ${error}`);
+    
+    return {
+      analysis: createEmptyFallbackAnalysis(requestId, error),
+      success: false,
+      error,
+      modelUsed: 'none',
+      usedFallbackModel: false,
+      forceGPT4V: false
     };
   }
   
   try {
-    // Initialize the OpenAI client
-    const openai = new OpenAI({
-      apiKey: openAIApiKey
-    });
-    
     console.log(`🔗 [${requestId}] OpenAI client initialized successfully`);
     
-    // Default model and backup option
-    const preferredModel = GPT_VISION_MODEL; // Using GPT_VISION_MODEL constant (gpt-4o)
-    let modelToUse = preferredModel;
+    // Determine which model to use
+    let modelToUse = GPT_MODEL;
     let usedFallbackModel = false;
+
+    // Check if environment forces GPT-4 Vision or allows fallback to other models
+    const forceGPT4V = process.env.USE_GPT4_VISION === 'true';
     
-    // Handle model selection based on USE_GPT4_VISION flag
+    // Default to GPT-4o which supports vision
+    const preferredModel = GPT_VISION_MODEL;
+    
+    console.log(`🔍 [${requestId}] Analyzing image with desired model: ${preferredModel}`);
+    
     if (forceGPT4V) {
       // If GPT-4o is forced, check availability but don't fallback
-      const modelCheck = await checkModelAvailability(preferredModel, requestId);
+      const modelCheck = await checkModelAvailability(preferredModel, openAIApiKey);
       
-      if (!modelCheck.available) {
+      if (!modelCheck.isAvailable) {
         // If force mode is on but model isn't available, fail rather than fallback
-        const error = `Advanced model is forced (USE_GPT4_VISION=true) but ${preferredModel} is not available: ${modelCheck.error}`;
+        const error = `Advanced model is forced (USE_GPT4_VISION=true) but ${preferredModel} is not available: ${modelCheck.errorMessage}`;
         console.error(`❌ [${requestId}] ${error}`);
         
         return {
           analysis: createEmptyFallbackAnalysis(requestId, error),
           success: false,
           error,
-          modelUsed: 'error',
+          modelUsed: 'none',
           usedFallbackModel: false,
-          forceGPT4V
+          forceGPT4V: forceGPT4V
         };
       }
       
-      console.log(`✅ [${requestId}] Using forced ${preferredModel} model`);
+      // Use the preferred model (gpt-4o)
+      modelToUse = preferredModel;
+      console.log(`✅ [${requestId}] Using forced model: ${modelToUse}`);
     } else {
       // If fallbacks are allowed, check availability and use fallback if needed
-      const modelCheck = await checkModelAvailability(preferredModel, requestId);
+      const modelCheck = await checkModelAvailability(preferredModel, openAIApiKey);
       
-      if (!modelCheck.available && modelCheck.fallbackModel) {
+      if (!modelCheck.isAvailable && modelCheck.fallbackModel) {
         modelToUse = modelCheck.fallbackModel;
         usedFallbackModel = true;
         console.warn(`⚠️ [${requestId}] Using fallback model: ${modelToUse} (USE_GPT4_VISION=false)`);
+      } else if (modelCheck.isAvailable) {
+        modelToUse = preferredModel;
+        console.log(`✅ [${requestId}] Using preferred model: ${modelToUse}`);
+      } else {
+        // No models available
+        const error = `No suitable vision models available: ${modelCheck.errorMessage}`;
+        console.error(`❌ [${requestId}] ${error}`);
+        
+        return {
+          analysis: createEmptyFallbackAnalysis(requestId, error),
+          success: false,
+          error,
+          modelUsed: 'none',
+          usedFallbackModel: false,
+          forceGPT4V: forceGPT4V
+        };
       }
     }
     
-    // Construct the system prompt
-    const systemPrompt = `You are an expert nutritionist AI that analyzes meal images and provides detailed nutritional information and health advice. You must provide a BEST EFFORT ANALYSIS even with unclear, partial, or ambiguous images.
-
-GOAL: Analyze the food in the image and return a JSON object with the following structure:
-{
-  "description": "Detailed description of the meal and its components",
-  "nutrients": {
-    "calories": number (kcal),
-    "protein": number (grams),
-    "carbs": number (grams),
-    "fat": number (grams),
-    "fiber": number (grams),
-    "sugar": number (grams),
-    "sodium": number (mg)
-  },
-  "feedback": ["List of health feedback points about the meal"],
-  "suggestions": ["List of suggestions to improve the meal's nutritional value"],
-  "warnings": ["List of potential health concerns if applicable, or empty array"],
-  "goalScore": number (0-100 representing how well this meal fits with the user's health goals),
-  "scoreExplanation": "Brief explanation of the goal score",
-  "detailedIngredients": [
-    {
-      "name": "Name of ingredient",
-      "estimatedAmount": "Portion estimate (e.g., '1 cup', '2 oz')",
-      "calories": number (estimated kcal),
-      "confidence": number (0-100 representing your confidence in this identification)
-    },
-    ...more ingredients
-  ],
-  "confidence": number (0-100 representing your overall confidence in this analysis),
-  "reasoningLogs": ["List your step-by-step reasoning about what you can see in the image"]
-}
-
-IMPORTANT INSTRUCTIONS FOR UNCLEAR IMAGES:
-- If the image is unclear, blurry, poorly lit, or only shows part of the food, MAKE YOUR BEST GUESS
-- Use your knowledge of food appearance, textures, colors, and shapes to make educated guesses
-- If you see even a small portion of food (like a corner of a banana), use that to inform your analysis
-- Explain your reasoning and uncertainty in the description field
-- Assign lower confidence scores to indicate uncertainty, but ALWAYS provide a complete analysis
-- Add specific reasoning in the reasoningLogs array about what you can identify and how certain you are
-- NEVER refuse to analyze an image - provide your best guess with appropriate confidence levels
-
-User Health Goals: ${healthGoals.join(', ')}
-Dietary Preferences/Restrictions: ${dietaryPreferences.join(', ')}
-
-NOTE: Always return valid JSON with ALL fields. For uncertain values, provide estimates and indicate lower confidence.
-${usedFallbackModel ? '\nNOTE: This analysis is being performed by a fallback model with limited capabilities.' : ''}`;
+    // Validate the image and check its quality
+    const { url: formattedImage, qualityInfo } = formatImageForRequest(base64Image);
+    console.log(`🖼️ [${requestId}] Image quality: ${qualityInfo.qualityLevel}, size: ${qualityInfo.sizeKB}KB`);
     
-    // Format the image URL correctly
-    const formattedImage = base64Image.startsWith('data:image') 
-      ? base64Image 
-      : `data:image/jpeg;base64,${base64Image}`;
+    if (!qualityInfo.isValid) {
+      const error = qualityInfo.error || 'Invalid image format';
+      console.error(`❌ [${requestId}] ${error}`);
+      
+      return {
+        analysis: createEmptyFallbackAnalysis(requestId, error),
+        success: false,
+        error,
+        modelUsed: 'none',
+        usedFallbackModel: false,
+        forceGPT4V: false
+      };
+    }
+    
+    // If image is too small or too large, warn but proceed
+    if (qualityInfo.qualityLevel === 'low') {
+      console.warn(`⚠️ [${requestId}] Low quality image detected (${qualityInfo.sizeKB}KB), analysis may be less accurate`);
+    }
+    
+    // Prepare system message with detailed instructions for analysis
+    const systemMessage = `You are a nutrition expert analyzing food images. 
+Provide a detailed analysis with accurate nutritional information and practical advice.
+Your response MUST be valid JSON with these fields:
+- description: Detailed description of the food/meal visible in the image
+- nutrients: Array of nutrient objects with name, value, unit, and isHighlight fields
+- feedback: Concise overall feedback about the nutritional value of the meal
+- suggestions: Array of specific improvement suggestions related to user's health goals
+- detailedIngredients: Array of ingredients with name, category, and confidence fields
+- goalScore: Object with overall score (0-10) and specific scores for each health goal
 
-    // Make the OpenAI API request
+Even if the image is unclear, make your best attempt to provide nutritional analysis.
+Prioritize accuracy over completeness - if you're unsure about specific nutrients, focus on what you can identify with confidence.`;
+
+    // Prepare the user message with the image and goals information
+    const goalDescription = healthGoals.length > 0 
+      ? `My health goals are: ${healthGoals.join(', ')}. `
+      : '';
+      
+    const dietaryDescription = dietaryPreferences.length > 0
+      ? `My dietary preferences/restrictions are: ${dietaryPreferences.join(', ')}. `
+      : '';
+      
+    const userMessage = `${goalDescription}${dietaryDescription}Please analyze this meal and provide detailed nutritional information.`;
+
     console.log(`⏳ [${requestId}] Sending request to OpenAI API with model: ${modelToUse}`);
-    const response = await openai.chat.completions.create({
+    
+    // Make the API request
+    const openaiResponse = await openai.chat.completions.create({
       model: modelToUse,
       messages: [
-        {
-          role: 'system',
-          content: systemPrompt
-        },
-        {
-          role: 'user',
+        { role: 'system', content: systemMessage },
+        { 
+          role: 'user', 
           content: [
-            {
-              type: 'text',
-              text: 'Analyze this meal image and provide nutritional information and health advice in JSON format. Even if the image is unclear, partial, or difficult to identify, please make your best educated guess and provide a complete analysis with appropriate confidence levels.'
-            },
-            {
-              type: 'image_url',
+            { type: 'text', text: userMessage },
+            { 
+              type: 'image_url', 
               image_url: {
                 url: formattedImage,
                 detail: 'high'
@@ -421,148 +449,87 @@ ${usedFallbackModel ? '\nNOTE: This analysis is being performed by a fallback mo
           ]
         }
       ],
-      max_tokens: 3000,
-      temperature: 0.2,
+      max_tokens: API_CONFIG.MAX_TOKENS,
+      temperature: API_CONFIG.TEMPERATURE,
+      top_p: API_CONFIG.TOP_P,
+      frequency_penalty: API_CONFIG.FREQUENCY_PENALTY,
+      presence_penalty: API_CONFIG.PRESENCE_PENALTY,
       response_format: { type: 'json_object' }
     });
     
-    console.log(`✅ [${requestId}] OpenAI API response received, model: ${modelToUse}, tokens: ${response.usage?.total_tokens || 'unknown'}`);
+    console.log(`✅ [${requestId}] OpenAI API response received, model: ${modelToUse}, tokens: ${openaiResponse.usage?.total_tokens || 'unknown'}`);
     
     // Extract the response content
-    const responseContent = response.choices[0]?.message?.content || '';
+    const responseContent = openaiResponse.choices[0]?.message?.content || '';
     
-    // Always log the full response (for debugging)
-    console.log(`📋 [${requestId}] FULL GPT Response: ${responseContent}`);
+    // Always log a truncated version of the response (for debugging)
+    const truncatedResponse = responseContent.length > 500 
+      ? `${responseContent.substring(0, 500)}...` 
+      : responseContent;
+      
+    console.log(`📋 [${requestId}] GPT Response (truncated): ${truncatedResponse}`);
     
     // Try to parse the JSON response
     let parsedResponse: Record<string, any>;
     try {
       parsedResponse = JSON.parse(responseContent);
       
-      // Verify we have the required fields, but be more lenient
-      const requiredKeys = ['description', 'nutrients'];
-      const recommendedKeys = ['feedback', 'suggestions', 'detailedIngredients'];
-      const missingRequiredKeys = requiredKeys.filter(key => !parsedResponse[key]);
-      const missingRecommendedKeys = recommendedKeys.filter(key => !parsedResponse[key]);
+      // Calculate processing time
+      const processingTime = Date.now() - startTime;
       
-      // Add minimum default values for any missing required fields
-      if (missingRequiredKeys.length > 0) {
-        console.warn(`⚠️ [${requestId}] Missing required keys in GPT response: ${missingRequiredKeys.join(', ')}`);
-        
-        // Add default values for missing required fields
-        if (!parsedResponse.description) {
-          parsedResponse.description = "Food item (details unclear from image)";
-        }
-        
-        if (!parsedResponse.nutrients) {
-          parsedResponse.nutrients = {
-            calories: 0,
-            protein: 0,
-            carbs: 0,
-            fat: 0,
-            fiber: 0,
-            sugar: 0
-          };
-        }
+      // Add metadata to the analysis
+      parsedResponse.metadata = {
+        requestId,
+        modelUsed: modelToUse,
+        usedFallbackModel,
+        processingTime,
+        confidence: parsedResponse.confidence || 0,
+        error: '',
+        imageQuality: qualityInfo.qualityLevel
+      };
+      
+      // Validate the analysis result contains required fields
+      if (!validateGptAnalysisResult(parsedResponse)) {
+        console.warn(`⚠️ [${requestId}] Incomplete analysis result, some fields may be missing`);
       }
       
-      // Add default values for missing recommended fields
-      if (missingRecommendedKeys.length > 0) {
-        console.warn(`ℹ️ [${requestId}] Missing recommended keys in GPT response: ${missingRecommendedKeys.join(', ')}`);
-        
-        if (!parsedResponse.feedback) {
-          parsedResponse.feedback = ["Unable to provide detailed feedback based on the image"];
-        }
-        
-        if (!parsedResponse.suggestions) {
-          parsedResponse.suggestions = ["Consider providing a clearer image for more specific suggestions"];
-        }
-        
-        if (!parsedResponse.detailedIngredients) {
-          parsedResponse.detailedIngredients = [{
-            name: "Unidentified food item",
-            estimatedAmount: "unknown",
-            calories: 0,
-            confidence: 0
-          }];
-        }
-      }
-      
-      // Also check for nutrient value structure, but fill in missing values
-      if (parsedResponse.nutrients) {
-        const requiredNutrients = ['calories', 'protein', 'carbs', 'fat', 'fiber', 'sugar'];
-        const missingNutrients = requiredNutrients.filter(
-          nutrient => typeof parsedResponse.nutrients[nutrient] !== 'number'
-        );
-        
-        if (missingNutrients.length > 0) {
-          console.warn(`⚠️ [${requestId}] Filling in missing or invalid nutrient values: ${missingNutrients.join(', ')}`);
-          
-          // Fill in missing nutrient values with zeros
-          missingNutrients.forEach(nutrient => {
-            parsedResponse.nutrients[nutrient] = 0;
-          });
-          
-          // Mark as low confidence if we had to fill in nutrients
-          parsedResponse.lowConfidence = true;
-        }
-      }
-      
-      // Add confidence indicator if not present
-      if (typeof parsedResponse.confidence !== 'number') {
-        // Default to medium confidence
-        parsedResponse.confidence = 50;
-      }
-      
-      // Add reasoningLogs if not present
-      if (!Array.isArray(parsedResponse.reasoningLogs)) {
-        parsedResponse.reasoningLogs = ["No reasoning logs provided by model"];
-      }
-      
-      // Return the analysis, considering it successful if we have minimum required data
-      const isMinimallyComplete = parsedResponse.description && parsedResponse.nutrients;
-      
+      // Return the analysis as successful
       return {
         analysis: parsedResponse,
-        success: isMinimallyComplete,
-        error: isMinimallyComplete ? undefined : "Incomplete analysis result even after repairs",
+        success: true,
         modelUsed: modelToUse,
         usedFallbackModel,
         forceGPT4V,
         rawResponse: responseContent
       };
-    } catch (parseError) {
-      console.error(`❌ [${requestId}] Failed to parse GPT response as JSON: ${(parseError as Error).message}`);
-      console.error(`❌ [${requestId}] Raw non-JSON response: ${responseContent}`);
+    } catch (error) {
+      // Handle JSON parsing errors
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      console.error(`❌ [${requestId}] Failed to parse JSON from OpenAI response: ${errorMessage}`);
       
-      // If we can't parse the JSON, return an empty analysis
+      // Return a failure with the raw response for debugging
       return {
-        analysis: createEmptyFallbackAnalysis(requestId, `Failed to parse response: ${(parseError as Error).message}`),
+        analysis: createEmptyFallbackAnalysis(requestId, `Failed to parse GPT-4V response: ${errorMessage}`),
         success: false,
-        error: `Failed to parse response: ${(parseError as Error).message}`,
+        error: `Failed to parse response: ${errorMessage}`,
         modelUsed: modelToUse,
         usedFallbackModel,
         forceGPT4V,
         rawResponse: responseContent
       };
     }
-  } catch (error: any) {
-    const errorMessage = error?.message || 'Unknown error';
-    const statusCode = error?.status || error?.statusCode || 'unknown';
-    console.error(`❌ [${requestId}] GPT4o analysis failed (Status: ${statusCode}): ${errorMessage}`);
-    
-    // Log detailed API error information if available
-    if (error?.response) {
-      console.error(`❌ [${requestId}] API Error Details:`, JSON.stringify(error.response, null, 2));
-    }
+  } catch (error) {
+    // Handle any errors during the API request
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    console.error(`❌ [${requestId}] Error during GPT-4V analysis: ${errorMessage}`);
     
     return {
-      analysis: createEmptyFallbackAnalysis(requestId, errorMessage),
+      analysis: createEmptyFallbackAnalysis(requestId, `API error: ${errorMessage}`),
       success: false,
-      error: errorMessage,
+      error: `API error: ${errorMessage}`,
       modelUsed: 'error',
       usedFallbackModel: false,
-      forceGPT4V,
+      forceGPT4V: false,
       rawResponse: JSON.stringify(error)
     };
   }
@@ -654,10 +621,12 @@ export function createFallbackResponse(
   // Add error metadata for debugging
   fallback.metadata = {
     requestId: reason,
-    model: null,
-    usedFallback: true,
+    modelUsed: "fallback",
+    usedFallbackModel: true,
     processingTime: 0,
-    error: reason
+    confidence: 0,
+    error: reason,
+    imageQuality: "unknown"
   };
   
   // If we have partial data, try to incorporate valid parts
@@ -680,7 +649,7 @@ export function createFallbackResponse(
       
       fallback.nutrients = Object.entries(nutrientsObj).map(([name, value]) => ({
         name,
-        value,
+        value: value.toString(),
         unit: name === 'calories' ? 'kcal' : 'g',
         isHighlight: false
       }));
@@ -714,5 +683,114 @@ export function createFallbackResponse(
  * Create an emergency fallback response for unexpected errors
  */
 export function createEmergencyFallbackResponse(): any {
-  return createEmptyFallbackAnalysis(crypto.randomUUID(), 'Emergency fallback');
+  return {
+    description: "We're unable to analyze your meal at this time.",
+    nutrients: [] as Nutrient[],
+    feedback: "Our systems are experiencing high load. Please try again in a few minutes.",
+    suggestions: [
+      "Try again with a clearer photo",
+      "Make sure the lighting is good",
+      "Ensure your meal is visible in the frame"
+    ],
+    detailedIngredients: [] as DetailedIngredient[],
+    goalScore: {
+      overall: 0,
+      specific: {}
+    },
+    metadata: {
+      requestId: crypto.randomUUID(),
+      modelUsed: "emergency_fallback",
+      usedFallbackModel: true, 
+      processingTime: 0,
+      confidence: 0,
+      error: "Emergency fallback triggered",
+      imageQuality: "unknown"
+    }
+  };
+}
+
+/**
+ * Assess image quality based on size and encoding
+ * This helps prevent sending very large or corrupted images to the API
+ */
+export function assessImageQuality(base64Image: string): {
+  isValid: boolean;
+  qualityLevel: 'high' | 'medium' | 'low' | 'invalid';
+  sizeKB: number;
+  error?: string;
+} {
+  if (!base64Image) {
+    return {
+      isValid: false,
+      qualityLevel: 'invalid',
+      sizeKB: 0,
+      error: 'No image data provided'
+    };
+  }
+
+  // Check if the base64 string has a valid format
+  if (!base64Image.startsWith('data:image/')) {
+    return {
+      isValid: false,
+      qualityLevel: 'invalid',
+      sizeKB: 0,
+      error: 'Invalid base64 image format'
+    };
+  }
+
+  try {
+    // Remove the data:image/*;base64, prefix if present
+    const base64Data = base64Image.split(',')[1] || base64Image;
+    
+    // Calculate approximate size in KB
+    const sizeKB = Math.round(base64Data.length * 0.75 / 1024);
+    
+    // Assess quality based on size
+    let qualityLevel: 'high' | 'medium' | 'low' | 'invalid' = 'medium';
+    
+    if (sizeKB < 10) {
+      qualityLevel = 'low'; // Very small images are likely low quality
+    } else if (sizeKB > 5000) {
+      // Images larger than 5MB might be too large for efficient API processing
+      qualityLevel = 'low';
+    } else if (sizeKB > 100) {
+      qualityLevel = 'high';
+    }
+    
+    return {
+      isValid: true,
+      qualityLevel,
+      sizeKB
+    };
+  } catch (error) {
+    return {
+      isValid: false,
+      qualityLevel: 'invalid',
+      sizeKB: 0,
+      error: `Error processing image: ${error instanceof Error ? error.message : String(error)}`
+    };
+  }
+}
+
+/**
+ * Format the image data for API request
+ */
+export function formatImageForRequest(base64Image: string): { 
+  url: string; 
+  qualityInfo: ReturnType<typeof assessImageQuality>;
+} {
+  // Assess image quality first
+  const qualityInfo = assessImageQuality(base64Image);
+  
+  // Ensure the image has the correct data URL prefix
+  let imageUrl = base64Image;
+  if (!base64Image.startsWith('data:image/')) {
+    // If no prefix, assume it's a JPEG
+    imageUrl = `data:image/jpeg;base64,${base64Image}`;
+  }
+  
+  return { 
+    url: imageUrl,
+    qualityInfo
+  };
 }
