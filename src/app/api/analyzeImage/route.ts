@@ -6,7 +6,7 @@ import { trySaveMealServer } from '@/lib/serverMealUtils';
 import { uploadImageToFirebase } from '@/lib/firebaseStorage';
 import { extractBase64Image } from '@/lib/imageProcessing';
 import { getNutritionData, createNutrientAnalysis } from '@/lib/nutritionixApi';
-import { createEmptyFallbackAnalysis } from '@/lib/analyzeImageWithGPT4V';
+import { createEmptyFallbackAnalysis } from '@/lib/analyzeImageWithOCR';
 import { runOCR, OCRResult } from '@/lib/runOCR';
 import { analyzeMealTextOnly, MealAnalysisResult } from '@/lib/analyzeMealTextOnly';
 import { API_CONFIG } from '@/lib/constants';
@@ -302,7 +302,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
         nutrients: nutritionData?.nutrients || mealAnalysis.nutrients || [],
         detailedIngredients: mealAnalysis.ingredients,
         modelInfo: {
-          model: 'gpt-4o',
+          model: 'ocr-text-analysis',
           usedFallback: false,
           ocrExtracted: true
         }

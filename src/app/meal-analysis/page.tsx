@@ -48,7 +48,7 @@ interface AnalysisResult {
   modelInfo?: {
     model: string;
     usedFallback: boolean;
-    forceGPT4V: boolean;
+    ocrExtracted: boolean;
   };
 }
 
@@ -205,7 +205,7 @@ const SaveStatusBanner = ({
  * Component to display a warning when using a fallback model
  */
 const ModelWarningBanner = ({ modelInfo }: { modelInfo?: AnalysisResult['modelInfo'] }) => {
-  // If no model info or GPT-4-Vision is being used without fallback, don't show warning
+  // If no model info or OCR-based analysis is being used without fallback, don't show warning
   if (!modelInfo || !modelInfo.usedFallback) {
     return null;
   }
@@ -221,7 +221,7 @@ const ModelWarningBanner = ({ modelInfo }: { modelInfo?: AnalysisResult['modelIn
         <div className="ml-3">
           <h3 className="text-sm font-medium text-amber-800">Limited Analysis Mode</h3>
           <div className="mt-1 text-xs text-amber-700">
-            <p>This analysis was performed using {modelInfo.model} instead of GPT-4-Vision. Results may be less accurate.</p>
+            <p>Analysis was performed using a fallback method. Results may be less accurate.</p>
           </div>
         </div>
       </div>

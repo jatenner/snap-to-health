@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import OpenAI from 'openai';
 import crypto from 'crypto';
+import { runOCR } from '@/lib/runOCR';
+import { GPT_MODEL } from '@/lib/constants';
 
 // Load environment variables for OpenAI
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
@@ -8,10 +10,10 @@ const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 // Simple GET handler to provide test instructions
 export async function GET() {
   return NextResponse.json({
-    info: 'This is a test endpoint for OpenAI GPT-4o Vision API',
+    info: 'This is a test endpoint for OCR and OpenAI text analysis',
     usage: {
       post: {
-        description: 'Send an image for processing with OpenAI Vision API',
+        description: 'Send an image for OCR text extraction and GPT analysis',
         formats: ['JSON with "image" field containing base64 data URL'],
         example: 'curl -X POST -H "Content-Type: application/json" -d \'{"image": "data:image/jpeg;base64,..."}\'',
         note: 'The endpoint requires a valid OPENAI_API_KEY in your environment'
@@ -21,7 +23,7 @@ export async function GET() {
   });
 }
 
-// POST handler to test OpenAI Vision API
+// POST handler to test OCR and OpenAI text analysis
 export async function POST(request: NextRequest) {
   const requestId = crypto.randomBytes(4).toString('hex');
   console.log(`[${requestId}] Received OpenAI test request`);
@@ -58,25 +60,47 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    console.log(`[${requestId}] Processing image with OpenAI API (${imageData.length} chars)`);
+    console.log(`[${requestId}] Processing image with OCR (${imageData.length} chars)`);
+
+    // Extract image base64 content
+    const base64Image = imageData.split(',')[1] || imageData;
+
+    // Run OCR on the image
+    console.log(`[${requestId}] Running OCR text extraction`);
+    const ocrResult = await runOCR(base64Image, requestId);
+    
+    if (!ocrResult.success || !ocrResult.text) {
+      console.warn(`[${requestId}] OCR failed or returned no text: ${ocrResult.error || 'Unknown error'}`);
+      return NextResponse.json(
+        { 
+          error: 'Failed to extract text from image', 
+          ocrError: ocrResult.error,
+          ocrConfidence: ocrResult.confidence
+        },
+        { status: 422 }
+      );
+    }
+    
+    console.log(`[${requestId}] OCR successful, extracted ${ocrResult.text.length} characters`);
+    console.log(`[${requestId}] Extracted text: "${ocrResult.text.substring(0, 100)}${ocrResult.text.length > 100 ? '...' : ''}"`);
 
     // Initialize OpenAI client
     const openai = new OpenAI({
       apiKey: OPENAI_API_KEY
     });
 
-    // Prepare vision API request
-    console.log(`[${requestId}] Sending request to OpenAI`);
-    const systemPrompt = "You are a helpful assistant that analyzes images of food to provide nutritional information.";
+    // Prepare text-based analysis request
+    console.log(`[${requestId}] Sending text to OpenAI for analysis using ${GPT_MODEL}`);
+    const systemPrompt = "You are a helpful assistant that analyzes food descriptions to provide nutritional information.";
     
     // Basic prompt for food analysis
-    const userPrompt = "Analyze this food image and tell me what it contains. If it's food, provide basic nutritional information if you can.";
+    const userPrompt = `Analyze this food description extracted via OCR and tell me what it contains. If it's food, provide basic nutritional information if you can.\n\nExtracted text: "${ocrResult.text}"`;
     
     const startTime = Date.now();
     
-    // Call OpenAI API with image
+    // Call OpenAI API with extracted text
     const response = await openai.chat.completions.create({
-      model: "gpt-4o", // Use gpt-4o which supports vision
+      model: GPT_MODEL,
       messages: [
         {
           role: "system",
@@ -84,16 +108,8 @@ export async function POST(request: NextRequest) {
         },
         {
           role: "user",
-          content: [
-            { type: "text", text: userPrompt },
-            {
-              type: "image_url",
-              image_url: {
-                url: imageData,
-              },
-            },
-          ],
-        },
+          content: userPrompt
+        }
       ],
       max_tokens: 1000,
     });
@@ -110,6 +126,11 @@ export async function POST(request: NextRequest) {
       success: true,
       model: response.model,
       response: response.choices[0]?.message?.content || '',
+      ocrResult: {
+        extractedText: ocrResult.text,
+        confidence: ocrResult.confidence,
+        processingTimeMs: ocrResult.processingTimeMs
+      },
       metadata: {
         requestId,
         processingTimeMs: responseTime,
@@ -120,7 +141,7 @@ export async function POST(request: NextRequest) {
     });
 
   } catch (error: any) {
-    console.error(`[${requestId}] Error calling OpenAI API:`, error);
+    console.error(`[${requestId}] Error in OCR/OpenAI processing:`, error);
     
     // Log detailed error information
     if (error.response) {
@@ -130,7 +151,7 @@ export async function POST(request: NextRequest) {
     
     return NextResponse.json(
       { 
-        error: 'OpenAI API request failed',
+        error: 'OCR or OpenAI API request failed',
         message: error.message || 'Unknown error',
         details: error.response?.data || null
       },
