@@ -434,8 +434,8 @@ Prioritize accuracy over completeness - if you're unsure about specific nutrient
     let retryAttempt = 0;
     let lastError: Error | null = null;
     
-    // Get timeout value from environment or use default of 45 seconds
-    const timeoutMs = parseInt(process.env.OPENAI_TIMEOUT_MS || '', 10) || 45000;
+    // Get timeout value from environment or use default from constants
+    const timeoutMs = parseInt(process.env.OPENAI_TIMEOUT_MS || '', 10) || API_CONFIG.DEFAULT_TIMEOUT_MS;
     console.log(`⏱️ [${requestId}] Using API timeout of ${timeoutMs}ms (${timeoutMs / 1000}s)`);
     
     while (retryAttempt < MAX_RETRIES) {
@@ -687,7 +687,7 @@ Prioritize accuracy over completeness - if you're unsure about specific nutrient
     let descriptiveError = errorMessage;
     if (error instanceof Error) {
       if (error.name === 'AbortError') {
-        descriptiveError = `Request timed out after ${parseInt(process.env.OPENAI_TIMEOUT_MS || '', 10) || 45000}ms`;
+        descriptiveError = `Request timed out after ${parseInt(process.env.OPENAI_TIMEOUT_MS || '', 10) || API_CONFIG.DEFAULT_TIMEOUT_MS}ms. You can increase the timeout by setting OPENAI_TIMEOUT_MS environment variable (current setting: ${process.env.OPENAI_TIMEOUT_MS || `default ${API_CONFIG.DEFAULT_TIMEOUT_MS}`}ms)`;
       } else if (error.name === 'TypeError' && errorMessage.includes('fetch')) {
         descriptiveError = `Network error: Unable to connect to OpenAI API`;
       } else if (errorMessage.includes('429')) {
