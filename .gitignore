@@ -24,6 +24,18 @@ yarn-error.log*
 
 # local env files
 .env*.local
+.env
+.env.*
+!.env.example
+!.env.*.example
+
+# Firebase sensitive files
+firebase-service-account.json
+*firebase-adminsdk*.json
+/keys/
+*private-key*
+*firebase-private-key*
+firebase-debug.log
 
 # vercel
 .vercel
@@ -32,10 +44,6 @@ yarn-error.log*
 *.tsbuildinfo
 next-env.d.ts
 
-# Firebase Service Account
-firebase-service-account.json
-
-# Firebase Keys
-/keys/
-*private-key*
-*firebase-private-key*
+# Cleanup tools
+bfg.jar
+cleanup-script.sh
