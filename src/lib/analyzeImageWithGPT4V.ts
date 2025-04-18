@@ -6,6 +6,46 @@
 import OpenAI from 'openai';
 import crypto from 'crypto';
 
+// Interface definitions
+interface Nutrient {
+  name: string;
+  value: string;
+  unit: string;
+  isHighlight: boolean;
+  percentOfDailyValue?: number;
+  amount?: number;
+}
+
+interface DetailedIngredient {
+  name: string;
+  category: string;
+  confidence: number;
+  confidenceEmoji?: string;
+}
+
+interface AnalysisResult {
+  description?: string;
+  nutrients?: Nutrient[];
+  feedback?: string;
+  suggestions?: string[];
+  detailedIngredients?: DetailedIngredient[];
+  goalScore: {
+    overall: number;
+    specific: Record<string, number>;
+  };
+  metadata: {
+    requestId: string;
+    modelUsed: string;
+    usedFallbackModel: boolean;
+    processingTime: number;
+    confidence: number;
+    error: string;
+    imageQuality: string;
+    isPartialResult?: boolean;
+    extractedFromText?: boolean;
+  };
+}
+
 // Initialize OpenAI client
 let openai: OpenAI | null = null;
 let openAIInitializationError: Error | null = null;
@@ -38,32 +78,30 @@ const validateOpenAIApiKey = (apiKey: string): boolean => {
 /**
  * Create an empty fallback analysis when no GPT result is available
  */
-function createEmptyFallbackAnalysis(): any {
+export function createEmptyFallbackAnalysis(
+  requestId: string, 
+  modelUsed: string, 
+  errorMessage: string
+): AnalysisResult {
   return {
-    description: "Unable to analyze the image. Our AI analysis system encountered an issue.",
-    nutrients: {
-      calories: 0,
-      protein: 0,
-      carbs: 0,
-      fat: 0,
-      fiber: 0,
-      sugar: 0,
-      sodium: 0
+    description: "Unable to analyze the image at this time.",
+    nutrients: [],
+    feedback: "We couldn't process your image. Please try again with a clearer photo of your meal.",
+    suggestions: ["Try taking the photo in better lighting", "Make sure your meal is clearly visible"],
+    detailedIngredients: [],
+    goalScore: {
+      overall: 0,
+      specific: {} as Record<string, number>,
     },
-    feedback: [
-      "We couldn't analyze your meal image at this time.",
-      "Please try again or contact support if the issue persists."
-    ],
-    suggestions: [
-      "Try uploading a clearer image of your meal",
-      "Ensure the image shows the food items clearly"
-    ],
-    warnings: [
-      "This is a fallback analysis due to a system error"
-    ],
-    goalScore: 0,
-    scoreExplanation: "No score available due to analysis failure",
-    detailedIngredients: []
+    metadata: {
+      requestId,
+      modelUsed,
+      usedFallbackModel: true,
+      processingTime: 0,
+      confidence: 0,
+      error: errorMessage,
+      imageQuality: "unknown"
+    }
   };
 }
 
@@ -157,7 +195,7 @@ export async function analyzeImageWithGPT4V(
     const error = `Invalid or missing OpenAI API key format`;
     console.error(`❌ [${requestId}] ${error}`);
     return {
-      analysis: createEmptyFallbackAnalysis(),
+      analysis: createEmptyFallbackAnalysis(requestId, 'none', error),
       success: false,
       error,
       modelUsed: 'none',
@@ -190,7 +228,7 @@ export async function analyzeImageWithGPT4V(
         console.error(`❌ [${requestId}] ${error}`);
         
         return {
-          analysis: createEmptyFallbackAnalysis(),
+          analysis: createEmptyFallbackAnalysis(requestId, 'error', error),
           success: false,
           error,
           modelUsed: 'error',
@@ -357,7 +395,7 @@ ${usedFallbackModel ? '\nNOTE: This analysis is being performed by a fallback mo
       
       // If we can't parse the JSON, return an empty analysis
       return {
-        analysis: createEmptyFallbackAnalysis(),
+        analysis: createEmptyFallbackAnalysis(requestId, modelToUse, `Failed to parse response: ${(parseError as Error).message}`),
         success: false,
         error: `Failed to parse response: ${(parseError as Error).message}`,
         modelUsed: modelToUse,
@@ -377,7 +415,7 @@ ${usedFallbackModel ? '\nNOTE: This analysis is being performed by a fallback mo
     }
     
     return {
-      analysis: createEmptyFallbackAnalysis(),
+      analysis: createEmptyFallbackAnalysis(requestId, 'error', errorMessage),
       success: false,
       error: errorMessage,
       modelUsed: 'error',
@@ -469,29 +507,10 @@ export function createFallbackResponse(
   reason: string,
   partialAnalysis: any = null
 ): any {
-  const fallback = createEmptyFallbackAnalysis();
+  const fallback = createEmptyFallbackAnalysis(crypto.randomUUID(), 'fallback', reason);
   
   // Add the reason to the fallback analysis
-  fallback.warnings = [
-    `Analysis failed: ${reason}`,
-    "Our AI system encountered an issue analyzing your image."
-  ];
-  
-  // Add specific user-friendly message based on the error type
-  if (reason.includes('parse') || reason.includes('JSON')) {
-    fallback.warnings.push("The analysis produced invalid data format.");
-  } else if (reason.includes('missing') || reason.includes('invalid')) {
-    fallback.warnings.push("The analysis was incomplete or had missing information.");
-  } else if (reason.includes('confidence') || reason.includes('unclear')) {
-    fallback.warnings.push("The image may be unclear or the food items difficult to identify.");
-  }
-  
-  // Add error metadata for debugging
-  fallback._meta = {
-    error: reason,
-    timestamp: new Date().toISOString(),
-    isPartial: !!partialAnalysis
-  };
+  fallback.metadata.error = reason;
   
   // If we have partial data, try to incorporate valid parts
   if (partialAnalysis) {
@@ -501,13 +520,28 @@ export function createFallbackResponse(
     }
     
     // Try to salvage any valid nutrients
-    if (partialAnalysis.nutrients && typeof partialAnalysis.nutrients === 'object') {
-      const validNutrients = ['calories', 'protein', 'carbs', 'fat', 'fiber', 'sugar', 'sodium'];
-      validNutrients.forEach(nutrient => {
-        if (typeof partialAnalysis.nutrients[nutrient] === 'number') {
-          fallback.nutrients[nutrient] = partialAnalysis.nutrients[nutrient];
-        }
-      });
+    if (partialAnalysis.nutrients) {
+      if (Array.isArray(partialAnalysis.nutrients)) {
+        // If nutrients is already an array, use it directly
+        fallback.nutrients = partialAnalysis.nutrients;
+      } else if (typeof partialAnalysis.nutrients === 'object') {
+        // If nutrients is an object, convert to array format
+        const validNutrients = ['calories', 'protein', 'carbs', 'fat', 'fiber', 'sugar', 'sodium'];
+        const nutrientsArray: Nutrient[] = [];
+        
+        validNutrients.forEach(nutrient => {
+          if (typeof partialAnalysis.nutrients[nutrient] === 'number') {
+            nutrientsArray.push({
+              name: nutrient,
+              value: partialAnalysis.nutrients[nutrient].toString(),
+              unit: nutrient === 'calories' ? 'kcal' : 'g',
+              isHighlight: false
+            });
+          }
+        });
+        
+        fallback.nutrients = nutrientsArray;
+      }
     }
     
     // Try to salvage any valid detailed ingredients
@@ -517,15 +551,18 @@ export function createFallbackResponse(
     }
     
     // Try to salvage any valid feedback
-    if (Array.isArray(partialAnalysis.feedback) && 
+    if (typeof partialAnalysis.feedback === 'string') {
+      fallback.feedback = partialAnalysis.feedback;
+    } else if (Array.isArray(partialAnalysis.feedback) && 
         partialAnalysis.feedback.length > 0) {
-      fallback.feedback = [...fallback.feedback, ...partialAnalysis.feedback];
+      // Join array into string if the feedback is an array
+      fallback.feedback = partialAnalysis.feedback.join(". ");
     }
     
     // Try to salvage any valid suggestions
     if (Array.isArray(partialAnalysis.suggestions) && 
         partialAnalysis.suggestions.length > 0) {
-      fallback.suggestions = [...fallback.suggestions, ...partialAnalysis.suggestions];
+      fallback.suggestions = partialAnalysis.suggestions;
     }
   }
   
@@ -536,5 +573,28 @@ export function createFallbackResponse(
  * Create an emergency fallback response for unexpected errors
  */
 export function createEmergencyFallbackResponse(): any {
-  return createEmptyFallbackAnalysis();
+  return {
+    description: "We're unable to analyze your meal at this time.",
+    nutrients: [] as Nutrient[],
+    feedback: "Our systems are experiencing high load. Please try again in a few minutes.",
+    suggestions: [
+      "Try again with a clearer photo",
+      "Make sure the lighting is good",
+      "Ensure your meal is visible in the frame"
+    ],
+    detailedIngredients: [] as DetailedIngredient[],
+    goalScore: {
+      overall: 0,
+      specific: {} as Record<string, number>
+    },
+    metadata: {
+      requestId: crypto.randomUUID(),
+      modelUsed: "emergency_fallback",
+      usedFallbackModel: true, 
+      processingTime: 0,
+      confidence: 0,
+      error: "Emergency fallback triggered",
+      imageQuality: "unknown"
+    }
+  };
 }
