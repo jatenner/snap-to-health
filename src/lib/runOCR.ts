@@ -71,10 +71,19 @@ export async function runOCR(
       ? parseFloat(process.env.OCR_CONFIDENCE_THRESHOLD)
       : 0.7;
     
-    // Create worker with logging
+    // Create worker with logging and use CDN worker path
+    // Note: Using CDN worker path instead of local path to avoid '.next' directory issues
     let worker;
     try {
-      worker = await createWorker();
+      worker = await createWorker({
+        workerPath: 'https://unpkg.com/tesseract.js@v4.0.3/dist/worker.min.js',
+        corePath: 'https://unpkg.com/tesseract.js-core@v4.0.3/tesseract-core.wasm.js',
+        logger: (m: { status: string; progress: number }) => {
+          if (m.status === 'recognizing text') {
+            console.log(`📊 [${requestId}] OCR progress: ${Math.floor(m.progress * 100)}%`);
+          }
+        }
+      });
     } catch (workerError) {
       console.error(`❌ [${requestId}] Failed to create Tesseract worker:`, workerError);
       
