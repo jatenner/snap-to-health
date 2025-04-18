@@ -53,6 +53,15 @@ export interface NutrientInfo {
 }
 
 /**
+ * Interface for nutrition data returned by the API
+ */
+export interface NutritionData {
+  nutrients: NutrientInfo[];
+  foods: NutritionixFood[];
+  raw: any;
+}
+
+/**
  * Get nutrition data from Nutritionix API for a food description
  * @param foodDescription Description of food to analyze
  * @param requestId Request identifier for tracking
@@ -63,11 +72,7 @@ export async function getNutritionData(
   requestId: string
 ): Promise<{
   success: boolean;
-  data: {
-    nutrients: NutrientInfo[];
-    foods: NutritionixFood[];
-    raw: any;
-  } | null;
+  data: NutritionData | null;
   error?: string;
 }> {
   console.time(`⏱️ [${requestId}] getNutritionData`);
@@ -211,7 +216,10 @@ export function createNutrientAnalysis(
 ): {
   feedback: string[];
   suggestions: string[];
-  goalScore: number;
+  goalScore: {
+    overall: number;
+    specific: Record<string, number>;
+  };
 } {
   console.log(`🔍 [${requestId}] Creating nutrient analysis with ${healthGoals.length} health goals`);
   
@@ -226,7 +234,8 @@ export function createNutrientAnalysis(
   ];
   
   // Default goal score
-  let goalScore = 5; // Neutral score if no specific goals
+  let overallScore = 5; // Neutral score if no specific goals
+  const specificScores: Record<string, number> = {};
   
   // Get nutrient values
   const calories = nutrients.find(n => n.name === 'calories')?.value as number || 0;
@@ -240,75 +249,101 @@ export function createNutrientAnalysis(
   if (healthGoals.length > 0) {
     healthGoals.forEach(goal => {
       const lowerGoal = goal.toLowerCase();
+      let specificScore = 5; // Start with neutral score for this specific goal
       
       // Weight loss goals
       if (lowerGoal.includes('weight loss') || lowerGoal.includes('lose weight')) {
         if (calories < 500) {
           feedback.push("This meal is relatively low in calories, which can support your weight loss goals.");
-          goalScore += 1;
+          specificScore += 1;
+          overallScore += 1;
         } else if (calories > 800) {
           feedback.push("This meal is higher in calories. Consider portion control to support your weight loss goals.");
           suggestions.push("Try reducing portion sizes or choosing lower-calorie alternatives.");
-          goalScore -= 1;
+          specificScore -= 1;
+          overallScore -= 1;
         }
         
         if (fiber > 5) {
           feedback.push("Good amount of fiber, which can help you feel fuller for longer.");
-          goalScore += 1;
+          specificScore += 1;
+          overallScore += 1;
         }
+        
+        specificScores['Weight Loss'] = Math.max(1, Math.min(10, specificScore));
       }
       
       // Muscle building goals
       if (lowerGoal.includes('muscle') || lowerGoal.includes('strength') || lowerGoal.includes('build')) {
+        specificScore = 5; // Reset for this goal
         if (protein > 20) {
           feedback.push("Good source of protein to support muscle building and recovery.");
-          goalScore += 2;
+          specificScore += 2;
+          overallScore += 2;
         } else {
           suggestions.push("Consider adding more protein to support muscle growth and recovery.");
-          goalScore -= 1;
+          specificScore -= 1;
+          overallScore -= 1;
         }
+        
+        specificScores['Muscle Building'] = Math.max(1, Math.min(10, specificScore));
       }
       
       // Low carb goals
       if (lowerGoal.includes('low carb') || lowerGoal.includes('keto')) {
+        specificScore = 5; // Reset for this goal
         if (carbs < 20) {
           feedback.push("This meal is low in carbohydrates, aligning with your low-carb goals.");
-          goalScore += 2;
+          specificScore += 2;
+          overallScore += 2;
         } else if (carbs > 50) {
           feedback.push("This meal contains a significant amount of carbohydrates.");
           suggestions.push("To better align with your low-carb goals, consider reducing starchy components.");
-          goalScore -= 1;
+          specificScore -= 1;
+          overallScore -= 1;
         }
+        
+        specificScores['Low Carb'] = Math.max(1, Math.min(10, specificScore));
       }
       
       // Heart health goals
       if (lowerGoal.includes('heart') || lowerGoal.includes('blood pressure') || lowerGoal.includes('cholesterol')) {
+        specificScore = 5; // Reset for this goal
         const sodium = nutrients.find(n => n.name === 'sodium')?.value as number || 0;
         
         if (sodium > 1000) {
           feedback.push("This meal is high in sodium, which may impact heart health.");
           suggestions.push("Consider reducing salt and processed foods to lower sodium intake.");
-          goalScore -= 1;
+          specificScore -= 1;
+          overallScore -= 1;
         }
         
         if (fat > 25) {
           feedback.push("This meal is relatively high in fat.");
           suggestions.push("Focus on sources of healthy fats like avocados, nuts, and olive oil.");
+          specificScore -= 1;
         }
+        
+        specificScores['Heart Health'] = Math.max(1, Math.min(10, specificScore));
       }
       
       // Diabetes or blood sugar management
       if (lowerGoal.includes('diabetes') || lowerGoal.includes('blood sugar')) {
+        specificScore = 5; // Reset for this goal
         if (sugar > 20) {
           feedback.push("This meal contains a significant amount of sugar, which may affect blood sugar levels.");
           suggestions.push("Consider options with less added sugar to help manage blood glucose.");
-          goalScore -= 2;
+          specificScore -= 2;
+          overallScore -= 2;
         }
         
         if (fiber > 5) {
           feedback.push("Good amount of fiber, which can help moderate blood sugar response.");
-          goalScore += 1;
+          specificScore += 1;
+          overallScore += 1;
         }
+        
+        specificScores['Blood Sugar Management'] = Math.max(1, Math.min(10, specificScore));
       }
     });
   } else {
@@ -325,14 +360,19 @@ export function createNutrientAnalysis(
       feedback.push("This meal is relatively high in sugar.");
       suggestions.push("Consider reducing sources of added sugar in your diet.");
     }
+    
+    specificScores['General Nutrition'] = 5;
   }
   
-  // Ensure goal score is within bounds
-  goalScore = Math.max(1, Math.min(10, goalScore));
+  // Ensure overall score is within bounds
+  overallScore = Math.max(1, Math.min(10, overallScore));
   
   return {
     feedback,
     suggestions,
-    goalScore
+    goalScore: {
+      overall: overallScore,
+      specific: specificScores
+    }
   };
 } 
