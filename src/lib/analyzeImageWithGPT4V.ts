@@ -33,138 +33,204 @@ if (!process.env.OPENAI_API_KEY) {
  */
 function validateOpenAIApiKey(apiKey: string | undefined): boolean {
   if (!apiKey) return false;
-  return /^sk-[A-Za-z0-9]{32,}$/.test(apiKey);
+  // Check for the expected format of OpenAI API keys
+  return /^sk-(org|proj)?-[A-Za-z0-9]{24,}$/.test(apiKey);
 }
 
 /**
- * Checks if the specified model is available with the current OpenAI API key
- * Falls back to an alternative model if the specified model is unavailable
+ * Enhanced API key validation that tests both format and authentication
  */
-export async function checkModelAvailability(modelName: string, requestId: string) {
-  console.log(`🔍 [${requestId}] Checking availability of model: ${modelName}`);
-  const openaiApiKey = process.env.OPENAI_API_KEY;
-
-  const result = {
-    available: false,
-    fallbackModel: null as string | null,
-    error: null as string | null
-  };
-
-  if (!validateOpenAIApiKey(openaiApiKey)) {
-    result.error = 'Invalid or missing OpenAI API key';
-    console.error(`❌ [${requestId}] ${result.error}`);
-    return result;
+export async function validateAndTestAPIKey(apiKey: string | undefined, requestId: string): Promise<{
+  valid: boolean;
+  error?: string;
+  isAuthError?: boolean;
+}> {
+  // First check format
+  if (!apiKey || !validateOpenAIApiKey(apiKey)) {
+    return { 
+      valid: false, 
+      error: 'Invalid API key format',
+      isAuthError: true
+    };
   }
-
+  
   try {
-    // TypeScript validation is handled by validateOpenAIApiKey
-    const openai = new OpenAI({ apiKey: openaiApiKey as string });
-    const models = await openai.models.list();
+    // Test key with a minimal API call
+    const openai = new OpenAI({ apiKey });
     
-    // Check if the specified model is available
-    const isModelAvailable = models.data.some(model => model.id === modelName);
-    result.available = isModelAvailable;
+    // Just list models as a simple authentication test
+    await openai.models.list();
     
-    if (isModelAvailable) {
-      console.log(`✅ [${requestId}] Model ${modelName} is available`);
-    } else {
-      console.warn(`⚠️ [${requestId}] Model ${modelName} is not available`);
-      
-      // Create a list of models that have vision capabilities
-      // GPT-4o and GPT-4-Vision are known to have vision capabilities
-      const visionCapableModels = models.data
-        .filter(model => 
-          model.id === 'gpt-4o' || 
-          model.id === 'gpt-4-vision-preview' ||
-          model.id.includes('vision')
-        )
-        .map(model => model.id);
-      
-      console.log(`ℹ️ [${requestId}] Vision-capable models available: ${visionCapableModels.join(', ') || 'none'}`);
-      
-      // Try to find a fallback from our preferred list
-      for (const fallbackModel of FALLBACK_MODELS) {
-        if (models.data.some(model => model.id === fallbackModel)) {
-          result.fallbackModel = fallbackModel;
-          console.log(`🔄 [${requestId}] Found fallback model: ${result.fallbackModel}`);
-          break;
-        }
-      }
-      
-      if (!result.fallbackModel) {
-        // If no fallback found, check if any vision-capable models are available
-        if (visionCapableModels.length > 0) {
-          result.fallbackModel = visionCapableModels[0]; // Use the first available vision model
-          console.log(`🔄 [${requestId}] Using alternate vision model: ${result.fallbackModel}`);
-        } else {
-          result.error = 'No vision-capable models available';
-          console.error(`❌ [${requestId}] ${result.error}`);
-        }
-      }
-    }
+    return { valid: true };
   } catch (error: any) {
-    result.error = error.message || 'Error checking model availability';
-    console.error(`❌ [${requestId}] Error checking model availability: ${result.error}`);
+    const statusCode = error?.status || error?.statusCode;
+    const isAuthError = statusCode === 401;
+    const errorMsg = error?.message || 'Unknown API error';
     
-    // On error, try the fallback models in sequence without checking availability
-    for (const fallbackModel of FALLBACK_MODELS) {
-      if (fallbackModel !== modelName) { // Don't use the same model that failed
-        result.fallbackModel = fallbackModel;
-        console.log(`🔄 [${requestId}] Using blind fallback model: ${result.fallbackModel}`);
-        break;
-      }
-    }
+    console.error(`❌ API key validation failed: ${errorMsg}`);
+    
+    return {
+      valid: false,
+      error: errorMsg,
+      isAuthError: isAuthError
+    };
   }
-
-  return result;
 }
 
 /**
- * Type definition for fallback analysis result
+ * Check if a model is available for the current OpenAI API key
+ * Returns availability status, fallback model, and error message
  */
-interface FallbackAnalysis {
+export async function checkModelAvailability(
+  modelToCheck: string,
+  requestId?: string
+): Promise<{ available: boolean; fallbackModel: string | null; error: string | null }> {
+  const id = requestId || crypto.randomUUID();
+  console.log(`🔍 [${id}] Checking availability for model: ${modelToCheck}`);
+  
+  // First, validate the API key format
+  const openAIApiKey = process.env.OPENAI_API_KEY;
+  if (!openAIApiKey) {
+    console.error(`❌ [${id}] OpenAI API key is not set in environment variables`);
+    return {
+      available: false,
+      fallbackModel: null,
+      error: 'OpenAI API key is not set'
+    };
+  }
+  
+  const isValidKeyFormat = /^sk-(org|proj)?-[A-Za-z0-9]{24,}$/.test(openAIApiKey);
+  if (!isValidKeyFormat) {
+    console.error(`❌ [${id}] OpenAI API key has invalid format`);
+    return {
+      available: false,
+      fallbackModel: null,
+      error: 'Invalid API key format'
+    };
+  }
+  
+  try {
+    // Initialize OpenAI client
+    const openai = new OpenAI({
+      apiKey: openAIApiKey
+    });
+    
+    // Check available models
+    console.log(`🔍 [${id}] Retrieving model list to verify ${modelToCheck} availability...`);
+    const modelList = await openai.models.list();
+    
+    // Check if the requested model is available
+    const isModelAvailable = modelList.data.some(model => model.id === modelToCheck);
+    if (isModelAvailable) {
+      console.log(`✅ [${id}] Model ${modelToCheck} is available`);
+      return { available: true, fallbackModel: null, error: null };
+    }
+    
+    // Find the first available fallback model
+    console.log(`⚠️ [${id}] Model ${modelToCheck} not available, checking fallbacks...`);
+    for (const fallbackModel of FALLBACK_MODELS) {
+      if (modelList.data.some(model => model.id === fallbackModel)) {
+        console.log(`🔄 [${id}] Using fallback model: ${fallbackModel}`);
+        return { 
+          available: false, 
+          fallbackModel: fallbackModel,
+          error: `Model ${modelToCheck} not available, using ${fallbackModel} instead`
+        };
+      }
+    }
+    
+    // No fallback model available
+    console.error(`❌ [${id}] No suitable models available`);
+    return {
+      available: false,
+      fallbackModel: null,
+      error: 'No suitable models available for analysis'
+    };
+  } catch (error: any) {
+    // Handle specific API key errors
+    if (error.message?.includes('401') || 
+        error.message?.includes('Incorrect API key') ||
+        error.message?.includes('invalid_api_key')) {
+      console.error(`🔑 [${id}] API key authentication failed: ${error.message}`);
+      return {
+        available: false,
+        fallbackModel: null,
+        error: 'API key authentication failed: Invalid API key or permissions'
+      };
+    }
+    
+    // Rate limit errors
+    if (error.message?.includes('429') || 
+        error.message?.includes('rate limit')) {
+      console.error(`⏱️ [${id}] Rate limit exceeded: ${error.message}`);
+      return {
+        available: false,
+        fallbackModel: null,
+        error: 'Rate limit exceeded, please try again later'
+      };
+    }
+    
+    // Network or other errors
+    console.error(`❌ [${id}] Error checking model availability: ${error.message}`);
+    return {
+      available: false,
+      fallbackModel: null,
+      error: `Error checking model availability: ${error.message}`
+    };
+  }
+}
+
+/**
+ * Define types for analysis results
+ */
+interface GoalScore {
+  overall: number;
+  specific: Record<string, number>;
+}
+
+interface AnalysisFallback {
+  success: boolean;
   description: string;
-  nutrients: {
-    calories: number;
-    protein: number;
-    carbs: number;
-    fat: number;
-    fiber: number;
-    sugar: number;
-    [key: string]: number; // Allow for additional nutrient fields
-  };
+  nutrients: any[];
   feedback: string;
   suggestions: string[];
-  detailedIngredients: string[];
-  goalScore: number;
-  _meta?: {
+  detailedIngredients: any[];
+  healthScore: number;
+  goalScore: GoalScore;
+  metadata: {
+    requestId: string;
+    model: string | null;
+    usedFallback: boolean;
+    processingTime: number;
     error: string;
-    timestamp?: string; // Optional timestamp field
-    isPartial?: boolean; // Whether this is partial analysis data
   };
 }
 
 /**
- * Creates a fallback analysis result when model is unavailable
+ * Create an empty fallback analysis when models are unavailable
  */
-function createEmptyFallbackAnalysis(reason: string): FallbackAnalysis {
+export function createEmptyFallbackAnalysis(
+  requestId: string, 
+  error: string
+): AnalysisFallback {
   return {
-    description: `Unable to analyze image: ${reason}`,
-    nutrients: {
-      calories: 0,
-      protein: 0,
-      carbs: 0,
-      fat: 0,
-      fiber: 0,
-      sugar: 0
+    success: false,
+    description: "We couldn't analyze your image due to API service issues.",
+    nutrients: [],
+    feedback: "Our image analysis service is currently experiencing technical difficulties. Please try again later.",
+    suggestions: ["Try again later", "Check if your image is clear and contains food items"],
+    detailedIngredients: [],
+    healthScore: 0,
+    goalScore: {
+      overall: 0,
+      specific: {}
     },
-    feedback: "I couldn't analyze this image due to a system limitation. Please try again later.",
-    suggestions: ["Try again later when the service is fully operational."],
-    detailedIngredients: ["Could not identify ingredients"],
-    goalScore: 0,
-    _meta: {
-      error: reason,
-      timestamp: new Date().toISOString()
+    metadata: {
+      requestId,
+      model: null,
+      usedFallback: true,
+      processingTime: 0,
+      error
     }
   };
 }
@@ -208,7 +274,7 @@ export async function analyzeImageWithGPT4V(
     const error = `Invalid or missing OpenAI API key format`;
     console.error(`❌ [${requestId}] ${error}`);
     return {
-      analysis: createEmptyFallbackAnalysis(error),
+      analysis: createEmptyFallbackAnalysis(requestId, error),
       success: false,
       error,
       modelUsed: 'none',
@@ -241,7 +307,7 @@ export async function analyzeImageWithGPT4V(
         console.error(`❌ [${requestId}] ${error}`);
         
         return {
-          analysis: createEmptyFallbackAnalysis(error),
+          analysis: createEmptyFallbackAnalysis(requestId, error),
           success: false,
           error,
           modelUsed: 'error',
@@ -457,7 +523,7 @@ ${usedFallbackModel ? '\nNOTE: This analysis is being performed by a fallback mo
       
       // If we can't parse the JSON, return an empty analysis
       return {
-        analysis: createEmptyFallbackAnalysis(`Failed to parse response: ${(parseError as Error).message}`),
+        analysis: createEmptyFallbackAnalysis(requestId, `Failed to parse response: ${(parseError as Error).message}`),
         success: false,
         error: `Failed to parse response: ${(parseError as Error).message}`,
         modelUsed: modelToUse,
@@ -477,7 +543,7 @@ ${usedFallbackModel ? '\nNOTE: This analysis is being performed by a fallback mo
     }
     
     return {
-      analysis: createEmptyFallbackAnalysis(`GPT4o analysis failed: ${errorMessage}`),
+      analysis: createEmptyFallbackAnalysis(requestId, errorMessage),
       success: false,
       error: errorMessage,
       modelUsed: 'error',
@@ -569,13 +635,15 @@ export function createFallbackResponse(
   reason: string,
   partialAnalysis: any = null
 ): any {
-  const fallback = createEmptyFallbackAnalysis(reason);
+  const fallback = createEmptyFallbackAnalysis(reason, reason);
   
   // Add error metadata for debugging
-  fallback._meta = {
-    error: reason,
-    timestamp: new Date().toISOString(),
-    isPartial: !!partialAnalysis
+  fallback.metadata = {
+    requestId: reason,
+    model: null,
+    usedFallback: true,
+    processingTime: 0,
+    error: reason
   };
   
   // If we have partial data, try to incorporate valid parts
@@ -587,12 +655,21 @@ export function createFallbackResponse(
     
     // Try to salvage any valid nutrients
     if (partialAnalysis.nutrients && typeof partialAnalysis.nutrients === 'object') {
+      const nutrientsObj: Record<string, number> = {};
       const validNutrients = ['calories', 'protein', 'carbs', 'fat', 'fiber', 'sugar', 'sodium'];
+      
       validNutrients.forEach(nutrient => {
         if (typeof partialAnalysis.nutrients[nutrient] === 'number') {
-          fallback.nutrients[nutrient] = partialAnalysis.nutrients[nutrient];
+          nutrientsObj[nutrient] = partialAnalysis.nutrients[nutrient];
         }
       });
+      
+      fallback.nutrients = Object.entries(nutrientsObj).map(([name, value]) => ({
+        name,
+        value,
+        unit: name === 'calories' ? 'kcal' : 'g',
+        isHighlight: false
+      }));
     }
     
     // Try to salvage any valid detailed ingredients
@@ -623,5 +700,5 @@ export function createFallbackResponse(
  * Create an emergency fallback response for unexpected errors
  */
 export function createEmergencyFallbackResponse(): any {
-  return createEmptyFallbackAnalysis('Unexpected error');
+  return createEmptyFallbackAnalysis(crypto.randomUUID(), 'Emergency fallback');
 }
