@@ -3,8 +3,8 @@
  * Uses Tesseract.js for client-side OCR
  */
 
-import { createWorker } from 'tesseract.js';
-import type { Worker, RecognizeResult, WorkerOptions } from 'tesseract.js';
+// Import dynamically to avoid SSR issues
+let createWorker: any = null;
 
 // Define interface for OCR result
 export interface OCRResult {
@@ -32,27 +32,31 @@ export async function runOCR(
   const startTime = Date.now();
   
   try {
+    // Dynamically import tesseract.js to avoid SSR issues
+    if (!createWorker) {
+      const tesseract = await import('tesseract.js');
+      createWorker = tesseract.createWorker;
+    }
+
     // Check environment variable for confidence threshold
     const confidenceThreshold = process.env.OCR_CONFIDENCE_THRESHOLD 
       ? parseFloat(process.env.OCR_CONFIDENCE_THRESHOLD)
       : 0.7;
     
     // Create worker with logging
-    const worker = await createWorker({
-      logger: (m) => {
-        if (m && typeof m.progress === 'number') {
-          console.log(`📊 [${requestId}] OCR progress: ${Math.floor(m.progress * 100)}%`);
-        }
-      }
-    });
+    const worker: any = await createWorker();
+    
+    // Log progress manually
+    console.log(`📊 [${requestId}] OCR initializing...`);
     
     // Load language and initialize
     await worker.loadLanguage('eng');
     await worker.initialize('eng');
+    console.log(`📊 [${requestId}] OCR engine initialized`);
     
     // Set parameters for better results with food labels
     await worker.setParameters({
-      tessedit_pageseg_mode: 6, // Assume single uniform block of text
+      tessedit_pageseg_mode: '6', // Assume single uniform block of text
       tessedit_char_whitelist: 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.,:%$()[]"-/& ', // Common characters in food labels
     });
     

@@ -20,7 +20,8 @@ export async function GET(request: NextRequest) {
       apiKeyLength: openaiApiKey.length,
       apiKeyPrefix: openaiApiKey.substring(0, 8),
       apiKeySuffix: openaiApiKey.substring(openaiApiKey.length - 4),
-      useGpt4Vision: process.env.USE_GPT4_VISION !== 'false'
+      useOcrExtraction: process.env.USE_OCR_EXTRACTION === 'true',
+      ocrConfidenceThreshold: process.env.OCR_CONFIDENCE_THRESHOLD || '0.7'
     }
   });
 } 
