@@ -1,14 +1,15 @@
 import { NextRequest, NextResponse } from 'next/server';
 import axios from 'axios';
 import crypto from 'crypto';
-import OpenAI from 'openai';
 import { adminStorage } from '@/lib/firebaseAdmin';
 import { trySaveMealServer } from '@/lib/serverMealUtils';
 import { uploadImageToFirebase } from '@/lib/firebaseStorage';
-import { extractBase64Image, extractTextFromImage } from '@/lib/imageProcessing';
-import { GPT_MODEL } from '@/lib/constants';
+import { extractBase64Image } from '@/lib/imageProcessing';
 import { getNutritionData, createNutrientAnalysis } from '@/lib/nutritionixApi';
 import { createEmptyFallbackAnalysis } from '@/lib/analyzeImageWithGPT4V';
+import { runOCR } from '@/lib/runOCR';
+import { analyzeMealTextOnly } from '@/lib/analyzeMealTextOnly';
+import { API_CONFIG } from '@/lib/constants';
 
 // Image quality assessment utilities
 interface ImageQualityResult {
@@ -214,7 +215,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     
     // Set up timeout controller
     const controller = new AbortController();
-    const globalTimeoutMs = 25000; // 25 second timeout
+    const globalTimeoutMs = parseInt(process.env.OPENAI_TIMEOUT_MS || '', 10) || API_CONFIG.DEFAULT_TIMEOUT_MS;
     const globalController = new AbortController();
 
     // Set global timeout
@@ -223,53 +224,74 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       globalController.abort('Global timeout reached');
     }, globalTimeoutMs);
 
-    // Process the image analysis with text extraction instead of vision models
-    let textualDescription = '';
+    // Process the image with text-based analysis using OCR
+    let extractedText = '';
+    let mealAnalysis = null;
     let nutritionData = null;
     let analysisFailed = false;
     let failureReason = '';
     let isTimeout = false;
-    let fallbackMessage = '';
 
     try {
-      console.log(`🔍 [${requestId}] Starting image analysis using text extraction method`);
+      // Step a: Run OCR on the image to extract text
+      console.log(`🔍 [${requestId}] Running OCR to extract text from image`);
+      const ocrResult = await runOCR(base64Image, requestId);
       
-      // Step 1: Extract text description from image
-      const textExtractionResult = await extractTextFromImage(
-        base64Image,
-        requestId,
-        healthGoals
-      );
-      
-      if (!textExtractionResult.success) {
-        throw new Error(textExtractionResult.error || 'Failed to extract text from image');
+      if (!ocrResult.success || !ocrResult.text) {
+        console.warn(`⚠️ [${requestId}] OCR extraction failed or returned no text: ${ocrResult.error || 'No text extracted'}`);
+        throw new Error(ocrResult.error || 'Failed to extract text from image');
       }
       
-      textualDescription = textExtractionResult.description;
-      console.log(`✅ [${requestId}] Text extraction successful: "${textualDescription.substring(0, 100)}..."`);
+      extractedText = ocrResult.text;
+      console.log(`✅ [${requestId}] OCR successful, extracted ${extractedText.length} characters`);
+      console.log(`📋 [${requestId}] Extracted text: "${extractedText.substring(0, 100)}${extractedText.length > 100 ? '...' : ''}"`);
       
-      // Step 2: Get nutrition data based on the extracted text
-      const nutritionResult = await getNutritionData(textualDescription, requestId);
+      // Step b: Analyze the extracted text with GPT
+      console.log(`🔍 [${requestId}] Analyzing extracted text to identify meal components`);
+      mealAnalysis = await analyzeMealTextOnly(extractedText, healthGoals, requestId);
       
-      if (nutritionResult.success && nutritionResult.data) {
-        nutritionData = nutritionResult.data;
-        console.log(`✅ [${requestId}] Nutrition data retrieved successfully for ${nutritionData.foods?.length || 0} items`);
-      } else {
-        console.warn(`⚠️ [${requestId}] Nutrition data fetch failed: ${nutritionResult.error}`);
-        // Continue with analysis even without nutrition data
+      if (!mealAnalysis.success && mealAnalysis.error) {
+        console.warn(`⚠️ [${requestId}] Text analysis failed: ${mealAnalysis.error}`);
+        throw new Error(mealAnalysis.error);
       }
       
-      // Step 3: Create analysis with the extracted description and nutrition data
+      console.log(`✅ [${requestId}] Text analysis successful`);
+      console.log(`📋 [${requestId}] Identified meal: ${mealAnalysis.description}`);
+      console.log(`📋 [${requestId}] Identified ingredients: ${mealAnalysis.ingredients.join(', ')}`);
+      
+      // Step c: Get nutrition data based on identified ingredients
+      if (mealAnalysis.ingredients.length > 0) {
+        console.log(`🔍 [${requestId}] Getting nutrition data for identified ingredients`);
+        
+        // Join ingredients for Nutritionix query
+        const ingredientsText = mealAnalysis.ingredients.join(', ');
+        const nutritionResult = await getNutritionData(ingredientsText, requestId);
+        
+        if (nutritionResult.success && nutritionResult.data) {
+          nutritionData = nutritionResult.data;
+          console.log(`✅ [${requestId}] Nutrition data retrieved successfully`);
+        } else {
+          console.warn(`⚠️ [${requestId}] Nutrition data fetch failed: ${nutritionResult.error}`);
+          // Continue with analysis even without nutrition data
+        }
+      }
+      
+      // Step d: Create the final analysis result
       const healthGoalString = healthGoals.length > 0 ? healthGoals[0] : 'general health';
       
-      // Combine extracted description with nutrition data
+      // Combine extracted text, meal analysis, and nutrition data
       let analysisResult: any = {
-        description: textualDescription,
+        description: mealAnalysis.description,
         nutrients: nutritionData?.nutrients || [],
+        detailedIngredients: mealAnalysis.ingredients.map(ingredient => ({
+          name: ingredient,
+          category: "detected",
+          confidence: mealAnalysis.confidence
+        })),
         modelInfo: {
-          model: textExtractionResult.modelUsed,
+          model: mealAnalysis.modelUsed,
           usedFallback: false,
-          forceGPT4V: false
+          ocrExtracted: true
         }
       };
       
@@ -291,7 +313,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       } else {
         // Generic feedback if no nutrition data
         analysisResult.feedback = [
-          "We analyzed your meal based on visual characteristics only.",
+          "We analyzed your meal based on text extracted from your image.",
           "For more specific nutrition advice, try taking a clearer photo."
         ];
         analysisResult.suggestions = [
@@ -305,9 +327,9 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       // Mark as successful
       response.success = true;
       response.result = analysisResult;
-      response.message = 'Analysis completed successfully';
+      response.message = 'Analysis completed successfully with text extraction';
       
-      // Try to save the meal to Firestore if we have a userId
+      // Save to user's data if we have a userId and imageUrl
       if (userId && imageUrl) {
         try {
           console.log(`🔄 [${requestId}] Saving meal to Firestore for user ${userId}`);
@@ -315,7 +337,8 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
             userId,
             analysis: analysisResult,
             imageUrl,
-            requestId
+            requestId,
+            mealName: mealAnalysis.description.split(',')[0] // Use first part of description as meal name
           });
           
           if (saveResult.success) {
@@ -333,19 +356,18 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     } catch (error: any) {
       console.error(`❌ [${requestId}] Analysis failed:`, error);
       analysisFailed = true;
-      fallbackMessage = error.message || 'Unknown error during analysis';
-      failureReason = error.code || 'analysis_error';
+      failureReason = error.message || 'Unknown error during analysis';
       
       // Check if it was a timeout
-      isTimeout = error.name === 'AbortError' || fallbackMessage.includes('timeout');
+      isTimeout = error.name === 'AbortError' || failureReason.includes('timeout');
       
       // Create fallback response
-      let fallbackResponse = createEmptyFallbackAnalysis(requestId, "text_extraction", fallbackMessage);
+      const fallbackResponse = createEmptyFallbackAnalysis(requestId, "text_extraction", failureReason);
       
       response.success = false;
       response.fallback = true;
       response.result = fallbackResponse;
-      response.error = fallbackMessage;
+      response.error = failureReason;
       response.message = 'Analysis failed, using fallback response';
     } finally {
       // Clear the timeout
@@ -364,17 +386,15 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     return NextResponse.json(response);
   } catch (error) {
     // Handle any unexpected errors
-    console.error(`❌ [${requestId}] Unexpected error in analyzeImage:`, error);
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    console.error(`❌ [${requestId}] Unexpected error in analyze route:`, errorMessage);
     
     response.success = false;
-    response.fallback = true;
-    response.message = 'An unexpected error occurred during image analysis.';
-    response.error = error instanceof Error ? error.message : String(error);
-    response.result = createFallbackResponse('unexpected_error', null, requestId);
+    response.error = errorMessage;
+    response.message = 'An unexpected error occurred during analysis';
     response.elapsedTime = Date.now() - startTime;
     
     console.timeEnd(`⏱️ [${requestId}] analyzeImage POST`);
-    
     return NextResponse.json(response, { status: 500 });
   }
 }
