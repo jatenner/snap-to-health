@@ -47,3 +47,4 @@ next-env.d.ts
 # Cleanup tools
 bfg.jar
 cleanup-script.sh
+git-filter-repo
