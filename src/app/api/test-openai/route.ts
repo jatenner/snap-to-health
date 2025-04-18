@@ -25,7 +25,11 @@ export async function GET(request: NextRequest) {
             : 'Unknown',
       keyLength: openAIApiKey.length,
       keyPrefix: openAIApiKey.substring(0, 7) + '...',
-      validFormat: /^sk-(org|proj)?-[A-Za-z0-9]{24,}$/.test(openAIApiKey)
+      validFormat: (
+        openAIApiKey.startsWith('sk-proj-') || 
+        openAIApiKey.startsWith('sk-org-') || 
+        /^sk-[A-Za-z0-9]{48,}$/.test(openAIApiKey)
+      )
     };
     
     console.log(`🔑 [${requestId}] API Key Format: ${keyInfo.keyType}, Length: ${keyInfo.keyLength}, Valid format: ${keyInfo.validFormat}`);
