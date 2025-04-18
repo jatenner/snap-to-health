@@ -64,7 +64,7 @@ export async function GET(request: NextRequest) {
     
     // Check models (updated to match new function signature)
     console.log(`🔍 [${requestId}] Checking GPT-4-Vision availability...`);
-    const gpt4vResult = await checkModelAvailability('gpt-4-vision-preview', requestId);
+    const gpt4vResult = await checkModelAvailability('gpt-4o', requestId);
     console.log(`🔍 [${requestId}] Checking GPT-4o availability...`);
     const gpt4oResult = await checkModelAvailability('gpt-4o', requestId);
     console.log(`🔍 [${requestId}] Checking GPT-3.5-Turbo availability...`);
@@ -98,7 +98,7 @@ export async function GET(request: NextRequest) {
         forceGPT4V: forceGPT4V
       },
       modelAvailability: {
-        'gpt-4-vision-preview': gpt4vResult,
+        'gpt-4o-vision': gpt4vResult,
         'gpt-4o': gpt4oResult,
         'gpt-3.5-turbo': gpt35Result
       },

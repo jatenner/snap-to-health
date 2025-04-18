@@ -1,6 +1,8 @@
 /**
  * Utility functions for image processing
  */
+import OpenAI from 'openai';
+import { GPT_MODEL, API_CONFIG } from './constants';
 
 /**
  * Extracts a base64 image from various input formats
@@ -193,5 +195,72 @@ export async function extractBase64Image(formData: any, requestId: string = 'unk
     console.error(`❌ [${requestId}] Failed to extract base64 image:`, error);
     console.timeEnd(`⏱️ [${requestId}] extractBase64Image`);
     throw error;
+  }
+}
+
+/**
+ * Extracts textual food description from an image
+ * Using OCR for text extraction
+ * 
+ * @param imageBase64 Base64 encoded image
+ * @param requestId Request identifier for tracking
+ * @param healthGoals Optional health goals to guide food description
+ * @returns Textual description of food in the image
+ */
+export async function extractTextFromImage(
+  imageBase64: string,
+  requestId: string,
+  healthGoals: string[] = []
+): Promise<{
+  success: boolean;
+  description: string;
+  error?: string;
+  modelUsed: string;
+}> {
+  console.time(`⏱️ [${requestId}] extractTextFromImage`);
+  console.log(`🔍 [${requestId}] Starting text extraction from image using OCR`);
+  
+  try {
+    // Import the runOCR function
+    const { runOCR } = await import('./runOCR');
+    
+    // Run OCR on the image
+    const ocrResult = await runOCR(imageBase64, requestId);
+    
+    if (!ocrResult.success || !ocrResult.text) {
+      console.warn(`⚠️ [${requestId}] OCR failed: ${ocrResult.error || 'No text extracted'}`);
+      return {
+        success: false,
+        description: '',
+        error: ocrResult.error || 'OCR extraction failed',
+        modelUsed: 'ocr'
+      };
+    }
+    
+    console.log(`✅ [${requestId}] OCR completed with confidence: ${ocrResult.confidence}`);
+    console.log(`📝 [${requestId}] Extracted text: "${ocrResult.text.substring(0, 100)}${ocrResult.text.length > 100 ? '...' : ''}"`);
+    
+    // Clean up the OCR text
+    const cleanedText = ocrResult.text
+      .replace(/\s+/g, ' ')
+      .trim();
+      
+    console.timeEnd(`⏱️ [${requestId}] extractTextFromImage`);
+    
+    return {
+      success: true,
+      description: cleanedText,
+      modelUsed: 'ocr'
+    };
+  } catch (error: any) {
+    console.error(`❌ [${requestId}] Error extracting text from image:`, error);
+    console.timeEnd(`⏱️ [${requestId}] extractTextFromImage`);
+    
+    return {
+      success: false,
+      description: '',
+      error: error.message || 'Unknown error during text extraction',
+      modelUsed: 'none'
+    };
   }
 } 
