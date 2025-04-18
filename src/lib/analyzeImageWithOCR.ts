@@ -2,9 +2,10 @@
  * OCR-based image analysis implementation for meal analysis
  */
 
+import { createWorker } from 'tesseract.js';
 import OpenAI from 'openai';
 import crypto from 'crypto';
-import { GPT_MODEL, FALLBACK_MODELS, API_CONFIG } from './constants';
+import { GPT_MODEL, API_CONFIG } from './constants';
 import { runOCR } from './runOCR';
 import { analyzeMealTextOnly } from './analyzeMealTextOnly';
 import { getNutritionData, createNutrientAnalysis } from './nutritionixApi';
@@ -102,34 +103,47 @@ export async function validateAndTestAPIKey(apiKey: string | undefined, requestI
   error?: string;
   isAuthError?: boolean;
 }> {
-  // First check format
-  if (!apiKey || !validateOpenAIApiKey(apiKey)) {
-    return { 
-      valid: false, 
+  // First, validate the API key format
+  if (!validateOpenAIApiKey(apiKey)) {
+    console.warn(`[${requestId}] Invalid OpenAI API key format`);
+    return {
+      valid: false,
       error: 'Invalid API key format',
       isAuthError: true
     };
   }
   
   try {
-    // Test key with a minimal API call
-    const openai = new OpenAI({ apiKey });
+    // Attempt to call a simple endpoint to validate the key
+    const openai = new OpenAI({
+      apiKey: apiKey,
+      maxRetries: 0 // Don't retry for this validation call
+    });
     
-    // Just list models as a simple authentication test
+    // Use models.list as it's lightweight and always accessible
     await openai.models.list();
     
-    return { valid: true };
+    console.log(`[${requestId}] OpenAI API key validation successful`);
+    return {
+      valid: true
+    };
   } catch (error: any) {
-    const statusCode = error?.status || error?.statusCode;
-    const isAuthError = statusCode === 401;
-    const errorMsg = error?.message || 'Unknown API error';
+    // Check for authentication errors
+    if (error.status === 401) {
+      console.warn(`[${requestId}] OpenAI API key authentication failed: ${error.message}`);
+      return {
+        valid: false,
+        error: `Authentication failed: ${error.message}`,
+        isAuthError: true
+      };
+    }
     
-    console.error(`❌ API key validation failed: ${errorMsg}`);
-    
+    // Handle other errors
+    console.warn(`[${requestId}] OpenAI API key validation error: ${error.message}`);
     return {
       valid: false,
-      error: errorMsg,
-      isAuthError: isAuthError
+      error: `Validation error: ${error.message}`,
+      isAuthError: false
     };
   }
 }
@@ -155,15 +169,12 @@ export async function checkModelAvailability(
       return { isAvailable: true, fallbackModel: null, errorMessage: null };
     }
     
-    // Find fallback model from available models
-    const availableFallbackModel = FALLBACK_MODELS.find(fallbackModel => 
-      models.data.some(model => model.id === fallbackModel)
-    );
-    
-    console.warn(`Model ${modelName} is not available, fallback: ${availableFallbackModel || 'none'}`);
+    // Default to gpt-3.5-turbo as fallback
+    const defaultFallback = GPT_MODEL;
+    console.warn(`Model ${modelName} is not available, fallback: ${defaultFallback}`);
     return { 
       isAvailable: false, 
-      fallbackModel: availableFallbackModel || null,
+      fallbackModel: defaultFallback,
       errorMessage: `Model ${modelName} is not available` 
     };
   } catch (error) {
