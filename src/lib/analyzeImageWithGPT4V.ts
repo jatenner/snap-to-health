@@ -42,6 +42,8 @@ interface AnalysisResult {
     confidence: number;
     error: string;
     imageQuality: string;
+    isPartialResult?: boolean;
+    extractedFromText?: boolean;
   };
 }
 
@@ -203,7 +205,11 @@ export interface AnalysisFallback {
 /**
  * Creates an empty fallback analysis when analysis fails
  */
-export function createEmptyFallbackAnalysis(requestId: string, errorMessage: string): AnalysisResult {
+export function createEmptyFallbackAnalysis(
+  requestId: string, 
+  modelUsed: string, 
+  errorMessage: string
+): AnalysisResult {
   return {
     description: "Unable to analyze the image at this time.",
     nutrients: [],
@@ -216,7 +222,7 @@ export function createEmptyFallbackAnalysis(requestId: string, errorMessage: str
     },
     metadata: {
       requestId,
-      modelUsed: "fallback",
+      modelUsed,
       usedFallbackModel: true,
       processingTime: 0,
       confidence: 0,
@@ -263,7 +269,7 @@ export async function analyzeImageWithGPT4V(
     console.error(`❌ [${requestId}] ${error}`);
     
     return {
-      analysis: createEmptyFallbackAnalysis(requestId, error),
+      analysis: createEmptyFallbackAnalysis(requestId, 'none', error),
       success: false,
       error,
       modelUsed: 'none',
@@ -277,7 +283,7 @@ export async function analyzeImageWithGPT4V(
     console.error(`❌ [${requestId}] ${error}`);
     
     return {
-      analysis: createEmptyFallbackAnalysis(requestId, error),
+      analysis: createEmptyFallbackAnalysis(requestId, 'none', error),
       success: false,
       error,
       modelUsed: 'none',
@@ -292,7 +298,7 @@ export async function analyzeImageWithGPT4V(
     console.error(`❌ [${requestId}] ${error}`);
     
     return {
-      analysis: createEmptyFallbackAnalysis(requestId, error),
+      analysis: createEmptyFallbackAnalysis(requestId, 'none', error),
       success: false,
       error,
       modelUsed: 'none',
@@ -307,7 +313,7 @@ export async function analyzeImageWithGPT4V(
     console.error(`❌ [${requestId}] ${error}`);
     
     return {
-      analysis: createEmptyFallbackAnalysis(requestId, error),
+      analysis: createEmptyFallbackAnalysis(requestId, 'none', error),
       success: false,
       error,
       modelUsed: 'none',
@@ -341,7 +347,7 @@ export async function analyzeImageWithGPT4V(
         console.error(`❌ [${requestId}] ${error}`);
         
         return {
-          analysis: createEmptyFallbackAnalysis(requestId, error),
+          analysis: createEmptyFallbackAnalysis(requestId, 'none', error),
           success: false,
           error,
           modelUsed: 'none',
@@ -370,7 +376,7 @@ export async function analyzeImageWithGPT4V(
         console.error(`❌ [${requestId}] ${error}`);
         
         return {
-          analysis: createEmptyFallbackAnalysis(requestId, error),
+          analysis: createEmptyFallbackAnalysis(requestId, 'none', error),
           success: false,
           error,
           modelUsed: 'none',
@@ -389,7 +395,7 @@ export async function analyzeImageWithGPT4V(
       console.error(`❌ [${requestId}] ${error}`);
       
       return {
-        analysis: createEmptyFallbackAnalysis(requestId, error),
+        analysis: createEmptyFallbackAnalysis(requestId, 'none', error),
         success: false,
         error,
         modelUsed: 'none',
@@ -430,109 +436,251 @@ Prioritize accuracy over completeness - if you're unsure about specific nutrient
 
     console.log(`⏳ [${requestId}] Sending request to OpenAI API with model: ${modelToUse}`);
     
-    // Make the API request
-    const openaiResponse = await openai.chat.completions.create({
-      model: modelToUse,
-      messages: [
-        { role: 'system', content: systemMessage },
-        { 
-          role: 'user', 
-          content: [
-            { type: 'text', text: userMessage },
-            { 
-              type: 'image_url', 
-              image_url: {
-                url: formattedImage,
-                detail: 'high'
-              }
-            }
-          ]
+    // Add retry mechanism with exponential backoff
+    const MAX_RETRIES = 3;
+    let retryAttempt = 0;
+    let lastError: Error | null = null;
+    
+    while (retryAttempt < MAX_RETRIES) {
+      try {
+        // Log attempt number if this is a retry
+        if (retryAttempt > 0) {
+          console.log(`🔄 [${requestId}] Retry attempt ${retryAttempt}/${MAX_RETRIES} for OpenAI API request`);
         }
-      ],
-      max_tokens: API_CONFIG.MAX_TOKENS,
-      temperature: API_CONFIG.TEMPERATURE,
-      top_p: API_CONFIG.TOP_P,
-      frequency_penalty: API_CONFIG.FREQUENCY_PENALTY,
-      presence_penalty: API_CONFIG.PRESENCE_PENALTY,
-      response_format: { type: 'json_object' }
-    });
-    
-    console.log(`✅ [${requestId}] OpenAI API response received, model: ${modelToUse}, tokens: ${openaiResponse.usage?.total_tokens || 'unknown'}`);
-    
-    // Extract the response content
-    const responseContent = openaiResponse.choices[0]?.message?.content || '';
-    
-    // Always log a truncated version of the response (for debugging)
-    const truncatedResponse = responseContent.length > 500 
-      ? `${responseContent.substring(0, 500)}...` 
-      : responseContent;
-      
-    console.log(`📋 [${requestId}] GPT Response (truncated): ${truncatedResponse}`);
-    
-    // Try to parse the JSON response
-    let parsedResponse: Record<string, any>;
-    try {
-      parsedResponse = JSON.parse(responseContent);
-      
-      // Calculate processing time
-      const processingTime = Date.now() - startTime;
-      
-      // Add metadata to the analysis
-      parsedResponse.metadata = {
-        requestId,
-        modelUsed: modelToUse,
-        usedFallbackModel,
-        processingTime,
-        confidence: parsedResponse.confidence || 0,
-        error: '',
-        imageQuality: qualityInfo.qualityLevel
-      };
-      
-      // Validate the analysis result contains required fields
-      if (!validateGptAnalysisResult(parsedResponse)) {
-        console.warn(`⚠️ [${requestId}] Incomplete analysis result, some fields may be missing`);
+        
+        console.log(`🤖 [${requestId}] Making OpenAI API request with model: ${modelToUse}`);
+        const startTime = Date.now();
+        const completion = await openai.chat.completions.create({
+          model: modelToUse,
+          messages: [
+            { role: 'system', content: systemMessage },
+            { 
+              role: 'user', 
+              content: [
+                { type: 'text', text: userMessage },
+                { 
+                  type: 'image_url', 
+                  image_url: {
+                    url: formattedImage,
+                    detail: 'high'
+                  }
+                }
+              ]
+            }
+          ],
+          max_tokens: API_CONFIG.MAX_TOKENS,
+          temperature: API_CONFIG.TEMPERATURE,
+          top_p: API_CONFIG.TOP_P,
+          frequency_penalty: API_CONFIG.FREQUENCY_PENALTY,
+          presence_penalty: API_CONFIG.PRESENCE_PENALTY,
+          response_format: { type: 'json_object' }
+        });
+        const endTime = Date.now();
+        console.log(`✅ [${requestId}] OpenAI API request completed in ${endTime - startTime}ms`);
+
+        // Log the raw response
+        console.log(`📊 [${requestId}] Raw OpenAI response:`, JSON.stringify(completion));
+
+        // Validate response structure
+        if (!completion.choices || completion.choices.length === 0) {
+          console.error(`❌ [${requestId}] OpenAI API returned empty choices array`);
+          throw new Error('OpenAI API returned empty choices array');
+        }
+
+        const choice = completion.choices[0];
+        if (!choice.message || !choice.message.content) {
+          console.error(`❌ [${requestId}] OpenAI API response missing message content`);
+          throw new Error('OpenAI API response missing message content');
+        }
+        
+        let parsedResult: any;
+        try {
+          console.log(`🔍 [${requestId}] Attempting to parse JSON response`);
+          parsedResult = JSON.parse(choice.message.content);
+          console.log(`✅ [${requestId}] Successfully parsed JSON response`);
+        } catch (parseError) {
+          console.error(`❌ [${requestId}] Failed to parse JSON response: ${parseError instanceof Error ? parseError.message : String(parseError)}`);
+          console.log(`🧩 [${requestId}] Raw content being parsed: ${choice.message.content}`);
+          
+          // If on the last retry attempt, try to create a partial fallback analysis
+          if (retryAttempt === MAX_RETRIES - 1) {
+            const fallbackAnalysis = createPartialFallbackAnalysis(choice.message.content, requestId, modelToUse, true, parsedResult);
+            return {
+              analysis: fallbackAnalysis,
+              success: false,
+              error: `Failed to parse response: ${parseError instanceof Error ? parseError.message : String(parseError)}`,
+              modelUsed: modelToUse,
+              usedFallbackModel,
+              forceGPT4V,
+              rawResponse: choice.message.content
+            };
+          }
+          
+          // Increment retry attempt and continue
+          retryAttempt++;
+          lastError = parseError instanceof Error ? parseError : new Error(String(parseError));
+          
+          // Exponential backoff
+          const delayMs = 1000 * Math.pow(2, retryAttempt);
+          console.log(`⏳ [${requestId}] Waiting ${delayMs}ms before retry ${retryAttempt}/${MAX_RETRIES}`);
+          await new Promise(resolve => setTimeout(resolve, delayMs));
+          continue;
+        }
+        
+        // Validate required fields
+        const validationResult = validateRequiredFields(parsedResult);
+        if (!validationResult.isValid) {
+          console.error(`❌ [${requestId}] Validation failed: Missing required fields: ${validationResult.missingFields.join(', ')}`);
+          
+          // If on the last retry attempt, try to use what we have with a fallback for missing fields
+          if (retryAttempt === MAX_RETRIES - 1) {
+            const fallbackAnalysis = createPartialFallbackAnalysis(choice.message.content, requestId, modelToUse, false, parsedResult);
+            return {
+              analysis: fallbackAnalysis,
+              success: false,
+              error: `Missing required fields: ${validationResult.missingFields.join(', ')}`,
+              modelUsed: modelToUse,
+              usedFallbackModel,
+              forceGPT4V,
+              rawResponse: choice.message.content
+            };
+          }
+          
+          // Increment retry attempt and continue
+          retryAttempt++;
+          lastError = new Error(`Missing required fields: ${validationResult.missingFields.join(', ')}`);
+          
+          // Exponential backoff
+          const delayMs = 1000 * Math.pow(2, retryAttempt);
+          console.log(`⏳ [${requestId}] Waiting ${delayMs}ms before retry ${retryAttempt}/${MAX_RETRIES}`);
+          await new Promise(resolve => setTimeout(resolve, delayMs));
+          continue;
+        }
+        
+        // Success! Return the valid result
+        const analysisResult = {
+          ...parsedResult,
+          metadata: {
+            requestId,
+            modelUsed: modelToUse,
+            usedFallbackModel,
+            processingTime: endTime - startTime,
+            confidence: parsedResult.confidence || 0,
+            error: '',
+            imageQuality: qualityInfo.qualityLevel
+          },
+        };
+        
+        return {
+          analysis: analysisResult,
+          success: true,
+          modelUsed: modelToUse,
+          usedFallbackModel,
+          forceGPT4V,
+          rawResponse: choice.message.content
+        };
+      } catch (apiError) {
+        console.error(`❌ [${requestId}] OpenAI API error:`, apiError instanceof Error ? apiError.message : String(apiError));
+        
+        // If this is the last retry, we'll fall through to the outer catch block
+        if (retryAttempt === MAX_RETRIES - 1) {
+          throw apiError;
+        }
+        
+        // Increment retry attempt and continue
+        retryAttempt++;
+        lastError = apiError instanceof Error ? apiError : new Error(String(apiError));
+        
+        // Exponential backoff
+        const delayMs = 1000 * Math.pow(2, retryAttempt);
+        console.log(`⏳ [${requestId}] Waiting ${delayMs}ms before retry ${retryAttempt}/${MAX_RETRIES}`);
+        await new Promise(resolve => setTimeout(resolve, delayMs));
       }
-      
-      // Return the analysis as successful
-      return {
-        analysis: parsedResponse,
-        success: true,
-        modelUsed: modelToUse,
-        usedFallbackModel,
-        forceGPT4V,
-        rawResponse: responseContent
-      };
-    } catch (error) {
-      // Handle JSON parsing errors
-      const errorMessage = error instanceof Error ? error.message : String(error);
-      console.error(`❌ [${requestId}] Failed to parse JSON from OpenAI response: ${errorMessage}`);
-      
-      // Return a failure with the raw response for debugging
-      return {
-        analysis: createEmptyFallbackAnalysis(requestId, `Failed to parse GPT-4V response: ${errorMessage}`),
-        success: false,
-        error: `Failed to parse response: ${errorMessage}`,
-        modelUsed: modelToUse,
-        usedFallbackModel,
-        forceGPT4V,
-        rawResponse: responseContent
-      };
     }
-  } catch (error) {
-    // Handle any errors during the API request
-    const errorMessage = error instanceof Error ? error.message : String(error);
-    console.error(`❌ [${requestId}] Error during GPT-4V analysis: ${errorMessage}`);
     
+    // If we've exhausted all retries, throw the last error
+    if (lastError) {
+      throw lastError;
+    }
+    
+    // This should never be reached, but TypeScript needs it
+    throw new Error('Unknown error in OpenAI API request');
+  } catch (error) {
+    console.error(`❌ [${requestId}] Error in analyzeImageWithGPT4V:`, error instanceof Error ? error.message : String(error));
+    const fallbackAnalysis = createEmptyFallbackAnalysis(requestId, 'error', error instanceof Error ? error.message : String(error));
     return {
-      analysis: createEmptyFallbackAnalysis(requestId, `API error: ${errorMessage}`),
+      analysis: fallbackAnalysis,
       success: false,
-      error: `API error: ${errorMessage}`,
+      error: `API error: ${error instanceof Error ? error.message : String(error)}`,
       modelUsed: 'error',
       usedFallbackModel: false,
       forceGPT4V: false,
       rawResponse: JSON.stringify(error)
     };
   }
+}
+
+/**
+ * Attempts to extract partial data from non-JSON responses
+ * This can help recover from malformed JSON or text responses
+ */
+function createPartialFallbackAnalysis(
+  rawContent: string, 
+  requestId: string, 
+  modelUsed: string, 
+  isParseError: boolean,
+  partialData?: any
+): AnalysisResult {
+  console.log(`🛠️ [${requestId}] Creating partial fallback analysis from ${isParseError ? 'raw text' : 'partial data'}`);
+  
+  // Start with an empty fallback
+  const fallback = createEmptyFallbackAnalysis(
+    requestId, 
+    modelUsed, 
+    isParseError ? 'Failed to parse JSON response' : 'Missing required fields in response'
+  );
+  
+  try {
+    // If we have partial data, use what's valid
+    if (partialData) {
+      console.log(`✨ [${requestId}] Using partial data for fallback analysis`);
+      // Copy any valid fields from partial data
+      if (partialData.description) fallback.description = partialData.description;
+      if (partialData.nutrients) fallback.nutrients = partialData.nutrients;
+      if (partialData.feedback) fallback.feedback = partialData.feedback;
+      if (partialData.suggestions) fallback.suggestions = partialData.suggestions;
+      if (partialData.detailedIngredients) fallback.detailedIngredients = partialData.detailedIngredients;
+      if (partialData.goalScore) fallback.goalScore = partialData.goalScore;
+      
+      fallback.metadata.isPartialResult = true;
+      return fallback;
+    }
+    
+    // For parse errors, try to extract some information from the raw text
+    if (isParseError && rawContent) {
+      console.log(`🔍 [${requestId}] Attempting to extract information from raw text`);
+      
+      // Try to find a description
+      const descriptionMatch = rawContent.match(/description["\s:]+([^"}.]+)/i);
+      if (descriptionMatch && descriptionMatch[1]) {
+        fallback.description = descriptionMatch[1].trim();
+      }
+      
+      // Try to find feedback
+      const feedbackMatch = rawContent.match(/feedback["\s:]+([^"}.]+)/i);
+      if (feedbackMatch && feedbackMatch[1]) {
+        fallback.feedback = feedbackMatch[1].trim();
+      }
+      
+      fallback.metadata.isPartialResult = true;
+      fallback.metadata.extractedFromText = true;
+    }
+  } catch (extractionError) {
+    console.error(`❌ [${requestId}] Error creating partial fallback:`, 
+      extractionError instanceof Error ? extractionError.message : String(extractionError));
+  }
+  
+  return fallback;
 }
 
 /**
@@ -616,7 +764,7 @@ export function createFallbackResponse(
   reason: string,
   partialAnalysis: any = null
 ): any {
-  const fallback = createEmptyFallbackAnalysis(reason, reason);
+  const fallback = createEmptyFallbackAnalysis(reason, 'fallback', reason);
   
   // Add error metadata for debugging
   fallback.metadata = {
@@ -793,4 +941,40 @@ export function formatImageForRequest(base64Image: string): {
     url: imageUrl,
     qualityInfo
   };
+}
+
+// Helper function to validate required fields
+function validateRequiredFields(result: any): { isValid: boolean; missingFields: string[] } {
+  const requiredFields = ['description', 'nutrients', 'feedback', 'suggestions', 'detailedIngredients', 'goalScore'];
+  const missingFields = requiredFields.filter(field => !result[field]);
+  
+  return {
+    isValid: missingFields.length === 0,
+    missingFields
+  };
+}
+
+// Function to extract JSON from potentially malformed text
+function extractJSONFromText(text: string): any {
+  // Try to find JSON content between curly braces
+  const jsonMatch = text.match(/\{[\s\S]*\}/);
+  if (!jsonMatch) {
+    throw new Error('No JSON object found in response');
+  }
+  
+  try {
+    return JSON.parse(jsonMatch[0]);
+  } catch (parseError) {
+    // Try to clean the content before parsing
+    let cleanedText = jsonMatch[0]
+      .replace(/(\r\n|\n|\r)/gm, '') // Remove line breaks
+      .replace(/,\s*}/g, '}')        // Remove trailing commas
+      .replace(/,\s*]/g, ']');       // Remove trailing commas in arrays
+      
+    try {
+      return JSON.parse(cleanedText);
+    } catch (secondError) {
+      throw new Error(`Failed to parse JSON after cleaning: ${secondError instanceof Error ? secondError.message : String(secondError)}`);
+    }
+  }
 }

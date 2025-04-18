@@ -462,9 +462,36 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
         imageUrl = await uploadImageToFirebase(base64Image, userId, requestId);
         console.log(`✅ [${requestId}] Firebase upload successful: ${imageUrl}`);
         response.imageUrl = imageUrl;
+        
+        // Validate the image URL format
+        if (!imageUrl || typeof imageUrl !== 'string' || !imageUrl.startsWith('https://')) {
+          console.error(`❌ [${requestId}] Invalid image URL format: ${imageUrl}`);
+          throw new Error('Invalid image URL format');
+        }
+        
+        // Check if the URL is accessible
+        console.log(`🔍 [${requestId}] Validating image URL accessibility...`);
+        const urlCheckResponse = await fetch(imageUrl, { method: 'HEAD' }).catch(e => {
+          console.error(`❌ [${requestId}] Image URL check failed: ${e.message}`);
+          return null;
+        });
+        
+        if (!urlCheckResponse || !urlCheckResponse.ok) {
+          console.error(`❌ [${requestId}] Image URL is not accessible: ${urlCheckResponse?.status || 'unknown error'}`);
+          throw new Error(`Image URL is not accessible: ${urlCheckResponse?.status || 'unknown error'}`);
+        }
+        
+        console.log(`✅ [${requestId}] Image URL is valid and accessible`);
       } catch (error) {
-        console.warn(`⚠️ [${requestId}] Failed to upload to Firebase:`, error);
-        // Continue without image URL - not critical for analysis
+        console.error(`❌ [${requestId}] Error uploading image: ${error instanceof Error ? error.message : String(error)}`);
+        return NextResponse.json(
+          {
+            errorCode: "IMAGE_UPLOAD_ERROR",
+            message: "Failed to upload image for analysis",
+            details: error instanceof Error ? error.message : String(error),
+          },
+          { status: 500 }
+        );
       }
     } else {
       console.log(`ℹ️ [${requestId}] No userId provided, skipping Firebase upload`);
