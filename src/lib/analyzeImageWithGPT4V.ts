@@ -84,10 +84,6 @@ if (!process.env.OPENAI_API_KEY) {
 function validateOpenAIApiKey(apiKey: string | undefined): boolean {
   if (!apiKey) return false;
   
-  // Check for various OpenAI API key formats:
-  // 1. Project API keys: sk-proj-{projectId}_{random string}
-  // 2. Organization API keys: sk-org-{orgId}_{random string}
-  // 3. Standard API keys: sk-{random string}
   return (
     apiKey.startsWith('sk-proj-') || 
     apiKey.startsWith('sk-org-') || 
