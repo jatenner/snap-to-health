@@ -4,7 +4,7 @@
  */
 
 import { createWorker } from 'tesseract.js';
-import type { Worker, RecognizeResult } from 'tesseract.js';
+import type { Worker, RecognizeResult, WorkerOptions } from 'tesseract.js';
 
 // Define interface for OCR result
 export interface OCRResult {
@@ -13,6 +13,7 @@ export interface OCRResult {
   confidence: number;
   error?: string;
   processingTimeMs: number;
+  regions?: Array<{id: string, text: string, confidence: number}>;
 }
 
 /**
@@ -38,8 +39,10 @@ export async function runOCR(
     
     // Create worker with logging
     const worker = await createWorker({
-      logger: (progress) => {
-        console.log(`📊 [${requestId}] OCR progress: ${Math.floor(progress.progress * 100)}%`);
+      logger: (m) => {
+        if (m && typeof m.progress === 'number') {
+          console.log(`📊 [${requestId}] OCR progress: ${Math.floor(m.progress * 100)}%`);
+        }
       }
     });
     
@@ -49,7 +52,7 @@ export async function runOCR(
     
     // Set parameters for better results with food labels
     await worker.setParameters({
-      tessedit_pageseg_mode: '6', // Assume single uniform block of text
+      tessedit_pageseg_mode: 6, // Assume single uniform block of text
       tessedit_char_whitelist: 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.,:%$()[]"-/& ', // Common characters in food labels
     });
     
