@@ -5,7 +5,7 @@ import { adminStorage } from '@/lib/firebaseAdmin';
 import { trySaveMealServer } from '@/lib/serverMealUtils';
 import { uploadImageToFirebase } from '@/lib/firebaseStorage';
 import { extractBase64Image } from '@/lib/imageProcessing';
-import { getNutritionData, createNutrientAnalysis } from '@/lib/nutritionixApi';
+import { getNutritionData, createNutrientAnalysis, NutritionData } from '@/lib/nutritionixApi';
 import { createEmptyFallbackAnalysis } from '@/lib/analyzeImageWithOCR';
 import { runOCR, OCRResult } from '@/lib/runOCR';
 import { analyzeMealTextOnly, MealAnalysisResult } from '@/lib/analyzeMealTextOnly';
@@ -61,9 +61,39 @@ interface AnalysisResponse {
   requestId: string;
   message: string;
   imageUrl: string | null;
-  result: any | null;
+  result: AnalysisResult | null;
   error: string | null;
   elapsedTime: number;
+}
+
+interface AnalysisResult {
+  description: string;
+  nutrients: Array<{
+    name: string;
+    value: string;
+    unit: string;
+    isHighlight: boolean;
+    percentOfDailyValue?: number;
+    amount?: number;
+  }>;
+  feedback: string[];
+  suggestions: string[];
+  detailedIngredients: Array<{
+    name: string;
+    category: string;
+    confidence: number;
+    confidenceEmoji?: string;
+  }>;
+  goalScore: {
+    overall: number;
+    specific: Record<string, number>;
+  };
+  goalName?: string;
+  modelInfo?: {
+    model: string;
+    usedFallback: boolean;
+    ocrExtracted: boolean;
+  };
 }
 
 // Mock implementation for backward compatibility during migration
@@ -227,7 +257,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     // Process the image with text-based analysis using OCR
     let extractedText = '';
     let mealAnalysis: MealAnalysisResult | null = null;
-    let nutritionData = null;
+    let nutritionData: NutritionData | null = null;
     let analysisFailed = false;
     let failureReason = '';
     let isTimeout = false;
@@ -297,10 +327,16 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       const healthGoalString = healthGoals.length > 0 ? healthGoals[0] : 'general health';
       
       // Combine extracted text, meal analysis, and nutrition data
-      let analysisResult: any = {
+      let analysisResult: AnalysisResult = {
         description: mealAnalysis.description,
         nutrients: nutritionData?.nutrients || mealAnalysis.nutrients || [],
         detailedIngredients: mealAnalysis.ingredients,
+        feedback: [],
+        suggestions: [],
+        goalScore: {
+          overall: 5,
+          specific: {}
+        },
         modelInfo: {
           model: 'ocr-text-analysis',
           usedFallback: false,
@@ -333,7 +369,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
           "Include all food items in the frame",
           "Take photos in good lighting"
         ];
-        analysisResult.goalScore = 5; // Neutral score
+        analysisResult.goalScore.overall = 5; // Neutral score
         analysisResult.goalName = formatGoalName(healthGoalString);
       }
       
