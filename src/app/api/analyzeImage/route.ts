@@ -4,31 +4,11 @@ import crypto from 'crypto';
 import OpenAI from 'openai';
 import { adminStorage } from '@/lib/firebaseAdmin';
 import { trySaveMealServer } from '@/lib/serverMealUtils';
-import { createAnalysisResponse, createEmptyFallbackAnalysis, createErrorResponse } from './analyzer';
-import { isValidAnalysis, createFallbackAnalysis, normalizeAnalysisResult } from '@/lib/utils/analysisValidator';
-import { safeExtractImage } from '@/lib/imageProcessing/safeExtractImage';
-import { GPT_VISION_MODEL, FALLBACK_MODELS } from '@/lib/constants';
-import { 
-  analyzeImageWithGPT4V as analyzeWithGPT4V, 
-  validateAndTestAPIKey,
-  checkModelAvailability,
-  createEmptyFallbackAnalysis as createEmptyFallbackAnalysisUtil
-} from '@/lib/analyzeImageWithGPT4V';
 import { uploadImageToFirebase } from '@/lib/firebaseStorage';
-import { extractBase64Image } from '@/lib/imageProcessing';
-
-// Comment out conflicting imports
-// import { uploadImageToFirebase as uploadToFirebase } from '@/lib/firebaseStorage';
-// import { extractBase64Image } from '@/lib/imageProcessing';
-
-// Placeholder image for development fallback
-const PLACEHOLDER_IMAGE = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
-
-// Trigger new Vercel deployment - 15 Apr 2025
-// Request concurrency tracking
-let activeRequests = 0;
-const requestStartTimes = new Map<string, number>();
-const MAX_CONCURRENT_REQUESTS = 10; // Limit concurrent requests for stability
+import { extractBase64Image, extractTextFromImage } from '@/lib/imageProcessing';
+import { GPT_MODEL } from '@/lib/constants';
+import { getNutritionData, createNutrientAnalysis } from '@/lib/nutritionixApi';
+import { createEmptyFallbackAnalysis } from '@/lib/analyzeImageWithGPT4V';
 
 // Image quality assessment utilities
 interface ImageQualityResult {
@@ -70,267 +50,7 @@ function isLowConfidenceAnalysis(analysis: any): boolean {
     return true;
   }
   
-  // Check if the detailedIngredients have low average confidence
-  if (analysis.detailedIngredients && analysis.detailedIngredients.length > 0) {
-    const totalConfidence = analysis.detailedIngredients.reduce(
-      (sum: number, ingredient: any) => sum + (ingredient.confidence || 0), 
-      0
-    );
-    const avgConfidence = totalConfidence / analysis.detailedIngredients.length;
-    
-    if (avgConfidence < 5) {
-      return true;
-    }
-    
-    // Check if majority of ingredients have low confidence
-    const lowConfidenceCount = analysis.detailedIngredients.filter(
-      (i: any) => i.confidence < 5
-    ).length;
-    
-    if (lowConfidenceCount > analysis.detailedIngredients.length / 2) {
-      return true;
-    }
-  }
-  
-  // Check if there are reported image challenges
-  if (analysis.imageChallenges && analysis.imageChallenges.length > 0) {
-    return true;
-  }
-  
   return false;
-}
-
-// The analyzeImageWithGPT4V function implementation has been moved to src/lib/analyzeImageWithGPT4V.ts
-// We are now using the imported version (renamed to analyzeWithGPT4V in the imports section)
-
-/**
- * Extracts JSON from possibly malformed text that might contain markdown or other formatting
- */
-function extractJSONFromText(text: string, requestId: string): any | null {
-  if (!text || typeof text !== 'string') {
-    console.error(`[${requestId}] Text to extract JSON from is empty or not a string`);
-    return null;
-  }
-
-  // First try: simple JSON.parse if it's already valid JSON
-  try {
-    return JSON.parse(text);
-  } catch (e) {
-    console.log(`[${requestId}] Initial JSON.parse failed, trying alternative extraction methods`);
-  }
-  
-  // Second try: Look for JSON between code blocks or backticks
-  try {
-    // Try to extract JSON from markdown code blocks
-    const codeBlockMatch = text.match(/```(?:json)?([\s\S]*?)```/);
-    if (codeBlockMatch && codeBlockMatch[1]) {
-      const jsonContent = codeBlockMatch[1].trim();
-      console.log(`[${requestId}] Found JSON in code block, attempting to parse`);
-      return JSON.parse(jsonContent);
-    }
-  } catch (e) {
-    console.log(`[${requestId}] Code block extraction failed:`, e);
-  }
-  
-  // Third try: Look for anything that looks like a JSON object
-  try {
-    const possibleJson = text.match(/(\{[\s\S]*\})/);
-    if (possibleJson && possibleJson[1]) {
-      const jsonContent = possibleJson[1].trim();
-      console.log(`[${requestId}] Found possible JSON object, attempting to parse`);
-      return JSON.parse(jsonContent);
-    }
-  } catch (e) {
-    console.log(`[${requestId}] Object extraction failed:`, e);
-  }
-  
-  // Final attempt: Aggressive cleaning - remove all non-JSON characters
-  try {
-    // Remove any non-JSON characters at the beginning of the string
-    let cleanedText = text.replace(/^[^{]*/, '');
-    
-    // Remove any non-JSON characters at the end of the string
-    cleanedText = cleanedText.replace(/[^}]*$/, '');
-    
-    // Try to parse the cleaned text
-    if (cleanedText.startsWith('{') && cleanedText.endsWith('}')) {
-      console.log(`[${requestId}] Attempting to parse aggressively cleaned text`);
-      return JSON.parse(cleanedText);
-    }
-  } catch (e) {
-    console.log(`[${requestId}] Aggressive cleaning failed:`, e);
-  }
-  
-  console.error(`[${requestId}] All JSON extraction methods failed`);
-  return null;
-}
-
-/**
- * Validates that all required fields exist in the analysis
- */
-function validateRequiredFields(result: any): boolean {
-  if (!result || typeof result !== 'object') {
-    return false;
-  }
-  
-  // Check for required string fields
-  if (typeof result.description !== 'string' || !result.description.trim()) {
-    return false;
-  }
-  
-  // Check for required nutrients object
-  if (!result.nutrients || typeof result.nutrients !== 'object') {
-    return false;
-  }
-  
-  // Check for required nutrient fields
-  const nutrients = result.nutrients;
-  if (!('calories' in nutrients) || 
-      !('protein' in nutrients) || 
-      !('carbs' in nutrients) || 
-      !('fat' in nutrients)) {
-    return false;
-  }
-  
-  // Check for required array fields
-  if (!Array.isArray(result.feedback) || result.feedback.length === 0) {
-    return false;
-  }
-  
-  if (!Array.isArray(result.suggestions) || result.suggestions.length === 0) {
-    return false;
-  }
-  
-  // Check for goalScore
-  if (typeof result.goalScore !== 'number') {
-    return false;
-  }
-  
-  return true;
-}
-
-// Helper function to standardize nutrient values
-function standardizeNutrientValues(result: any): any {
-  if (!result || !result.nutrients) return result;
-  
-  // Create a copy to avoid modifying the original
-  const standardized = { ...result };
-  const nutrients = { ...standardized.nutrients };
-  
-  // Ensure all expected nutrient fields exist
-  const expectedNutrients = ['calories', 'protein', 'carbs', 'fat', 'fiber', 'sugar', 'sodium'];
-  
-  expectedNutrients.forEach(key => {
-    // Create the field if it doesn't exist
-    if (nutrients[key] === undefined) {
-      nutrients[key] = 0;
-      console.log(`Added missing nutrient: ${key}`);
-    }
-    
-    // Handle if it's already a string
-    if (typeof nutrients[key] === 'string') {
-      // If it's a string with numeric content, try to parse it
-      const numericValue = parseFloat(nutrients[key]);
-      if (!isNaN(numericValue)) {
-        nutrients[key] = numericValue;
-      }
-    }
-    
-    // Ensure all values are strings for consistent frontend handling
-    if (typeof nutrients[key] === 'number') {
-      nutrients[key] = nutrients[key].toString();
-    }
-  });
-  
-  // Handle possible nested or array-based nutrient structures
-  if (Array.isArray(result.nutrients)) {
-    console.log('Converting array-based nutrients to object format');
-    const nutrientsObj: Record<string, string> = {};
-    
-    result.nutrients.forEach((item: any) => {
-      if (item && item.name) {
-        const name = item.name.toLowerCase().replace(/\s+/g, '');
-        nutrientsObj[name] = item.value?.toString() || '0';
-      }
-    });
-    
-    // Ensure required nutrients exist
-    expectedNutrients.forEach(key => {
-      if (!nutrientsObj[key]) nutrientsObj[key] = '0';
-    });
-    
-    standardized.nutrients = nutrientsObj;
-  } else {
-    standardized.nutrients = nutrients;
-  }
-  
-  return standardized;
-}
-
-// Mock implementation for backward compatibility during migration
-function needsConfidenceEnrichment(analysis: any): boolean {
-  return false;
-}
-
-// Mock implementation for backward compatibility during migration
-async function enrichAnalysisResult(
-  originalResult: any,
-  healthGoals: string[],
-  dietaryPreferences: string[],
-  requestId: string
-): Promise<any> {
-  return originalResult;
-}
-
-// Mock implementation for backward compatibility during migration
-function validateGptAnalysisResult(analysis: any): boolean {
-  if (!analysis) return false;
-  
-  // Check for required top-level fields
-  // We only require description and nutrients as absolute minimum now
-  const criticalFields = ['description', 'nutrients'];
-  const recommendedFields = ['feedback', 'suggestions', 'detailedIngredients'];
-  
-  // Verify critical fields exist
-  for (const field of criticalFields) {
-    if (!analysis[field]) {
-      console.warn(`Analysis validation failed: missing critical field '${field}'`);
-      return false;
-    }
-  }
-  
-  // Log warnings for recommended fields but don't fail validation
-  for (const field of recommendedFields) {
-    if (!analysis[field]) {
-      console.warn(`Analysis missing recommended field '${field}', but continuing with validation`);
-    }
-  }
-  
-  // Ensure minimum nutrients structure - only require calories at minimum
-  if (analysis.nutrients) {
-    if (typeof analysis.nutrients.calories !== 'number' && 
-        typeof analysis.nutrients.calories !== 'string') {
-      console.warn(`Analysis validation warning: missing or invalid 'calories' in nutrients`);
-      // Don't fail here, just warn
-    }
-  }
-  
-  // More lenient array validation - as long as they exist, even if empty
-  const arrayFields = ['feedback', 'suggestions', 'detailedIngredients'].filter(f => analysis[f] !== undefined);
-  for (const arrayField of arrayFields) {
-    if (!Array.isArray(analysis[arrayField])) {
-      console.warn(`Analysis warning: '${arrayField}' exists but is not an array`);
-      // Don't fail validation, just log the warning
-    }
-  }
-  
-  // As long as we have description and some form of nutrients, consider it valid
-  return true;
-}
-
-// Mock implementation for backward compatibility during migration
-function createFallbackResponse(reason: string, partialResult: any, reqId: string = 'unknown'): any {
-  return createEmptyFallbackAnalysisUtil(reqId, 'fallback', reason);
 }
 
 // Define the AnalysisResponse interface
@@ -343,6 +63,30 @@ interface AnalysisResponse {
   result: any | null;
   error: string | null;
   elapsedTime: number;
+}
+
+// Mock implementation for backward compatibility during migration
+function createFallbackResponse(reason: string, partialResult: any, reqId: string = 'unknown'): any {
+  return {
+    description: "Unable to analyze the image at this time.",
+    nutrients: [],
+    feedback: ["We couldn't process your image. Please try again with a clearer photo of your meal."],
+    suggestions: ["Try taking the photo in better lighting", "Make sure your meal is clearly visible"],
+    detailedIngredients: [],
+    goalScore: {
+      overall: 0,
+      specific: {} as Record<string, number>,
+    },
+    metadata: {
+      requestId: reqId,
+      modelUsed: "text_extraction_fallback",
+      usedFallbackModel: true,
+      processingTime: 0,
+      confidence: 0,
+      error: reason,
+      imageQuality: "unknown"
+    }
+  };
 }
 
 // The main POST handler for image analysis
@@ -368,9 +112,9 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
   try {
     // Parse request body based on content type
     let formData = null;
-    let healthGoals = null;
+    let healthGoals: string[] = [];
     let userId = null;
-    let dietaryPreferences = null;
+    let dietaryPreferences: string[] = [];
     
     const contentType = request.headers.get('content-type') || '';
     console.log(`📄 [${requestId}] Content-Type: ${contentType}`);
@@ -419,14 +163,14 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
         
         // Extract fields from JSON
         formData = jsonData.image || jsonData.file || jsonData.base64Image || null;
-        healthGoals = jsonData.healthGoals || null;
+        healthGoals = jsonData.healthGoals || [];
         userId = jsonData.userId || null;
-        dietaryPreferences = jsonData.dietaryPreferences || null;
+        dietaryPreferences = jsonData.dietaryPreferences || [];
         
         // Log extracted data (excluding image content)
         console.log(`👤 [${requestId}] User ID:`, userId || 'not provided');
-        console.log(`🎯 [${requestId}] Health goals provided:`, !!healthGoals);
-        console.log(`🥕 [${requestId}] Dietary preferences provided:`, !!dietaryPreferences);
+        console.log(`🎯 [${requestId}] Health goals provided:`, healthGoals.length > 0);
+        console.log(`🥕 [${requestId}] Dietary preferences provided:`, dietaryPreferences.length > 0);
         console.log(`🖼️ [${requestId}] Image/file provided:`, !!formData);
       } catch (error) {
         console.error(`❌ [${requestId}] Failed to parse JSON:`, error);
@@ -458,132 +202,204 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     let imageUrl = null;
     if (userId) {
       try {
-        console.log(`🔼 [${requestId}] Uploading image to Firebase for user ${userId}`);
+        console.log(`🔄 [${requestId}] Uploading image to Firebase for user ${userId}`);
         imageUrl = await uploadImageToFirebase(base64Image, userId, requestId);
-        console.log(`✅ [${requestId}] Firebase upload successful: ${imageUrl}`);
+        console.log(`✅ [${requestId}] Image upload successful: ${imageUrl}`);
         response.imageUrl = imageUrl;
-        
-        // Validate the image URL format
-        if (!imageUrl || typeof imageUrl !== 'string' || !imageUrl.startsWith('https://')) {
-          console.error(`❌ [${requestId}] Invalid image URL format: ${imageUrl}`);
-          throw new Error('Invalid image URL format');
-        }
-        
-        // Check if the URL is accessible
-        console.log(`🔍 [${requestId}] Validating image URL accessibility...`);
-        const urlCheckResponse = await fetch(imageUrl, { method: 'HEAD' }).catch(e => {
-          console.error(`❌ [${requestId}] Image URL check failed: ${e.message}`);
-          return null;
-        });
-        
-        if (!urlCheckResponse || !urlCheckResponse.ok) {
-          console.error(`❌ [${requestId}] Image URL is not accessible: ${urlCheckResponse?.status || 'unknown error'}`);
-          throw new Error(`Image URL is not accessible: ${urlCheckResponse?.status || 'unknown error'}`);
-        }
-        
-        console.log(`✅ [${requestId}] Image URL is valid and accessible`);
       } catch (error) {
-        console.error(`❌ [${requestId}] Error uploading image: ${error instanceof Error ? error.message : String(error)}`);
-        return NextResponse.json(
-          {
-            errorCode: "IMAGE_UPLOAD_ERROR",
-            message: "Failed to upload image for analysis",
-            details: error instanceof Error ? error.message : String(error),
-          },
-          { status: 500 }
-        );
+        console.error(`❌ [${requestId}] Firebase upload failed:`, error);
+        // Continue with analysis even if upload fails
       }
-    } else {
-      console.log(`ℹ️ [${requestId}] No userId provided, skipping Firebase upload`);
     }
     
-    // Check OpenAI API key and model availability
-    console.log(`🔑 [${requestId}] Checking OpenAI API key and model availability`);
-    const apiKey = process.env.OPENAI_API_KEY;
-    if (!apiKey) {
-      console.error(`❌ [${requestId}] OpenAI API key is not set in environment variables`);
-      throw new Error('OpenAI API key is not configured');
+    // Set up timeout controller
+    const controller = new AbortController();
+    const globalTimeoutMs = 25000; // 25 second timeout
+    const globalController = new AbortController();
+
+    // Set global timeout
+    const timeoutId = setTimeout(() => {
+      console.warn(`⏱️ [${requestId}] Global timeout reached after ${globalTimeoutMs}ms`);
+      globalController.abort('Global timeout reached');
+    }, globalTimeoutMs);
+
+    // Process the image analysis with text extraction instead of vision models
+    let textualDescription = '';
+    let nutritionData = null;
+    let analysisFailed = false;
+    let failureReason = '';
+    let isTimeout = false;
+    let fallbackMessage = '';
+
+    try {
+      console.log(`🔍 [${requestId}] Starting image analysis using text extraction method`);
+      
+      // Step 1: Extract text description from image
+      const textExtractionResult = await extractTextFromImage(
+        base64Image,
+        requestId,
+        healthGoals
+      );
+      
+      if (!textExtractionResult.success) {
+        throw new Error(textExtractionResult.error || 'Failed to extract text from image');
+      }
+      
+      textualDescription = textExtractionResult.description;
+      console.log(`✅ [${requestId}] Text extraction successful: "${textualDescription.substring(0, 100)}..."`);
+      
+      // Step 2: Get nutrition data based on the extracted text
+      const nutritionResult = await getNutritionData(textualDescription, requestId);
+      
+      if (nutritionResult.success && nutritionResult.data) {
+        nutritionData = nutritionResult.data;
+        console.log(`✅ [${requestId}] Nutrition data retrieved successfully for ${nutritionData.foods?.length || 0} items`);
+      } else {
+        console.warn(`⚠️ [${requestId}] Nutrition data fetch failed: ${nutritionResult.error}`);
+        // Continue with analysis even without nutrition data
+      }
+      
+      // Step 3: Create analysis with the extracted description and nutrition data
+      const healthGoalString = healthGoals.length > 0 ? healthGoals[0] : 'general health';
+      
+      // Combine extracted description with nutrition data
+      let analysisResult: any = {
+        description: textualDescription,
+        nutrients: nutritionData?.nutrients || [],
+        modelInfo: {
+          model: textExtractionResult.modelUsed,
+          usedFallback: false,
+          forceGPT4V: false
+        }
+      };
+      
+      // Add nutrient analysis based on goals if we have nutrition data
+      if (nutritionData) {
+        const goalAnalysis = createNutrientAnalysis(
+          nutritionData.nutrients,
+          healthGoals,
+          requestId
+        );
+        
+        analysisResult = {
+          ...analysisResult,
+          feedback: goalAnalysis.feedback,
+          suggestions: goalAnalysis.suggestions,
+          goalScore: goalAnalysis.goalScore,
+          goalName: formatGoalName(healthGoalString)
+        };
+      } else {
+        // Generic feedback if no nutrition data
+        analysisResult.feedback = [
+          "We analyzed your meal based on visual characteristics only.",
+          "For more specific nutrition advice, try taking a clearer photo."
+        ];
+        analysisResult.suggestions = [
+          "Include all food items in the frame",
+          "Take photos in good lighting"
+        ];
+        analysisResult.goalScore = 5; // Neutral score
+        analysisResult.goalName = formatGoalName(healthGoalString);
+      }
+      
+      // Mark as successful
+      response.success = true;
+      response.result = analysisResult;
+      response.message = 'Analysis completed successfully';
+      
+      // Try to save the meal to Firestore if we have a userId
+      if (userId && imageUrl) {
+        try {
+          console.log(`🔄 [${requestId}] Saving meal to Firestore for user ${userId}`);
+          const saveResult = await trySaveMealServer({
+            userId,
+            analysis: analysisResult,
+            imageUrl,
+            requestId
+          });
+          
+          if (saveResult.success) {
+            console.log(`✅ [${requestId}] Meal saved successfully with ID: ${saveResult.savedMealId}`);
+            response.message = 'Analysis completed and meal saved successfully';
+          } else {
+            console.warn(`⚠️ [${requestId}] Failed to save meal: ${saveResult.error}`);
+            // Don't fail the entire response just because saving failed
+          }
+        } catch (saveError) {
+          console.error(`❌ [${requestId}] Error saving meal:`, saveError);
+          // Continue without failing the whole response
+        }
+      }
+    } catch (error: any) {
+      console.error(`❌ [${requestId}] Analysis failed:`, error);
+      analysisFailed = true;
+      fallbackMessage = error.message || 'Unknown error during analysis';
+      failureReason = error.code || 'analysis_error';
+      
+      // Check if it was a timeout
+      isTimeout = error.name === 'AbortError' || fallbackMessage.includes('timeout');
+      
+      // Create fallback response
+      let fallbackResponse = createEmptyFallbackAnalysis(requestId, "text_extraction", fallbackMessage);
+      
+      response.success = false;
+      response.fallback = true;
+      response.result = fallbackResponse;
+      response.error = fallbackMessage;
+      response.message = 'Analysis failed, using fallback response';
+    } finally {
+      // Clear the timeout
+      clearTimeout(timeoutId);
     }
 
-    const { valid: isApiKeyValid, error: apiKeyError } = await validateAndTestAPIKey(apiKey, requestId);
-
-    if (!isApiKeyValid) {
-      console.error(`❌ [${requestId}] Invalid OpenAI API key:`, apiKeyError);
-      throw new Error(`OpenAI API key validation failed: ${apiKeyError}`);
-    }
-
-    // Check if the preferred model is available 
-    const { isAvailable, fallbackModel, errorMessage: modelError } = 
-      await checkModelAvailability(GPT_VISION_MODEL, apiKey);
-
-    const available = isAvailable;
-    
-    if (!available && !fallbackModel) {
-      console.error(`❌ [${requestId}] No models available:`, modelError);
-      throw new Error(`No OpenAI models available: ${modelError}`);
-    }
-    
-    // Select model to use
-    const modelToUse = available ? GPT_VISION_MODEL : fallbackModel;
-    console.log(`🤖 [${requestId}] Using model: ${modelToUse} ${!available ? '(fallback)' : ''}`);
-    
-    // Analyze image with the imported function
-    console.log(`🧠 [${requestId}] Analyzing image with GPT-4V`);
-    const analysisResponse = await analyzeWithGPT4V(
-      base64Image, 
-      Array.isArray(healthGoals) ? healthGoals : [], 
-      Array.isArray(dietaryPreferences) ? dietaryPreferences : [],
-      requestId
-    );
-    console.log(`✅ [${requestId}] Analysis complete`);
-    
-    // Extract the analysis result and metadata
-    const analysisResult = analysisResponse.analysis;
-    const isFallbackResponse = 
-      !analysisResponse.success || 
-      !!analysisResponse.error;
-    
-    // Build success response
-    response.success = analysisResponse.success;
-    response.fallback = isFallbackResponse;
-    response.message = isFallbackResponse 
-      ? `Analysis completed with fallback content. ${analysisResponse.error || ''}`
-      : 'Analysis completed successfully';
-    response.result = analysisResult;
-    
     // Calculate elapsed time
     const elapsedTime = Date.now() - startTime;
     response.elapsedTime = elapsedTime;
-    
-    console.log(`✅ [${requestId}] Request completed in ${elapsedTime}ms. Fallback: ${isFallbackResponse}`);
+
+    // Log response and clean up
+    console.log(`📤 [${requestId}] Analysis complete in ${elapsedTime}ms`);
+    console.log(`📈 [${requestId}] Success: ${response.success}, Fallback: ${response.fallback}`);
     console.timeEnd(`⏱️ [${requestId}] analyzeImage POST`);
-    
+
     return NextResponse.json(response);
-  } catch (error: any) {
-    const errorMessage = error?.message || 'Unknown error';
-    const elapsedTime = Date.now() - startTime;
+  } catch (error) {
+    // Handle any unexpected errors
+    console.error(`❌ [${requestId}] Unexpected error in analyzeImage:`, error);
     
-    console.error(`❌ [${requestId}] Request failed after ${elapsedTime}ms:`, errorMessage);
-    
-    // Generate fallback analysis if main analysis fails
-    let fallbackAnalysis = null;
-    try {
-      console.log(`🔄 [${requestId}] Generating fallback analysis`);
-      fallbackAnalysis = createEmptyFallbackAnalysisUtil(requestId, 'fallback', errorMessage);
-      console.log(`✅ [${requestId}] Fallback analysis generated`);
-    } catch (fallbackError: any) {
-      console.error(`❌ [${requestId}] Failed to generate fallback analysis:`, fallbackError);
-    }
-    
-    // Build error response
     response.success = false;
-    response.fallback = !!fallbackAnalysis;
-    response.message = `Analysis failed: ${errorMessage}`;
-    response.error = errorMessage;
-    response.result = fallbackAnalysis;
-    response.elapsedTime = elapsedTime;
+    response.fallback = true;
+    response.message = 'An unexpected error occurred during image analysis.';
+    response.error = error instanceof Error ? error.message : String(error);
+    response.result = createFallbackResponse('unexpected_error', null, requestId);
+    response.elapsedTime = Date.now() - startTime;
     
     console.timeEnd(`⏱️ [${requestId}] analyzeImage POST`);
+    
     return NextResponse.json(response, { status: 500 });
+  }
+}
+
+// Helper function to format goal name
+function formatGoalName(healthGoal: string): string {
+  if (!healthGoal) return 'General Health';
+  
+  const goal = healthGoal.toLowerCase();
+  
+  if (goal.includes('weight loss') || goal.includes('lose weight')) {
+    return 'Weight Loss';
+  } else if (goal.includes('muscle') || goal.includes('strength')) {
+    return 'Build Muscle';
+  } else if (goal.includes('keto') || goal.includes('low carb')) {
+    return 'Low Carb';
+  } else if (goal.includes('heart') || goal.includes('blood pressure')) {
+    return 'Heart Health';
+  } else if (goal.includes('diabetes') || goal.includes('blood sugar')) {
+    return 'Blood Sugar Management';
+  } else {
+    // Capitalize first letter of each word
+    return healthGoal
+      .split(' ')
+      .map(word => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
+      .join(' ');
   }
 }
