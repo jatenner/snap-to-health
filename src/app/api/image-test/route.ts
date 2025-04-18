@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { extractBase64Image, extractTextFromImage } from '@/lib/imageProcessing';
+import { getNutritionData, createNutrientAnalysis } from '@/lib/nutritionixApi';
 import crypto from 'crypto';
-import * as parseMultipartForm from 'parse-multipart-data';
 
 // Simple GET handler to provide test instructions
 export async function GET() {
@@ -21,139 +22,88 @@ export async function GET() {
   });
 }
 
-// Utility to extract file from multipart form data
-function extractFileFromFormData(buffer: Buffer, contentType: string) {
-  const boundary = contentType.split('boundary=')[1].trim();
-  try {
-    const parts = parseMultipartForm.parse(buffer, boundary);
-    const imagePart = parts.find((part) => {
-      return part && typeof part === 'object' && 'name' in part && part.name === 'image';
-    });
-    
-    if (!imagePart) {
-      return { success: false, error: 'No image field found in form data' };
-    }
-    
-    return { 
-      success: true, 
-      data: imagePart.data, 
-      filename: imagePart.filename,
-      contentType: imagePart.type 
-    };
-  } catch (error: any) {
-    return { 
-      success: false, 
-      error: `Failed to parse form data: ${error.message}` 
-    };
-  }
-}
-
-// Utility to convert buffer to data URL
-function bufferToDataUrl(buffer: Buffer, mimeType: string): string {
-  return `data:${mimeType};base64,${buffer.toString('base64')}`;
-}
-
 // POST handler to process image
-export async function POST(request: NextRequest) {
+export async function POST(request: NextRequest): Promise<NextResponse> {
   const requestId = crypto.randomUUID();
-  console.log(`[Image Test] Processing request ${requestId}`);
-  
-  const contentType = request.headers.get('content-type') || '';
-  let imageBuffer: Buffer | null = null;
-  let imageData = '';
-  let imageMimeType = '';
-  let originalFileName = '';
+  console.log(`[${requestId}] Starting image-test endpoint`);
   
   try {
-    if (contentType.includes('multipart/form-data')) {
-      console.log(`[Image Test] Processing multipart form data`);
-      const formBuffer = await request.arrayBuffer();
-      const result = extractFileFromFormData(Buffer.from(formBuffer), contentType);
-      
-      if (!result.success) {
-        return NextResponse.json({ success: false, error: result.error }, { status: 400 });
-      }
-      
-      imageBuffer = result.data as Buffer;
-      imageMimeType = result.contentType || 'application/octet-stream';
-      originalFileName = result.filename || 'unknown';
-      imageData = bufferToDataUrl(imageBuffer, imageMimeType);
-      
-    } else if (contentType.includes('application/json')) {
-      console.log(`[Image Test] Processing JSON data`);
-      const { image } = await request.json();
-      
-      if (!image) {
-        return NextResponse.json({ 
-          success: false, 
-          error: 'No image field in JSON payload' 
-        }, { status: 400 });
-      }
-      
-      imageData = image;
-      
-      // Handle both data URLs and raw base64
-      if (image.startsWith('data:')) {
-        const matches = image.match(/^data:([^;]+);base64,(.+)$/);
-        if (!matches) {
-          return NextResponse.json({ 
-            success: false, 
-            error: 'Invalid data URL format' 
-          }, { status: 400 });
-        }
-        
-        imageMimeType = matches[1];
-        const base64Data = matches[2];
-        imageBuffer = Buffer.from(base64Data, 'base64');
-      } else {
-        // Assume it's raw base64
-        imageMimeType = 'application/octet-stream';
-        try {
-          imageBuffer = Buffer.from(image, 'base64');
-        } catch (e) {
-          return NextResponse.json({ 
-            success: false, 
-            error: 'Invalid base64 data' 
-          }, { status: 400 });
-        }
-      }
-      
-      originalFileName = 'from-json-payload';
-    } else {
-      return NextResponse.json({ 
-        success: false, 
-        error: `Unsupported content type: ${contentType}` 
-      }, { status: 415 });
-    }
+    // Parse request body
+    const formData = await request.formData();
+    const imageFile = formData.get('image');
     
-    // Ensure we have image data
-    if (!imageBuffer) {
-      return NextResponse.json({ 
-        success: false, 
-        error: 'Failed to process image data' 
+    if (!imageFile) {
+      return NextResponse.json({
+        success: false,
+        message: "No image provided"
       }, { status: 400 });
     }
-
-    // Return image processing results
+    
+    // Extract image as base64
+    console.log(`[${requestId}] Extracting base64 from image`);
+    const base64Image = await extractBase64Image(imageFile, requestId);
+    
+    if (!base64Image) {
+      return NextResponse.json({
+        success: false,
+        message: "Failed to extract base64 from image"
+      }, { status: 400 });
+    }
+    
+    // Extract text from image
+    console.log(`[${requestId}] Extracting text from image`);
+    const textExtractionResult = await extractTextFromImage(base64Image, requestId);
+    
+    if (!textExtractionResult.success || !textExtractionResult.description) {
+      return NextResponse.json({
+        success: false,
+        stage: "text_extraction",
+        message: "Failed to extract text from image",
+        error: textExtractionResult.error || "Unknown error"
+      }, { status: 500 });
+    }
+    
+    // Log the extracted description
+    console.log(`[${requestId}] Extracted description: ${textExtractionResult.description}`);
+    
+    // Get nutrition data from the Nutritionix API
+    console.log(`[${requestId}] Getting nutrition data from Nutritionix API`);
+    const nutritionResult = await getNutritionData(textExtractionResult.description, requestId);
+    
+    if (!nutritionResult.success || !nutritionResult.data) {
+      return NextResponse.json({
+        success: false,
+        stage: "nutrition_api",
+        message: "Failed to get nutrition data",
+        error: nutritionResult.error || "Unknown error",
+        textDescription: textExtractionResult.description
+      }, { status: 500 });
+    }
+    
+    // Generate analysis from nutrition data
+    const { nutrients, foods } = nutritionResult.data;
+    const analysis = createNutrientAnalysis(nutrients, [], requestId);
+    
+    // Format the response
     return NextResponse.json({
       success: true,
-      processingResults: {
-        requestId,
-        originalFileName,
-        mimeType: imageMimeType,
-        bufferSize: imageBuffer.length,
-        dataUrlLength: imageData.length,
-        isDataUrl: imageData.startsWith('data:'),
-        bufferSample: imageBuffer.slice(0, 16).toString('hex')
+      data: {
+        textDescription: textExtractionResult.description,
+        modelUsed: textExtractionResult.modelUsed,
+        nutrients: nutrients,
+        foods: foods,
+        feedback: analysis.feedback,
+        suggestions: analysis.suggestions,
+        goalScore: analysis.goalScore
       }
     });
     
-  } catch (error: any) {
-    console.error(`[Image Test] Error processing request: ${error.message}`);
-    return NextResponse.json({ 
-      success: false, 
-      error: `Error processing image: ${error.message}`,
-      requestId
+  } catch (error) {
+    console.error(`[${requestId}] Error in image-test endpoint:`, error);
+    return NextResponse.json({
+      success: false,
+      message: "An error occurred while processing the image",
+      error: error instanceof Error ? error.message : String(error)
     }, { status: 500 });
   }
 } 
