@@ -147,6 +147,40 @@ To deploy the Firebase security rules, use the included script:
 
 This will validate and deploy the Firestore and Storage security rules to your Firebase project.
 
+## Deployment
+
+### Vercel Deployment
+
+The application is configured for seamless deployment with Vercel. To deploy:
+
+1. Set up a Vercel account and connect it to your GitHub repository
+2. Configure the following environment variables in Vercel:
+   - All environment variables from your `.env.local` file
+   - Make sure to use the base64-encoded Firebase private key
+
+```bash
+# Deploy to Vercel
+vercel
+```
+
+For production deployment:
+
+```bash
+vercel --prod
+```
+
+### Continuous Integration
+
+The project includes a GitHub Actions workflow for continuous integration in `.github/workflows/ci.yml`. This workflow:
+
+1. Runs on pushes to `main` and `deploy/ocr-analysis-v1` branches
+2. Installs dependencies
+3. Creates necessary environment variables for testing
+4. Builds the project
+5. Runs linting
+
+To check the status of your CI builds, visit the Actions tab in your GitHub repository.
+
 ## Validating Firebase Setup
 
 To validate your Firebase configuration, run the test script:
