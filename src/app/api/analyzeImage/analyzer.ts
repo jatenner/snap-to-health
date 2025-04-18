@@ -1,37 +1,16 @@
 import { NextResponse } from 'next/server';
+import { createEmptyFallbackAnalysis as createEmptyFallbackAnalysisUtil } from '@/lib/analyzeImageWithGPT4V';
+import crypto from 'crypto';
 
 /**
  * Creates an empty fallback analysis result for when image processing fails
  */
 export function createEmptyFallbackAnalysis() {
-  return {
-    fallback: true,
-    success: false,
-    description: "Unable to analyze the image",
-    ingredientList: [],
-    detailedIngredients: [],
-    confidence: 0,
-    basicNutrition: {
-      calories: "Unknown",
-      protein: "Unknown",
-      carbs: "Unknown",
-      fat: "Unknown"
-    },
-    goalImpactScore: 0,
-    goalName: "Unknown",
-    scoreExplanation: "We couldn't analyze this image properly. Please try again with a clearer photo.",
-    feedback: [
-      "We couldn't process this image. This could be due to the image being invalid, corrupted, or not containing food.",
-      "Try uploading a clearer photo with good lighting.",
-      "Make sure your image shows the food items clearly."
-    ],
-    suggestions: [
-      "Take photos in good lighting",
-      "Ensure your food is clearly visible in the frame",
-      "Use a higher quality image if possible"
-    ],
-    imageChallenges: ["Unable to process image"]
-  };
+  return createEmptyFallbackAnalysisUtil(
+    crypto.randomUUID(), 
+    'none', 
+    'Analysis failed due to image processing error'
+  );
 }
 
 /**

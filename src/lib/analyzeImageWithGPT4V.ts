@@ -252,45 +252,69 @@ export async function analyzeImageWithGPT4V(
     // Construct the system prompt
     const systemPrompt = `You are an expert nutritionist AI that analyzes meal images and provides detailed nutritional information and health advice.
 
-GOAL: Analyze the food in the image and return a JSON object with the following structure:
+GOAL: Analyze the food in the image and return a JSON object with EXACTLY the following structure:
 {
   "description": "Detailed description of the meal and its components",
-  "nutrients": {
-    "calories": number (kcal),
-    "protein": number (grams),
-    "carbs": number (grams),
-    "fat": number (grams),
-    "fiber": number (grams),
-    "sugar": number (grams),
-    "sodium": number (mg)
-  },
-  "feedback": ["List of health feedback points about the meal"],
-  "suggestions": ["List of suggestions to improve the meal's nutritional value"],
-  "warnings": ["List of potential health concerns if applicable, or empty array"],
-  "goalScore": number (0-100 representing how well this meal fits with the user's health goals),
-  "scoreExplanation": "Brief explanation of the goal score",
+  "nutrients": [
+    {
+      "name": "calories",
+      "value": "500",
+      "unit": "kcal", 
+      "isHighlight": true
+    },
+    {
+      "name": "protein",
+      "value": "20",
+      "unit": "g",
+      "isHighlight": true
+    },
+    {
+      "name": "carbs",
+      "value": "40",
+      "unit": "g",
+      "isHighlight": false
+    },
+    {
+      "name": "fat",
+      "value": "10",
+      "unit": "g",
+      "isHighlight": false
+    }
+  ],
+  "feedback": "Detailed feedback about the nutritional value of this meal",
+  "suggestions": [
+    "Suggestion 1 to improve nutritional value",
+    "Suggestion 2 to improve nutritional value"
+  ],
   "detailedIngredients": [
     {
-      "name": "Name of ingredient",
-      "estimatedAmount": "Portion estimate (e.g., '1 cup', '2 oz')",
-      "calories": number (estimated kcal)
-    },
-    ...more ingredients
-  ]
+      "name": "Ingredient name",
+      "category": "Protein/Carb/Fat/Vegetable/Fruit",
+      "confidence": 0.9
+    }
+  ],
+  "goalScore": {
+    "overall": 75,
+    "specific": {
+      "weightLoss": 60,
+      "muscleBuilding": 80
+    }
+  }
 }
 
-IMPORTANT: 
-- You MUST output valid JSON only
-- All numeric values must be numbers, not strings
-- All arrays must be properly formed
-- Your response should contain ALL the fields specified above
-- If you cannot identify the food clearly, state this in the description but still provide a best estimate for nutrients
+CRITICAL REQUIREMENTS:
+1. The "nutrients" field MUST be an ARRAY of objects, not an object
+2. Each nutrient must have the fields: name, value (as string), unit, and isHighlight
+3. "feedback" must be a string (not an array)
+4. "suggestions" must be an array of strings
+5. "detailedIngredients" must be an array of objects
+6. "goalScore" must have both "overall" (number 0-100) and "specific" (object with string keys and number values)
+7. STRICTLY follow this format - the application WILL FAIL if you don't
 
 User Health Goals: ${healthGoals.join(', ')}
 Dietary Preferences/Restrictions: ${dietaryPreferences.join(', ')}
 
-NOTE: Be accurate but conservative with nutrient estimates. If you don't see food clearly, say so. RETURN ONLY VALID JSON. All numeric values should be numbers, not strings.
-${usedFallbackModel ? '\nNOTE: This analysis is being performed by a fallback model with limited capabilities.' : ''}`;
+Return ONLY the valid JSON object - DO NOT include markdown code blocks, explanations, or any other text.`;
     
     // Format the image URL correctly
     const formattedImage = base64Image.startsWith('data:image') 
@@ -342,16 +366,18 @@ ${usedFallbackModel ? '\nNOTE: This analysis is being performed by a fallback mo
       parsedResponse = JSON.parse(responseContent);
       
       // Verify we have the required fields
-      const requiredKeys = ['description', 'nutrients', 'feedback', 'suggestions', 'detailedIngredients'];
+      const requiredKeys = ['description', 'nutrients', 'feedback', 'suggestions', 'detailedIngredients', 'goalScore'];
       const missingKeys = requiredKeys.filter(key => !parsedResponse[key]);
       
       if (missingKeys.length > 0) {
         console.error(`⚠️ [${requestId}] Missing required keys in GPT response: ${missingKeys.join(', ')}`);
         
-        // We'll still return the partial response, but mark as not fully successful
+        // Create a fixed response that fills in missing fields
+        const fallbackAnalysis = createPartialFallbackAnalysis(responseContent, requestId, modelToUse, false, parsedResponse);
+        
         return {
-          analysis: parsedResponse,
-          success: false,
+          analysis: fallbackAnalysis,
+          success: false, 
           error: `Incomplete analysis result: missing ${missingKeys.join(', ')}`,
           modelUsed: modelToUse,
           usedFallbackModel,
@@ -360,25 +386,74 @@ ${usedFallbackModel ? '\nNOTE: This analysis is being performed by a fallback mo
         };
       }
       
-      // Also check for nutrient value structure
+      // Ensure nutrients are in the correct array format
       if (parsedResponse.nutrients) {
-        const requiredNutrients = ['calories', 'protein', 'carbs', 'fat'];
-        const missingNutrients = requiredNutrients.filter(
-          nutrient => typeof parsedResponse.nutrients[nutrient] !== 'number'
-        );
-        
-        if (missingNutrients.length > 0) {
-          console.error(`⚠️ [${requestId}] Missing or invalid nutrient values: ${missingNutrients.join(', ')}`);
-          return {
-            analysis: parsedResponse,
-            success: false,
-            error: `Invalid nutrient values: ${missingNutrients.join(', ')}`,
-            modelUsed: modelToUse,
-            usedFallbackModel,
-            forceGPT4V,
-            rawResponse: responseContent
-          };
+        // If nutrients is an object (old format), convert to array format
+        if (!Array.isArray(parsedResponse.nutrients) && typeof parsedResponse.nutrients === 'object') {
+          console.log(`⚠️ [${requestId}] Converting nutrients from object to array format`);
+          
+          const nutrientsArray: Nutrient[] = [];
+          const nutrientsObj = parsedResponse.nutrients;
+          
+          // Convert each nutrient key to an array item
+          Object.keys(nutrientsObj).forEach(key => {
+            if (nutrientsObj[key] !== null && nutrientsObj[key] !== undefined) {
+              nutrientsArray.push({
+                name: key,
+                value: String(nutrientsObj[key]), // Ensure value is a string
+                unit: key === 'calories' ? 'kcal' : key === 'sodium' ? 'mg' : 'g',
+                isHighlight: ['calories', 'protein', 'carbs', 'fat'].includes(key)
+              });
+            }
+          });
+          
+          // Replace the original nutrients object with the array
+          parsedResponse.nutrients = nutrientsArray;
         }
+        
+        // Ensure values are strings
+        if (Array.isArray(parsedResponse.nutrients)) {
+          parsedResponse.nutrients = parsedResponse.nutrients.map(nutrient => ({
+            ...nutrient,
+            value: String(nutrient.value) // Ensure value is a string
+          }));
+        }
+      }
+      
+      // Handle feedback as string or array
+      if (Array.isArray(parsedResponse.feedback)) {
+        console.log(`⚠️ [${requestId}] Converting feedback from array to string`);
+        parsedResponse.feedback = parsedResponse.feedback.join('. ');
+      }
+      
+      // Ensure goalScore has the right structure
+      if (parsedResponse.goalScore) {
+        if (typeof parsedResponse.goalScore === 'number') {
+          // If goalScore is just a number, convert to the expected object structure
+          console.log(`⚠️ [${requestId}] Converting goalScore from number to object`);
+          const scoreValue = parsedResponse.goalScore;
+          parsedResponse.goalScore = {
+            overall: scoreValue,
+            specific: {} as Record<string, number>
+          };
+        } else if (!parsedResponse.goalScore.specific) {
+          // Ensure specific exists
+          parsedResponse.goalScore.specific = {} as Record<string, number>;
+        }
+        
+        // Add health goals as specific scores if missing
+        if (Object.keys(parsedResponse.goalScore.specific).length === 0 && healthGoals.length > 0) {
+          healthGoals.forEach(goal => {
+            const normalizedGoal = goal.toLowerCase().replace(/\s+/g, '');
+            parsedResponse.goalScore.specific[normalizedGoal] = parsedResponse.goalScore.overall || 50;
+          });
+        }
+      } else {
+        // Create default goalScore if missing
+        parsedResponse.goalScore = {
+          overall: 50,
+          specific: {} as Record<string, number>
+        };
       }
       
       return {
@@ -392,6 +467,30 @@ ${usedFallbackModel ? '\nNOTE: This analysis is being performed by a fallback mo
     } catch (parseError) {
       console.error(`❌ [${requestId}] Failed to parse GPT response as JSON: ${(parseError as Error).message}`);
       console.error(`❌ [${requestId}] Raw non-JSON response: ${responseContent}`);
+      
+      // Attempt to extract JSON from the text
+      try {
+        console.log(`🔄 [${requestId}] Attempting to extract JSON from text response`);
+        const extractedJson = extractJSONFromText(responseContent);
+        
+        if (extractedJson) {
+          console.log(`✅ [${requestId}] Successfully extracted JSON from text response`);
+          // Create a partial fallback using the extracted JSON
+          const fallbackAnalysis = createPartialFallbackAnalysis(responseContent, requestId, modelToUse, true, extractedJson);
+          
+          return {
+            analysis: fallbackAnalysis,
+            success: false,
+            error: `Extracted JSON from malformed response`,
+            modelUsed: modelToUse,
+            usedFallbackModel: true,
+            forceGPT4V,
+            rawResponse: responseContent
+          };
+        }
+      } catch (extractError) {
+        console.error(`❌ [${requestId}] Failed to extract JSON from text: ${(extractError as Error).message}`);
+      }
       
       // If we can't parse the JSON, return an empty analysis
       return {
@@ -597,4 +696,147 @@ export function createEmergencyFallbackResponse(): any {
       imageQuality: "unknown"
     }
   };
+}
+
+/**
+ * Extracts JSON from text, attempting to handle malformed JSON responses
+ */
+function extractJSONFromText(text: string): any | null {
+  try {
+    // Try to find JSON content between curly braces
+    const jsonMatch = text.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) {
+      throw new Error('No JSON object found in response');
+    }
+    
+    return JSON.parse(jsonMatch[0]);
+  } catch (parseError) {
+    // Try to clean the content before parsing
+    try {
+      // Find the JSON-like content
+      const jsonMatch = text.match(/\{[\s\S]*\}/);
+      if (!jsonMatch) {
+        return null;
+      }
+      
+      let cleanedText = jsonMatch[0]
+        .replace(/(\r\n|\n|\r)/gm, '') // Remove line breaks
+        .replace(/,\s*}/g, '}')        // Remove trailing commas
+        .replace(/,\s*]/g, ']');       // Remove trailing commas in arrays
+        
+      return JSON.parse(cleanedText);
+    } catch (secondError) {
+      return null;
+    }
+  }
+}
+
+/**
+ * Creates a partial fallback analysis from incomplete data
+ */
+function createPartialFallbackAnalysis(
+  rawContent: string, 
+  requestId: string, 
+  modelUsed: string, 
+  isParseError: boolean,
+  partialData?: any
+): AnalysisResult {
+  console.log(`🛠️ [${requestId}] Creating partial fallback analysis from ${isParseError ? 'raw text' : 'partial data'}`);
+  
+  // Start with an empty fallback
+  const fallback = createEmptyFallbackAnalysis(
+    requestId, 
+    modelUsed, 
+    isParseError ? 'Failed to parse JSON response' : 'Missing required fields in response'
+  );
+  
+  try {
+    // If we have partial data, use what's valid
+    if (partialData) {
+      console.log(`✨ [${requestId}] Using partial data for fallback analysis`);
+      
+      // Copy any valid fields from partial data
+      if (partialData.description) fallback.description = partialData.description;
+      
+      // Handle nutrients (either as array or object)
+      if (partialData.nutrients) {
+        if (Array.isArray(partialData.nutrients)) {
+          fallback.nutrients = partialData.nutrients;
+        } else if (typeof partialData.nutrients === 'object') {
+          const nutrientsArray: Nutrient[] = [];
+          Object.keys(partialData.nutrients).forEach(key => {
+            if (partialData.nutrients[key] !== null && partialData.nutrients[key] !== undefined) {
+              nutrientsArray.push({
+                name: key,
+                value: String(partialData.nutrients[key]),
+                unit: key === 'calories' ? 'kcal' : key === 'sodium' ? 'mg' : 'g',
+                isHighlight: ['calories', 'protein', 'carbs', 'fat'].includes(key)
+              });
+            }
+          });
+          fallback.nutrients = nutrientsArray;
+        }
+      }
+      
+      // Handle feedback (string or array)
+      if (typeof partialData.feedback === 'string') {
+        fallback.feedback = partialData.feedback;
+      } else if (Array.isArray(partialData.feedback) && partialData.feedback.length > 0) {
+        fallback.feedback = partialData.feedback.join('. ');
+      }
+      
+      // Handle suggestions (array)
+      if (Array.isArray(partialData.suggestions)) {
+        fallback.suggestions = partialData.suggestions;
+      }
+      
+      // Handle detailed ingredients
+      if (Array.isArray(partialData.detailedIngredients)) {
+        fallback.detailedIngredients = partialData.detailedIngredients;
+      }
+      
+      // Handle goalScore
+      if (partialData.goalScore) {
+        if (typeof partialData.goalScore === 'number') {
+          fallback.goalScore = {
+            overall: partialData.goalScore,
+            specific: {} as Record<string, number>
+          };
+        } else if (typeof partialData.goalScore === 'object') {
+          fallback.goalScore = {
+            overall: partialData.goalScore.overall || 0,
+            specific: partialData.goalScore.specific || {} as Record<string, number>
+          };
+        }
+      }
+      
+      fallback.metadata.isPartialResult = true;
+      return fallback;
+    }
+    
+    // For parse errors, try to extract some information from the raw text
+    if (isParseError && rawContent) {
+      console.log(`🔍 [${requestId}] Attempting to extract information from raw text`);
+      
+      // Try to find a description
+      const descriptionMatch = rawContent.match(/description["\s:]+([^"}.]+)/i);
+      if (descriptionMatch && descriptionMatch[1]) {
+        fallback.description = descriptionMatch[1].trim();
+      }
+      
+      // Try to find feedback
+      const feedbackMatch = rawContent.match(/feedback["\s:]+([^"}.]+)/i);
+      if (feedbackMatch && feedbackMatch[1]) {
+        fallback.feedback = feedbackMatch[1].trim();
+      }
+      
+      fallback.metadata.isPartialResult = true;
+      fallback.metadata.extractedFromText = true;
+    }
+  } catch (extractionError) {
+    console.error(`❌ [${requestId}] Error creating partial fallback:`, 
+      extractionError instanceof Error ? extractionError.message : String(extractionError));
+  }
+  
+  return fallback;
 }

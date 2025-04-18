@@ -6,6 +6,7 @@ import { trySaveMealServer } from '@/lib/serverMealUtils';
 import { createAnalysisResponse, createEmptyFallbackAnalysis, createErrorResponse } from './analyzer';
 import { isValidAnalysis, createFallbackAnalysis, normalizeAnalysisResult } from '@/lib/utils/analysisValidator';
 import { safeExtractImage } from '@/lib/imageProcessing/safeExtractImage';
+import { createFallbackResponse as createFallbackResponseUtil } from '@/lib/analyzeImageWithGPT4V';
 
 // Placeholder image for development fallback
 const PLACEHOLDER_IMAGE = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
@@ -753,7 +754,8 @@ function validateGptAnalysisResult(analysis: any): boolean {
 
 // Mock implementation for backward compatibility during migration
 function createFallbackResponse(reason: string, partialResult: any): any {
-  return createEmptyFallbackAnalysis();
+  // Use the utility function from the library with the same name
+  return createFallbackResponseUtil(reason, partialResult);
 }
 
 // The main POST handler for image analysis
