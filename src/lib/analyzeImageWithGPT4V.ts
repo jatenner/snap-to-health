@@ -33,8 +33,16 @@ if (!process.env.OPENAI_API_KEY) {
  */
 function validateOpenAIApiKey(apiKey: string | undefined): boolean {
   if (!apiKey) return false;
-  // Check for the expected format of OpenAI API keys
-  return /^sk-(org|proj)?-[A-Za-z0-9]{24,}$/.test(apiKey);
+  
+  // Check for various OpenAI API key formats:
+  // 1. Project API keys: sk-proj-{projectId}_{random string}
+  // 2. Organization API keys: sk-org-{orgId}_{random string}
+  // 3. Standard API keys: sk-{random string}
+  return (
+    apiKey.startsWith('sk-proj-') || 
+    apiKey.startsWith('sk-org-') || 
+    /^sk-[A-Za-z0-9]{48,}$/.test(apiKey)
+  );
 }
 
 /**
@@ -99,7 +107,13 @@ export async function checkModelAvailability(
     };
   }
   
-  const isValidKeyFormat = /^sk-(org|proj)?-[A-Za-z0-9]{24,}$/.test(openAIApiKey);
+  // Project API keys are longer and have different format
+  // Modern key format: sk-proj-{projectId}_{random string}
+  const isValidKeyFormat = 
+    openAIApiKey.startsWith('sk-proj-') || 
+    openAIApiKey.startsWith('sk-org-') || 
+    /^sk-[A-Za-z0-9]{48,}$/.test(openAIApiKey);
+    
   if (!isValidKeyFormat) {
     console.error(`❌ [${id}] OpenAI API key has invalid format`);
     return {
