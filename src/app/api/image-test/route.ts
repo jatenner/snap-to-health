@@ -26,7 +26,9 @@ function extractFileFromFormData(buffer: Buffer, contentType: string) {
   const boundary = contentType.split('boundary=')[1].trim();
   try {
     const parts = parseMultipartForm.parse(buffer, boundary);
-    const imagePart = parts.find((part: { name: string }) => part.name === 'image');
+    const imagePart = parts.find((part) => {
+      return part && typeof part === 'object' && 'name' in part && part.name === 'image';
+    });
     
     if (!imagePart) {
       return { success: false, error: 'No image field found in form data' };

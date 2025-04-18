@@ -330,7 +330,7 @@ function validateGptAnalysisResult(analysis: any): boolean {
 
 // Mock implementation for backward compatibility during migration
 function createFallbackResponse(reason: string, partialResult: any, reqId: string = 'unknown'): any {
-  return createEmptyFallbackAnalysisUtil(reqId, reason);
+  return createEmptyFallbackAnalysisUtil(reqId, 'fallback', reason);
 }
 
 // Define the AnalysisResponse interface
@@ -569,7 +569,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     let fallbackAnalysis = null;
     try {
       console.log(`🔄 [${requestId}] Generating fallback analysis`);
-      fallbackAnalysis = createEmptyFallbackAnalysisUtil(requestId, errorMessage);
+      fallbackAnalysis = createEmptyFallbackAnalysisUtil(requestId, 'fallback', errorMessage);
       console.log(`✅ [${requestId}] Fallback analysis generated`);
     } catch (fallbackError: any) {
       console.error(`❌ [${requestId}] Failed to generate fallback analysis:`, fallbackError);
