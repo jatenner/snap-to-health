@@ -3,10 +3,11 @@
  */
 
 // Default GPT model for text-based analysis
-export const GPT_MODEL = 'gpt-3.5-turbo';
+export const GPT_MODEL = 'gpt-4o';
 
 // Fallback models in order of preference
 export const FALLBACK_MODELS = [
+  'gpt-4',
   'gpt-3.5-turbo-16k',
   'gpt-3.5-turbo'
 ];

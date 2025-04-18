@@ -7,6 +7,7 @@ import {
   getNutritionData, 
   NutrientInfo 
 } from './nutritionixApi';
+import { API_CONFIG } from './constants';
 
 // Define required interfaces locally instead of importing
 export interface DetailedIngredient {
