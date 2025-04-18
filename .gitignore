@@ -34,5 +34,3 @@ next-env.d.ts
 
 # Firebase Service Account
 firebase-service-account.json
-keys/snaphealth-d32fe57.json
-keys/*.json

@@ -43,10 +43,6 @@ interface AnalysisResult {
     imageQuality: string;
     isPartialResult?: boolean;
     extractedFromText?: boolean;
-    generatedAt?: string;
-    recoveryAttempted: boolean;
-    partialFieldsExtracted?: string;
-    fallback: boolean;
   };
 }
 
@@ -83,23 +79,16 @@ const validateOpenAIApiKey = (apiKey: string): boolean => {
  * Create an empty fallback analysis when no GPT result is available
  */
 export function createEmptyFallbackAnalysis(
-  requestId: string = crypto.randomUUID(), 
-  modelUsed: string = 'fallback', 
-  errorMessage: string = 'Analysis failed'
+  requestId: string, 
+  modelUsed: string, 
+  errorMessage: string
 ): AnalysisResult {
   return {
     description: "Unable to analyze the image at this time.",
-    nutrients: [
-      { name: 'calories', value: '0', unit: 'kcal', isHighlight: true },
-      { name: 'protein', value: '0', unit: 'g', isHighlight: true },
-      { name: 'carbs', value: '0', unit: 'g', isHighlight: true },
-      { name: 'fat', value: '0', unit: 'g', isHighlight: true }
-    ],
+    nutrients: [],
     feedback: "We couldn't process your image. Please try again with a clearer photo of your meal.",
     suggestions: ["Try taking the photo in better lighting", "Make sure your meal is clearly visible"],
-    detailedIngredients: [
-      { name: "Unknown food item", category: "Unknown", confidence: 0 }
-    ],
+    detailedIngredients: [],
     goalScore: {
       overall: 0,
       specific: {} as Record<string, number>,
@@ -111,10 +100,7 @@ export function createEmptyFallbackAnalysis(
       processingTime: 0,
       confidence: 0,
       error: errorMessage,
-      imageQuality: "unknown",
-      recoveryAttempted: true,
-      generatedAt: new Date().toISOString(),
-      fallback: true  // Explicit flag to indicate this is a fallback response
+      imageQuality: "unknown"
     }
   };
 }
@@ -548,270 +534,25 @@ export function needsConfidenceEnrichment(analysis: any): boolean {
 }
 
 /**
- * Enrich an analysis result with additional data or defaults for any missing required fields
- * This function ensures all required fields exist with at least default values
+ * Stub implementation to enrich analysis results
  */
-export function enrichAnalysisResult(analysis: any, shouldLog = true): any {
-  if (!analysis) {
-    console.warn('Cannot enrich null or undefined analysis');
-    return null;
-  }
-
-  if (shouldLog) {
-    console.log(`Enriching analysis result - input structure:`, 
-      Object.keys(analysis).map(k => `${k}: ${typeof analysis[k]}`).join(', '));
-  }
-
-  // Create a safe copy to avoid mutating the original
-  const enriched = { ...analysis };
-  
-  // Ensure metadata exists
-  if (!enriched.metadata) {
-    enriched.metadata = {};
-  }
-  
-  // Add enrichment metadata
-  enriched.metadata.enrichedAt = new Date().toISOString();
-  enriched.metadata.wasEnriched = true;
-
-  // Ensure description exists
-  if (!enriched.description) {
-    enriched.description = "This food appears to be a meal, but details couldn't be fully analyzed.";
-    enriched.metadata.descriptionWasDefault = true;
-  }
-
-  // Handle nutrients in different formats and ensure they exist
-  if (!enriched.nutrients) {
-    // Create default nutrients if missing entirely
-    enriched.nutrients = [
-      { name: 'calories', value: 0, unit: 'kcal', isHighlight: true },
-      { name: 'protein', value: 0, unit: 'g', isHighlight: true },
-      { name: 'carbs', value: 0, unit: 'g', isHighlight: true },
-      { name: 'fat', value: 0, unit: 'g', isHighlight: true }
-    ];
-    enriched.metadata.nutrientsWereDefault = true;
-  } else if (typeof enriched.nutrients === 'object' && !Array.isArray(enriched.nutrients)) {
-    // Convert object format to array format
-    try {
-      const nutrientsObj = enriched.nutrients;
-      const nutrientsArray = [];
-      
-      // Process required nutrients
-      const requiredNutrients = [
-        { key: 'calories', unit: 'kcal' },
-        { key: 'protein', unit: 'g' },
-        { key: 'carbs', unit: 'g' },
-        { key: 'fat', unit: 'g' }
-      ];
-      
-      for (const { key, unit } of requiredNutrients) {
-        let value = nutrientsObj[key];
-        
-        // Handle various value formats
-        if (value === undefined || value === null) {
-          value = 0;
-        } else if (typeof value === 'string') {
-          // Try to parse number from string, removing non-numeric characters
-          const numericValue = parseFloat(value.replace(/[^\d.-]/g, ''));
-          value = isNaN(numericValue) ? 0 : numericValue;
-        } else if (typeof value !== 'number') {
-          value = 0;
-        }
-        
-        nutrientsArray.push({
-          name: key,
-          value,
-          unit,
-          isHighlight: true
-        });
-      }
-      
-      // Add any other nutrients found in the object
-      for (const key in nutrientsObj) {
-        if (!['calories', 'protein', 'carbs', 'fat'].includes(key)) {
-          let value = nutrientsObj[key];
-          
-          // Skip non-numeric or null values
-          if (value === null || value === undefined) continue;
-          
-          // Try to parse if string
-          if (typeof value === 'string') {
-            const numericValue = parseFloat(value.replace(/[^\d.-]/g, ''));
-            if (isNaN(numericValue)) continue;
-            value = numericValue;
-          } else if (typeof value !== 'number') {
-            continue;
-          }
-          
-          nutrientsArray.push({
-            name: key,
-            value,
-            unit: key.includes('calories') ? 'kcal' : 'g',
-            isHighlight: false
-          });
-        }
-      }
-      
-      enriched.nutrients = nutrientsArray;
-      enriched.metadata.nutrientsWereConverted = true;
-    } catch (error) {
-      console.error('Error converting nutrients object to array:', error);
-      // Fallback to default nutrients
-      enriched.nutrients = [
-        { name: 'calories', value: 0, unit: 'kcal', isHighlight: true },
-        { name: 'protein', value: 0, unit: 'g', isHighlight: true },
-        { name: 'carbs', value: 0, unit: 'g', isHighlight: true },
-        { name: 'fat', value: 0, unit: 'g', isHighlight: true }
-      ];
-      enriched.metadata.nutrientsWereDefault = true;
-    }
-  } else if (Array.isArray(enriched.nutrients)) {
-    // Ensure required nutrients exist in the array
-    const requiredNutrients = ['calories', 'protein', 'carbs', 'fat'];
-    const existingNutrients = new Set(
-      enriched.nutrients
-        .filter((n: any) => n && typeof n === 'object' && n.name)
-        .map((n: any) => n.name.toLowerCase())
-    );
-    
-    // Add missing nutrients with default values
-    for (const nutrient of requiredNutrients) {
-      if (!existingNutrients.has(nutrient)) {
-        enriched.nutrients.push({
-          name: nutrient,
-          value: 0,
-          unit: nutrient === 'calories' ? 'kcal' : 'g',
-          isHighlight: true
-        });
-        
-        if (!enriched.metadata.addedMissingNutrients) {
-          enriched.metadata.addedMissingNutrients = [];
-        }
-        enriched.metadata.addedMissingNutrients.push(nutrient);
-      }
-    }
-    
-    // Ensure each nutrient has the correct structure
-    enriched.nutrients = enriched.nutrients.map((nutrient: any) => {
-      if (!nutrient || typeof nutrient !== 'object') {
-        return { name: 'unknown', value: 0, unit: 'g', isHighlight: false };
-      }
-      
-      // Ensure value is a number
-      let value = nutrient.value;
-      if (value === undefined || value === null) {
-        value = 0;
-      } else if (typeof value === 'string') {
-        const numericValue = parseFloat(value.replace(/[^\d.-]/g, ''));
-        value = isNaN(numericValue) ? 0 : numericValue;
-      } else if (typeof value !== 'number') {
-        value = 0;
-      }
-      
-      return {
-        name: nutrient.name || 'unknown',
-        value,
-        unit: nutrient.unit || (nutrient.name?.toLowerCase() === 'calories' ? 'kcal' : 'g'),
-        isHighlight: nutrient.isHighlight === true
-      };
-    });
-  }
-
-  // Ensure feedback exists
-  if (!enriched.feedback) {
-    enriched.feedback = "We couldn't fully analyze this meal, but eating a balanced diet with plenty of vegetables, lean proteins, and whole grains is always recommended.";
-    enriched.metadata.feedbackWasDefault = true;
-  } else if (Array.isArray(enriched.feedback) && enriched.feedback.length === 0) {
-    // Convert empty array to default string
-    enriched.feedback = "We couldn't fully analyze this meal, but eating a balanced diet with plenty of vegetables, lean proteins, and whole grains is always recommended.";
-    enriched.metadata.feedbackWasDefault = true;
-  } else if (Array.isArray(enriched.feedback)) {
-    // Convert array to string if needed
-    enriched.feedback = enriched.feedback
-      .filter((item: any) => typeof item === 'string')
-      .join('\n\n');
-    enriched.metadata.feedbackWasJoined = true;
-  }
-
-  // Ensure suggestions exist
-  if (!enriched.suggestions || !Array.isArray(enriched.suggestions) || enriched.suggestions.length === 0) {
-    enriched.suggestions = [
-      "Consider including more colorful vegetables in your meals for additional nutrients",
-      "Stay hydrated by drinking water with your meals",
-      "Be mindful of portion sizes for a balanced diet"
-    ];
-    enriched.metadata.suggestionsWereDefault = true;
-  } else {
-    // Ensure each suggestion is a string
-    enriched.suggestions = enriched.suggestions
-      .filter((suggestion: any) => suggestion)
-      .map((suggestion: any) => {
-        if (typeof suggestion === 'string') return suggestion;
-        if (typeof suggestion === 'object' && suggestion.text) return suggestion.text;
-        return String(suggestion);
-      });
-  }
-
-  // Ensure detailedIngredients exist
-  if (!enriched.detailedIngredients || !Array.isArray(enriched.detailedIngredients)) {
-    enriched.detailedIngredients = [];
-    enriched.metadata.detailedIngredientsWereDefault = true;
-  }
-
-  // Handle goal score (optional)
-  if (enriched.goalScore !== undefined) {
-    // Normalize the goalScore structure
-    if (typeof enriched.goalScore === 'number') {
-      // Convert number to object format
-      const score = Math.max(0, Math.min(100, enriched.goalScore));
-      enriched.goalScore = {
-        overall: score,
-        explanation: `Overall nutrition score: ${score}/100`
-      };
-      enriched.metadata.goalScoreWasConverted = true;
-    } else if (typeof enriched.goalScore === 'object') {
-      // Ensure proper structure
-      if (typeof enriched.goalScore.overall !== 'number') {
-        enriched.goalScore.overall = 50; // Default middle score
-        enriched.metadata.goalScoreOverallWasDefault = true;
-      }
-      
-      if (!enriched.goalScore.explanation) {
-        enriched.goalScore.explanation = `Overall nutrition score: ${enriched.goalScore.overall}/100`;
-        enriched.metadata.goalScoreExplanationWasDefault = true;
-      }
-    } else {
-      // Invalid format, create default
-      enriched.goalScore = {
-        overall: 50,
-        explanation: "Overall nutrition score: 50/100"
-      };
-      enriched.metadata.goalScoreWasDefault = true;
-    }
-  }
-
-  if (shouldLog) {
-    console.log(`Enriched analysis result: ${Object.keys(enriched).length} fields, metadata:`, enriched.metadata);
-  }
-
-  return enriched;
+export async function enrichAnalysisResult(
+  originalResult: any,
+  healthGoals: string[],
+  dietaryPreferences: string[],
+  requestId: string
+): Promise<any> {
+  // console.log("[Stub] enrichAnalysisResult called");
+  return originalResult;
 }
 
 /**
  * Validate that a GPT analysis result has all required fields
- * This is a lenient validation that will try to accept data in multiple formats
  * @param analysis Analysis result to validate
  * @returns Boolean indicating if the analysis is valid
  */
 export function validateGptAnalysisResult(analysis: any): boolean {
-  if (!analysis) {
-    console.warn(`Analysis validation failed: analysis is null or undefined`);
-    return false;
-  }
-  
-  // Track missing fields for detailed error reporting
-  const missingFields: string[] = [];
-  const invalidFields: string[] = [];
+  if (!analysis) return false;
   
   // Check for required top-level fields
   const requiredFields = [
@@ -824,132 +565,35 @@ export function validateGptAnalysisResult(analysis: any): boolean {
   
   for (const field of requiredFields) {
     if (!analysis[field]) {
-      missingFields.push(field);
       console.warn(`Analysis validation failed: missing '${field}'`);
+      return false;
     }
   }
   
-  // Handle nutrients in different formats
+  // Check nutrients structure
+  const requiredNutrients = [
+    'calories', 'protein', 'carbs', 'fat'
+  ];
+  
   if (analysis.nutrients) {
-    // Case 1: nutrients is an object with direct properties
-    if (typeof analysis.nutrients === 'object' && !Array.isArray(analysis.nutrients)) {
-      const requiredNutrients = ['calories', 'protein', 'carbs', 'fat'];
-      const missingNutrients: string[] = [];
-      
-      for (const nutrient of requiredNutrients) {
-        // Allow both numeric and string values that can be parsed to numbers
-        const value = analysis.nutrients[nutrient];
-        const isValidNumber = 
-          (typeof value === 'number') || 
-          (typeof value === 'string' && !isNaN(parseFloat(value)));
-        
-        if (!isValidNumber) {
-          missingNutrients.push(nutrient);
-          console.warn(`Analysis validation: missing or invalid nutrient '${nutrient}', value: ${value}, type: ${typeof value}`);
-        }
+    for (const nutrient of requiredNutrients) {
+      if (typeof analysis.nutrients[nutrient] !== 'number') {
+        console.warn(`Analysis validation failed: missing or invalid nutrient '${nutrient}'`);
+        return false;
       }
-      
-      if (missingNutrients.length > 0) {
-        invalidFields.push(`nutrients (missing: ${missingNutrients.join(', ')})`);
-      }
-    } 
-    // Case 2: nutrients is an array of objects
-    else if (Array.isArray(analysis.nutrients)) {
-      // Map nutrient names to values for validation
-      const nutrientMap = new Map<string, any>();
-      
-      // Map nutrient names to values
-      for (const item of analysis.nutrients) {
-        if (item && typeof item === 'object' && item.name) {
-          nutrientMap.set(item.name.toLowerCase(), item);
-        }
-      }
-      
-      // Check for required nutrients
-      const requiredNutrients = ['calories', 'protein', 'carbs', 'fat'];
-      const missingNutrients: string[] = [];
-      
-      for (const nutrient of requiredNutrients) {
-        if (!nutrientMap.has(nutrient)) {
-          missingNutrients.push(nutrient);
-          console.warn(`Analysis validation: required nutrient '${nutrient}' not found in nutrients array`);
-        }
-      }
-      
-      if (missingNutrients.length > 0) {
-        invalidFields.push(`nutrients array (missing: ${missingNutrients.join(', ')})`);
-      }
-    } 
-    // Neither object nor array - invalid format
-    else {
-      invalidFields.push('nutrients (invalid format)');
-      console.warn(`Analysis validation failed: 'nutrients' is neither an object nor an array`);
     }
   }
   
-  // Validate suggestions array
-  if (analysis.suggestions) {
-    if (!Array.isArray(analysis.suggestions)) {
-      invalidFields.push('suggestions (not an array)');
-      console.warn(`Analysis validation failed: 'suggestions' is not an array`);
-    } else if (analysis.suggestions.length === 0) {
-      invalidFields.push('suggestions (empty array)');
-      console.warn(`Analysis validation warning: 'suggestions' array is empty`);
+  // Ensure arrays are present
+  const requiredArrays = ['feedback', 'suggestions', 'detailedIngredients'];
+  for (const arrayField of requiredArrays) {
+    if (!Array.isArray(analysis[arrayField])) {
+      console.warn(`Analysis validation failed: '${arrayField}' is not an array`);
+      return false;
     }
   }
   
-  // Validate detailed ingredients array
-  if (analysis.detailedIngredients) {
-    if (!Array.isArray(analysis.detailedIngredients)) {
-      invalidFields.push('detailedIngredients (not an array)');
-      console.warn(`Analysis validation failed: 'detailedIngredients' is not an array`);
-    } else if (analysis.detailedIngredients.length === 0) {
-      // This is just a warning, not a fatal error
-      console.warn(`Analysis validation warning: 'detailedIngredients' array is empty`);
-    }
-  }
-  
-  // Handle feedback which can be either string or array
-  if (analysis.feedback) {
-    if (typeof analysis.feedback !== 'string' && !Array.isArray(analysis.feedback)) {
-      invalidFields.push('feedback (invalid type)');
-      console.warn(`Analysis validation failed: 'feedback' is neither a string nor an array`);
-    }
-  }
-  
-  // Check goalScore if present (this is optional but should have correct structure if provided)
-  if (analysis.goalScore) {
-    if (typeof analysis.goalScore === 'number') {
-      // Acceptable, will be converted to object structure in normalization
-    } else if (typeof analysis.goalScore === 'object') {
-      // Expected structure, check if overall score is present
-      if (typeof analysis.goalScore.overall !== 'number') {
-        console.warn(`Analysis validation warning: 'goalScore.overall' is not a number`);
-        // Not a fatal error
-      }
-    } else {
-      invalidFields.push('goalScore (invalid type)');
-      console.warn(`Analysis validation failed: 'goalScore' has invalid type: ${typeof analysis.goalScore}`);
-    }
-  }
-  
-  // Determine if analysis is valid despite some issues
-  const isValid = missingFields.length === 0 && invalidFields.length === 0;
-  
-  // Enhanced logging for visibility
-  if (!isValid) {
-    console.warn(`Analysis validation summary:
-    - Missing fields: ${missingFields.length > 0 ? missingFields.join(', ') : 'None'}
-    - Invalid fields: ${invalidFields.length > 0 ? invalidFields.join(', ') : 'None'}
-    - Overall validation: ${isValid ? 'PASSED' : 'FAILED'}`);
-  } else {
-    console.log(`✅ Analysis validation: All required fields present and valid`);
-  }
-  
-  // If no critical failures, consider the analysis valid
-  // Let's be more lenient and allow analysis with minor issues
-  return missingFields.length === 0 && 
-         (!analysis.nutrients || invalidFields.filter(f => f.startsWith('nutrients')).length === 0);
+  return true;
 }
 
 /**
@@ -1056,309 +700,39 @@ export function createEmergencyFallbackResponse(): any {
 
 /**
  * Extracts JSON from text, attempting to handle malformed JSON responses
- * using multiple extraction strategies
  */
 function extractJSONFromText(text: string): any | null {
-  if (!text || typeof text !== 'string') {
-    console.warn('extractJSONFromText: Invalid input - not a string or empty');
-    return null;
-  }
-
-  const textLength = text.length;
-  console.log(`Attempting to extract JSON from text (length: ${textLength})`);
-  
-  // Store extraction attempts and results for debugging
-  const extractionAttempts: Array<{strategy: string, result: 'success' | 'failure', reason?: string}> = [];
-  
-  // First attempt: direct parsing if it's already valid JSON
   try {
-    const directParse = JSON.parse(text);
-    extractionAttempts.push({strategy: 'direct_parse', result: 'success'});
-    console.log('Successfully parsed text directly as JSON');
-    return directParse;
-  } catch (initialError) {
-    extractionAttempts.push({
-      strategy: 'direct_parse', 
-      result: 'failure', 
-      reason: initialError instanceof Error ? initialError.message : 'Unknown error'
-    });
-    // Not valid JSON, continue with extraction attempts
-  }
-  
-  // Second attempt: extract JSON between curly braces (most common case)
-  try {
-    // Look for the outermost JSON object pattern - handling nested objects
-    const jsonMatches = text.match(/\{(?:[^{}]|(?:\{(?:[^{}]|(?:\{[^{}]*\}))*\}))*\}/g);
-    
-    if (jsonMatches && jsonMatches.length > 0) {
-      // Try to parse each potential JSON object, starting with the longest one
-      // (which is likely the most complete)
-      const sortedMatches = [...jsonMatches].sort((a, b) => b.length - a.length);
-      
-      for (const match of sortedMatches) {
-        try {
-          const parsed = JSON.parse(match);
-          extractionAttempts.push({strategy: 'curly_braces', result: 'success'});
-          console.log(`Successfully parsed JSON from curly braces match (length: ${match.length})`);
-          return parsed;
-        } catch (matchError) {
-          // Try with cleaning
-          try {
-            // Clean the matched content before parsing
-            let cleanedText = match
-              .replace(/(\r\n|\n|\r)/gm, '') // Remove line breaks
-              .replace(/,\s*}/g, '}')        // Remove trailing commas
-              .replace(/,\s*]/g, ']')        // Remove trailing commas in arrays
-              .replace(/'/g, '"')            // Replace single quotes with double quotes
-              .replace(/\\([^"\\\/bfnrtu])/g, '$1') // Fix invalid escapes
-              .replace(/([{,]\s*)(\w+)(\s*:)/g, '$1"$2"$3'); // Quote unquoted keys
-              
-            const parsedCleaned = JSON.parse(cleanedText);
-            extractionAttempts.push({strategy: 'curly_braces_cleaned', result: 'success'});
-            console.log(`Successfully parsed JSON from cleaned curly braces match (length: ${cleanedText.length})`);
-            return parsedCleaned;
-          } catch (cleanError) {
-            // Continue to next match
-            extractionAttempts.push({
-              strategy: 'curly_braces_cleaned', 
-              result: 'failure', 
-              reason: cleanError instanceof Error ? cleanError.message : 'Unknown error'
-            });
-          }
-        }
-      }
+    // Try to find JSON content between curly braces
+    const jsonMatch = text.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) {
+      throw new Error('No JSON object found in response');
     }
     
-    // Third attempt: look for code blocks (```json ... ```) - common in newer models
-    const codeBlockMatch = text.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
-    if (codeBlockMatch && codeBlockMatch[1]) {
-      try {
-        const parsed = JSON.parse(codeBlockMatch[1]);
-        extractionAttempts.push({strategy: 'code_block', result: 'success'});
-        console.log(`Successfully parsed JSON from code block (length: ${codeBlockMatch[1].length})`);
-        return parsed;
-      } catch (codeBlockError) {
-        extractionAttempts.push({
-          strategy: 'code_block', 
-          result: 'failure', 
-          reason: codeBlockError instanceof Error ? codeBlockError.message : 'Unknown error'
-        });
-        
-        // Try cleaning code block
-        try {
-          const cleanedCodeBlock = codeBlockMatch[1]
-            .replace(/(\r\n|\n|\r)/gm, '')
-            .replace(/,\s*}/g, '}')
-            .replace(/,\s*]/g, ']')
-            .replace(/'/g, '"')
-            .replace(/\\([^"\\\/bfnrtu])/g, '$1')
-            .replace(/([{,]\s*)(\w+)(\s*:)/g, '$1"$2"$3');
-            
-          const parsedCleanedBlock = JSON.parse(cleanedCodeBlock);
-          extractionAttempts.push({strategy: 'code_block_cleaned', result: 'success'});
-          console.log(`Successfully parsed JSON from cleaned code block (length: ${cleanedCodeBlock.length})`);
-          return parsedCleanedBlock;
-        } catch (cleanBlockError) {
-          extractionAttempts.push({
-            strategy: 'code_block_cleaned', 
-            result: 'failure', 
-            reason: cleanBlockError instanceof Error ? cleanBlockError.message : 'Unknown error'
-          });
-        }
-      }
-    }
-    
-    // Fourth attempt: extract structured key-value pairs to create partial object
+    return JSON.parse(jsonMatch[0]);
+  } catch (parseError) {
+    // Try to clean the content before parsing
     try {
-      const partialObject: Record<string, any> = {};
-      let extractionCount = 0;
-      
-      // Extract top-level fields with various formats
-      const fieldPatterns = [
-        // "key": "string value"
-        /"([^"]+)"\s*:\s*"([^"]+)"/g,
-        // "key": number
-        /"([^"]+)"\s*:\s*(-?\d+(?:\.\d+)?)/g,
-        // "key": [array]
-        /"([^"]+)"\s*:\s*(\[[^\]]*\])/g,
-        // "key": {object}
-        /"([^"]+)"\s*:\s*(\{[^}]*\})/g,
-        // key: "string value" (unquoted keys)
-        /([a-zA-Z_]\w*)\s*:\s*"([^"]+)"/g,
-        // key: number (unquoted keys)
-        /([a-zA-Z_]\w*)\s*:\s*(-?\d+(?:\.\d+)?)/g
-      ];
-      
-      // Process each pattern
-      for (const pattern of fieldPatterns) {
-        let match;
-        // Reset RegExp lastIndex
-        pattern.lastIndex = 0;
-        
-        while ((match = pattern.exec(text)) !== null) {
-          const key = match[1];
-          const valueStr = match[2];
-          
-          if (key && valueStr) {
-            try {
-              // Try to parse as JSON if it looks like an object or array
-              if ((valueStr.startsWith('{') && valueStr.endsWith('}')) || 
-                  (valueStr.startsWith('[') && valueStr.endsWith(']'))) {
-                try {
-                  partialObject[key] = JSON.parse(valueStr);
-                } catch {
-                  // If parsing fails, store as string
-                  partialObject[key] = valueStr;
-                }
-              } else if (!isNaN(Number(valueStr)) && valueStr.trim() !== '') {
-                // Parse as number if it looks like a number
-                partialObject[key] = Number(valueStr);
-              } else {
-                // Otherwise keep as string
-                partialObject[key] = valueStr;
-              }
-              extractionCount++;
-            } catch (valueParseError) {
-              // If parsing fails, use string value
-              partialObject[key] = valueStr;
-              extractionCount++;
-            }
-          }
-        }
+      // Find the JSON-like content
+      const jsonMatch = text.match(/\{[\s\S]*\}/);
+      if (!jsonMatch) {
+        return null;
       }
       
-      // Special handling for arrays like "suggestions": ["item1", "item2"]
-      const arrayPattern = /"([^"]+)"\s*:\s*\[([\s\S]*?)\]/g;
-      let arrayMatch;
-      while ((arrayMatch = arrayPattern.exec(text)) !== null) {
-        const key = arrayMatch[1];
-        const arrayContent = arrayMatch[2];
+      let cleanedText = jsonMatch[0]
+        .replace(/(\r\n|\n|\r)/gm, '') // Remove line breaks
+        .replace(/,\s*}/g, '}')        // Remove trailing commas
+        .replace(/,\s*]/g, ']');       // Remove trailing commas in arrays
         
-        if (key && arrayContent && !partialObject[key]) {
-          // Extract array items
-          const itemsPattern = /"([^"]+)"/g;
-          const items: string[] = [];
-          let itemMatch;
-          
-          while ((itemMatch = itemsPattern.exec(arrayContent)) !== null) {
-            items.push(itemMatch[1]);
-          }
-          
-          if (items.length > 0) {
-            partialObject[key] = items;
-            extractionCount++;
-          }
-        }
-      }
-      
-      // Special handling for nested objects
-      const nestedObjectPattern = /"([^"]+)"\s*:\s*\{([\s\S]*?)\}/g;
-      let objectMatch;
-      while ((objectMatch = nestedObjectPattern.exec(text)) !== null) {
-        const key = objectMatch[1];
-        const objectContent = objectMatch[2];
-        
-        if (key && objectContent && !partialObject[key]) {
-          // Try to parse the nested object
-          try {
-            const nestedObj = JSON.parse(`{${objectContent}}`);
-            partialObject[key] = nestedObj;
-            extractionCount++;
-          } catch {
-            // If parsing fails, try to extract key-value pairs
-            const nestedKVObject: Record<string, any> = {};
-            const kvPattern = /"([^"]+)"\s*:\s*("[^"]+"|[0-9]+)/g;
-            let kvMatch;
-            
-            while ((kvMatch = kvPattern.exec(objectContent)) !== null) {
-              const nestedKey = kvMatch[1];
-              const nestedValue = kvMatch[2];
-              
-              if (nestedKey && nestedValue) {
-                if (nestedValue.startsWith('"') && nestedValue.endsWith('"')) {
-                  nestedKVObject[nestedKey] = nestedValue.slice(1, -1);
-                } else if (!isNaN(Number(nestedValue))) {
-                  nestedKVObject[nestedKey] = Number(nestedValue);
-                } else {
-                  nestedKVObject[nestedKey] = nestedValue;
-                }
-              }
-            }
-            
-            if (Object.keys(nestedKVObject).length > 0) {
-              partialObject[key] = nestedKVObject;
-              extractionCount++;
-            }
-          }
-        }
-      }
-      
-      // Only return if we extracted some data
-      if (extractionCount > 0) {
-        extractionAttempts.push({strategy: 'key_value_extraction', result: 'success'});
-        console.log(`Reconstructed partial object with ${extractionCount} extracted fields`);
-        
-        // If we have required fields for analysis, our extraction is good enough
-        const hasMinimumRequiredFields = 
-          (partialObject.description || partialObject.nutrients || 
-           partialObject.feedback || partialObject.suggestions);
-           
-        if (hasMinimumRequiredFields) {
-          console.log('Extracted object has minimum required fields for analysis');
-        } else {
-          console.warn('Extracted object is missing some required fields for analysis');
-        }
-        
-        return partialObject;
-      } else {
-        extractionAttempts.push({strategy: 'key_value_extraction', result: 'failure', reason: 'No fields extracted'});
-      }
-    } catch (reconstructError) {
-      extractionAttempts.push({
-        strategy: 'key_value_extraction', 
-        result: 'failure', 
-        reason: reconstructError instanceof Error ? reconstructError.message : 'Unknown error'
-      });
+      return JSON.parse(cleanedText);
+    } catch (secondError) {
+      return null;
     }
-    
-    // If all strategies failed, log detailed information for debugging
-    console.warn('All JSON extraction strategies failed');
-    console.warn('Extraction attempts:', JSON.stringify(extractionAttempts, null, 2));
-    
-    // Last resort: create basic object with any text we can find
-    const fallbackExtraction: Record<string, any> = {};
-    
-    // Try to extract description
-    const descriptionMatch = text.match(/description\s*[":]\s*["']?([^"',}\n]+)/i);
-    if (descriptionMatch && descriptionMatch[1]) {
-      fallbackExtraction.description = descriptionMatch[1].trim();
-    }
-    
-    // Try to extract feedback
-    const feedbackMatch = text.match(/feedback["\s:]+([^"}.]+)/i) || 
-                         text.match(/nutritional\s+value["\s:]+([^"}.]+)/i);
-    if (feedbackMatch && feedbackMatch[1]) {
-      fallbackExtraction.feedback = feedbackMatch[1].trim();
-    }
-    
-    if (Object.keys(fallbackExtraction).length > 0) {
-      console.log('Created emergency fallback object with partial text extraction');
-      return fallbackExtraction;
-    }
-    
-    // Failed to extract any valid JSON or text
-    console.warn('Failed to extract any meaningful data from the text');
-    return null;
-  } catch (error) {
-    // Catch any unexpected errors in the main extraction process
-    console.error('Unexpected error during JSON extraction:', error);
-    return null;
   }
 }
 
 /**
  * Creates a partial fallback analysis from incomplete data
- * with enhanced extraction and fallback field generation
  */
 function createPartialFallbackAnalysis(
   rawContent: string, 
@@ -1369,7 +743,7 @@ function createPartialFallbackAnalysis(
 ): AnalysisResult {
   console.log(`🛠️ [${requestId}] Creating partial fallback analysis from ${isParseError ? 'raw text' : 'partial data'}`);
   
-  // Start with a complete fallback structure to ensure all fields exist
+  // Start with an empty fallback
   const fallback = createEmptyFallbackAnalysis(
     requestId, 
     modelUsed, 
@@ -1379,321 +753,90 @@ function createPartialFallbackAnalysis(
   try {
     // If we have partial data, use what's valid
     if (partialData) {
-      console.log(`✨ [${requestId}] Using partial data for fallback analysis: ${JSON.stringify(partialData, null, 2).substring(0, 500)}...`);
+      console.log(`✨ [${requestId}] Using partial data for fallback analysis`);
       
       // Copy any valid fields from partial data
-      if (partialData.description && typeof partialData.description === 'string') {
-        fallback.description = partialData.description;
-      }
+      if (partialData.description) fallback.description = partialData.description;
       
       // Handle nutrients (either as array or object)
       if (partialData.nutrients) {
-        if (Array.isArray(partialData.nutrients) && partialData.nutrients.length > 0) {
-          // Ensure each nutrient has the required fields
-          const validNutrients = partialData.nutrients.map((nutrient: any) => {
-            // Create a valid nutrient object
-            const validNutrient: Nutrient = {
-              name: typeof nutrient.name === 'string' ? nutrient.name : 'unknown',
-              value: typeof nutrient.value !== 'undefined' ? String(nutrient.value) : '0',
-              unit: typeof nutrient.unit === 'string' ? nutrient.unit : 
-                    nutrient.name === 'calories' ? 'kcal' : 'g',
-              isHighlight: Boolean(nutrient.isHighlight)
-            };
-            return validNutrient;
-          });
-          
-          // Make sure fallback.nutrients is defined before assigning
-          fallback.nutrients = validNutrients;
-          
-          // Check if we need to add core nutrients that are missing
-          const requiredNutrients = ['calories', 'protein', 'carbs', 'fat'];
-          const existingNutrients = new Set(validNutrients.map(n => n.name.toLowerCase()));
-          
-          for (const requiredNutrient of requiredNutrients) {
-            if (!existingNutrients.has(requiredNutrient)) {
-              fallback.nutrients.push({
-                name: requiredNutrient,
-                value: '0',
-                unit: requiredNutrient === 'calories' ? 'kcal' : 'g',
-                isHighlight: true
-              });
-            }
-          }
+        if (Array.isArray(partialData.nutrients)) {
+          fallback.nutrients = partialData.nutrients;
         } else if (typeof partialData.nutrients === 'object') {
           const nutrientsArray: Nutrient[] = [];
-          
-          // Log the nutrients object to help debug
-          console.log(`🔎 [${requestId}] Nutrients object structure: ${JSON.stringify(partialData.nutrients, null, 2)}`);
-          
-          // Process core nutrients first
-          const coreNutrients = [
-            { key: 'calories', unit: 'kcal', highlight: true },
-            { key: 'protein', unit: 'g', highlight: true },
-            { key: 'carbs', unit: 'g', highlight: true },
-            { key: 'fat', unit: 'g', highlight: true }
-          ];
-          
-          for (const { key, unit, highlight } of coreNutrients) {
-            // Add each core nutrient, even if value is 0 or missing
-            const value = partialData.nutrients[key] ?? 0;
-            nutrientsArray.push({
-              name: key,
-              value: String(value),
-              unit,
-              isHighlight: highlight
-            });
-          }
-          
-          // Add any other nutrients found in the object
           Object.keys(partialData.nutrients).forEach(key => {
-            if (!['calories', 'protein', 'carbs', 'fat'].includes(key) && 
-                partialData.nutrients[key] !== null && 
-                partialData.nutrients[key] !== undefined) {
-              try {
-                nutrientsArray.push({
-                  name: key,
-                  value: String(partialData.nutrients[key]),
-                  unit: key === 'sodium' ? 'mg' : 'g',
-                  isHighlight: false
-                });
-              } catch (nutrientError) {
-                console.warn(`⚠️ [${requestId}] Error processing nutrient ${key}: ${nutrientError}`);
-              }
+            if (partialData.nutrients[key] !== null && partialData.nutrients[key] !== undefined) {
+              nutrientsArray.push({
+                name: key,
+                value: String(partialData.nutrients[key]),
+                unit: key === 'calories' ? 'kcal' : key === 'sodium' ? 'mg' : 'g',
+                isHighlight: ['calories', 'protein', 'carbs', 'fat'].includes(key)
+              });
             }
           });
-          
           fallback.nutrients = nutrientsArray;
         }
       }
       
       // Handle feedback (string or array)
-      if (typeof partialData.feedback === 'string' && partialData.feedback.trim()) {
+      if (typeof partialData.feedback === 'string') {
         fallback.feedback = partialData.feedback;
       } else if (Array.isArray(partialData.feedback) && partialData.feedback.length > 0) {
-        fallback.feedback = partialData.feedback.join(". ");
+        fallback.feedback = partialData.feedback.join('. ');
       }
       
-      // Handle suggestions (array or string)
-      if (Array.isArray(partialData.suggestions) && partialData.suggestions.length > 0) {
-        // Explicitly type the filter function parameter
-        fallback.suggestions = partialData.suggestions.filter((s: any) => typeof s === 'string' && s.trim() !== '');
-        // If filtering removed all suggestions, restore defaults
-        if (fallback.suggestions.length === 0) {
-          fallback.suggestions = ["Try taking a clearer photo", "Make sure the lighting is good"];
-        }
-      } else if (typeof partialData.suggestions === 'string' && partialData.suggestions.trim()) {
-        // Convert string to array if needed
-        fallback.suggestions = [partialData.suggestions];
+      // Handle suggestions (array)
+      if (Array.isArray(partialData.suggestions)) {
+        fallback.suggestions = partialData.suggestions;
       }
       
       // Handle detailed ingredients
-      if (Array.isArray(partialData.detailedIngredients) && partialData.detailedIngredients.length > 0) {
-        // Ensure each ingredient has required fields
-        fallback.detailedIngredients = partialData.detailedIngredients.map((ingredient: any) => {
-          return {
-            name: ingredient.name || 'Unknown ingredient',
-            category: ingredient.category || 'Other',
-            confidence: typeof ingredient.confidence === 'number' ? 
-              ingredient.confidence : 0.5
-          };
-        });
-      } else {
-        // Create at least one ingredient for UI display
-        fallback.detailedIngredients = [
-          { name: "Unknown food item", category: "Unknown", confidence: 0 }
-        ];
+      if (Array.isArray(partialData.detailedIngredients)) {
+        fallback.detailedIngredients = partialData.detailedIngredients;
       }
       
-      // Handle goalScore with more robust error handling
-      try {
-        if (partialData.goalScore) {
-          if (typeof partialData.goalScore === 'number') {
-            fallback.goalScore = {
-              overall: Math.max(0, Math.min(100, partialData.goalScore)), // Clamp between 0-100
-              specific: {} as Record<string, number>
-            };
-          } else if (typeof partialData.goalScore === 'object') {
-            let overallScore = 50; // Default mid-point
-            
-            // Safely extract overall score
-            if (typeof partialData.goalScore.overall === 'number') {
-              overallScore = Math.max(0, Math.min(100, partialData.goalScore.overall));
-            }
-            
-            fallback.goalScore = {
-              overall: overallScore,
-              specific: {} as Record<string, number>
-            };
-            
-            // Safely copy specific scores if they exist
-            if (partialData.goalScore.specific && typeof partialData.goalScore.specific === 'object') {
-              Object.keys(partialData.goalScore.specific).forEach(key => {
-                const value = partialData.goalScore.specific[key];
-                if (typeof value === 'number') {
-                  // Clamp between 0-100
-                  fallback.goalScore.specific[key] = Math.max(0, Math.min(100, value));
-                }
-              });
-            }
-          }
+      // Handle goalScore
+      if (partialData.goalScore) {
+        if (typeof partialData.goalScore === 'number') {
+          fallback.goalScore = {
+            overall: partialData.goalScore,
+            specific: {} as Record<string, number>
+          };
+        } else if (typeof partialData.goalScore === 'object') {
+          fallback.goalScore = {
+            overall: partialData.goalScore.overall || 0,
+            specific: partialData.goalScore.specific || {} as Record<string, number>
+          };
         }
-      } catch (goalScoreError) {
-        console.error(`❌ [${requestId}] Error processing goalScore: ${goalScoreError}`);
-        // Reset to default
-        fallback.goalScore = {
-          overall: 50, // Use middle value
-          specific: {} as Record<string, number>
-        };
       }
       
       fallback.metadata.isPartialResult = true;
-      fallback.metadata.fallback = true;
-      
-      // Additional metadata for diagnostics
-      fallback.metadata.partialFieldsExtracted = Object.keys(partialData).join(',');
-      
       return fallback;
     }
     
     // For parse errors, try to extract some information from the raw text
     if (isParseError && rawContent) {
-      console.log(`🔍 [${requestId}] Attempting to extract information from raw text (length: ${rawContent.length})`);
+      console.log(`🔍 [${requestId}] Attempting to extract information from raw text`);
       
       // Try to find a description
-      const descriptionMatch = rawContent.match(/description["\s:]+([^"}.]+)/i) || 
-                              rawContent.match(/describe[^\n]+meal[^\n]*?:?\s*([^"}.]+)/i);
+      const descriptionMatch = rawContent.match(/description["\s:]+([^"}.]+)/i);
       if (descriptionMatch && descriptionMatch[1]) {
         fallback.description = descriptionMatch[1].trim();
       }
       
       // Try to find feedback
-      const feedbackMatch = rawContent.match(/feedback["\s:]+([^"}.]+)/i) || 
-                           rawContent.match(/nutritional\s+value["\s:]+([^"}.]+)/i);
+      const feedbackMatch = rawContent.match(/feedback["\s:]+([^"}.]+)/i);
       if (feedbackMatch && feedbackMatch[1]) {
         fallback.feedback = feedbackMatch[1].trim();
       }
       
-      // Try to extract suggestions from numbered or bulleted lists
-      const suggestionsRegexes = [
-        /suggestions?(?:[\s:"]*)((?:[\d\-•\*]\s*[^"}\n]+[.,]?\s*)+)/i,
-        /improvements?(?:[\s:"]*)((?:[\d\-•\*]\s*[^"}\n]+[.,]?\s*)+)/i,
-        /recommend(?:[\s:"]*)((?:[\d\-•\*]\s*[^"}\n]+[.,]?\s*)+)/i
-      ];
-      
-      for (const regex of suggestionsRegexes) {
-        const match = rawContent.match(regex);
-        if (match && match[1]) {
-          // Split by numbers, bullets, etc.
-          const splitLines = match[1].split(/(?:[\d\-•\*]\s*)/);
-          const suggestions = splitLines
-            .map(line => line.trim())
-            .filter(line => line && line.length > 5) // Only keep substantial lines
-            .map(line => line.replace(/[.,]$/, '')); // Remove ending punctuation
-          
-          if (suggestions.length > 0) {
-            fallback.suggestions = suggestions;
-            break;
-          }
-        }
-      }
-      
-      // Try to extract nutrient values
-      const nutrientMatches = [
-        { name: 'calories', regex: /calories?(?:[^\d]+)(\d+)/i, unit: 'kcal', isHighlight: true },
-        { name: 'protein', regex: /protein(?:[^\d]+)(\d+)/i, unit: 'g', isHighlight: true },
-        { name: 'carbs', regex: /carbs?(?:[^\d]+)(\d+)/i, unit: 'g', isHighlight: true },
-        { name: 'fat', regex: /fat(?:[^\d]+)(\d+)/i, unit: 'g', isHighlight: true }
-      ];
-      
-      const extractedNutrients: Nutrient[] = [];
-      
-      for (const nutrientInfo of nutrientMatches) {
-        const match = rawContent.match(nutrientInfo.regex);
-        if (match && match[1]) {
-          extractedNutrients.push({
-            name: nutrientInfo.name,
-            value: match[1],
-            unit: nutrientInfo.unit,
-            isHighlight: nutrientInfo.isHighlight
-          });
-        }
-      }
-      
-      // If we extracted nutrients, use them, otherwise keep defaults
-      if (extractedNutrients.length > 0) {
-        // Find missing required nutrients from what we extracted
-        const requiredNutrients = ['calories', 'protein', 'carbs', 'fat'];
-        const extractedNames = new Set(extractedNutrients.map(n => n.name));
-        
-        for (const required of requiredNutrients) {
-          if (!extractedNames.has(required)) {
-            extractedNutrients.push({
-              name: required,
-              value: '0',
-              unit: required === 'calories' ? 'kcal' : 'g',
-              isHighlight: true
-            });
-          }
-        }
-        
-        fallback.nutrients = extractedNutrients;
-      }
-      
-      // Try to extract goal score
-      const goalScoreMatch = rawContent.match(/(?:goal|health)(?:\s+)?score(?:[^\d]+)(\d+)/i);
-      if (goalScoreMatch && goalScoreMatch[1]) {
-        const score = parseInt(goalScoreMatch[1], 10);
-        if (!isNaN(score)) {
-          fallback.goalScore.overall = Math.min(100, Math.max(0, score)); // Clamp between 0-100
-        }
-      }
-      
       fallback.metadata.isPartialResult = true;
       fallback.metadata.extractedFromText = true;
-      fallback.metadata.fallback = true;
     }
   } catch (extractionError) {
     console.error(`❌ [${requestId}] Error creating partial fallback:`, 
       extractionError instanceof Error ? extractionError.message : String(extractionError));
-    console.error(`❌ [${requestId}] Error stack:`, 
-      extractionError instanceof Error ? extractionError.stack : 'No stack trace');
   }
-  
-  // Final safety check - ensure all required fields have at least default values
-  if (!Array.isArray(fallback.nutrients) || fallback.nutrients.length === 0) {
-    fallback.nutrients = [
-      { name: 'calories', value: '0', unit: 'kcal', isHighlight: true },
-      { name: 'protein', value: '0', unit: 'g', isHighlight: true },
-      { name: 'carbs', value: '0', unit: 'g', isHighlight: true },
-      { name: 'fat', value: '0', unit: 'g', isHighlight: true }
-    ];
-  }
-  
-  if (!Array.isArray(fallback.suggestions) || fallback.suggestions.length === 0) {
-    fallback.suggestions = [
-      "Try taking a clearer photo of your meal",
-      "Make sure the lighting is good when taking a photo",
-      "Position your camera directly above the plate for best results"
-    ];
-  }
-  
-  if (!Array.isArray(fallback.detailedIngredients) || fallback.detailedIngredients.length === 0) {
-    fallback.detailedIngredients = [
-      { name: "Food item", category: "Unknown", confidence: 0.5 }
-    ];
-  }
-  
-  if (!fallback.description) {
-    fallback.description = "Unable to analyze the image at this time. We've provided a placeholder response.";
-  }
-  
-  if (!fallback.feedback) {
-    fallback.feedback = "We couldn't process your image completely. Please try again with a clearer photo of your meal.";
-  }
-  
-  // Add additional metadata for diagnostic purposes
-  fallback.metadata.generatedAt = new Date().toISOString();
-  fallback.metadata.recoveryAttempted = isParseError || !partialData;
   
   return fallback;
 }
