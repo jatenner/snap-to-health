@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { adminDb, adminAuth, adminStorage } from '../../../../lib/firebaseAdmin';
-import { assertFirebasePrivateKey } from '../../../../utils/validateEnv';
+import { adminDb, adminAuth, adminStorage } from '@/lib/firebaseAdmin';
+import { assertFirebasePrivateKey } from '@/utils/validateEnv';
 
 /**
  * API endpoint for debugging Firebase initialization
