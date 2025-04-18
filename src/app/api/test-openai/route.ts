@@ -3,7 +3,7 @@ import OpenAI from 'openai';
 import crypto from 'crypto';
 import { API_CONFIG } from '@/lib/constants';
 
-// Function to check model availability (moved from analyzeImageWithGPT4V)
+// Function to check model availability
 async function checkModelAvailability(
   modelName: string,
   requestId: string
