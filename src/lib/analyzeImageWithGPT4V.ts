@@ -218,7 +218,7 @@ export function createEmptyFallbackAnalysis(
     detailedIngredients: [],
     goalScore: {
       overall: 0,
-      specific: Object.create(null) as Record<string, number>,
+      specific: {} as Record<string, number>,
     },
     metadata: {
       requestId,
@@ -843,7 +843,7 @@ export function createEmergencyFallbackResponse(): any {
     detailedIngredients: [] as DetailedIngredient[],
     goalScore: {
       overall: 0,
-      specific: {}
+      specific: {} as Record<string, number>
     },
     metadata: {
       requestId: crypto.randomUUID(),
