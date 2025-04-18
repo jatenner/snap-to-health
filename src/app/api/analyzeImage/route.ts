@@ -70,7 +70,7 @@ interface AnalysisResult {
   description: string;
   nutrients: Array<{
     name: string;
-    value: string;
+    value: string | number;
     unit: string;
     isHighlight: boolean;
     percentOfDailyValue?: number;
