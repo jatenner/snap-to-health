@@ -1,9 +1,9 @@
 'use client';
 
 import { initializeApp, getApps, FirebaseApp } from 'firebase/app';
-import { getAuth, connectAuthEmulator, onAuthStateChanged, Auth } from 'firebase/auth';
-import { getFirestore, connectFirestoreEmulator, Firestore } from 'firebase/firestore';
-import { getStorage, connectStorageEmulator, FirebaseStorage } from 'firebase/storage';
+import { getAuth, Auth } from 'firebase/auth';
+import { getFirestore, Firestore } from 'firebase/firestore';
+import { getStorage, FirebaseStorage } from 'firebase/storage';
 import { getAnalytics, Analytics } from 'firebase/analytics';
 import { ref } from 'firebase/storage';
 
@@ -146,19 +146,6 @@ if (typeof window !== 'undefined') {
             console.log("✅ Firebase Analytics initialized.");
           } catch (analyticsError) {
             console.warn("Firebase Analytics initialization skipped/failed:", analyticsError);
-          }
-        }
-
-        // Connect to emulators in development
-        if (process.env.NODE_ENV === 'development' && window.location.hostname === 'localhost') {
-          try {
-            // Services might be null if their specific init failed
-            if (auth) connectAuthEmulator(auth, 'http://localhost:9099');
-            if (db) connectFirestoreEmulator(db, 'localhost', 8080);
-            if (storage) connectStorageEmulator(storage, 'localhost', 9199);
-            console.log("✅ Connected to Firebase emulators (if running).");
-          } catch (emulatorError) {
-            console.error("Error connecting to Firebase emulators:", emulatorError);
           }
         }
       } else {
