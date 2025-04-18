@@ -5,7 +5,7 @@
 
 import OpenAI from 'openai';
 import crypto from 'crypto';
-import { GPT_MODEL, GPT_VISION_MODEL, FALLBACK_MODELS, API_CONFIG } from './constants';
+import { GPT_MODEL, FALLBACK_MODELS, API_CONFIG } from './constants';
 
 // Define the interface for the analysis result, matching what's used in the components
 interface Nutrient {
@@ -326,7 +326,7 @@ export async function analyzeImageWithGPT4V(
     const forceGPT4V = process.env.USE_GPT4_VISION === 'true';
     
     // Default to GPT-4o which supports vision
-    const preferredModel = GPT_VISION_MODEL;
+    const preferredModel = GPT_MODEL;
     
     console.log(`🔍 [${requestId}] Analyzing image with desired model: ${preferredModel}`);
     

@@ -7,8 +7,8 @@ import { uploadImageToFirebase } from '@/lib/firebaseStorage';
 import { extractBase64Image } from '@/lib/imageProcessing';
 import { getNutritionData, createNutrientAnalysis } from '@/lib/nutritionixApi';
 import { createEmptyFallbackAnalysis } from '@/lib/analyzeImageWithGPT4V';
-import { runOCR } from '@/lib/runOCR';
-import { analyzeMealTextOnly } from '@/lib/analyzeMealTextOnly';
+import { runOCR, OCRResult } from '@/lib/runOCR';
+import { analyzeMealTextOnly, MealAnalysisResult } from '@/lib/analyzeMealTextOnly';
 import { API_CONFIG } from '@/lib/constants';
 
 // Image quality assessment utilities
@@ -216,17 +216,17 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     // Set up timeout controller
     const controller = new AbortController();
     const globalTimeoutMs = parseInt(process.env.OPENAI_TIMEOUT_MS || '', 10) || API_CONFIG.DEFAULT_TIMEOUT_MS;
-    const globalController = new AbortController();
+    const signal = controller.signal;
 
     // Set global timeout
     const timeoutId = setTimeout(() => {
       console.warn(`⏱️ [${requestId}] Global timeout reached after ${globalTimeoutMs}ms`);
-      globalController.abort('Global timeout reached');
+      controller.abort('Global timeout reached');
     }, globalTimeoutMs);
 
     // Process the image with text-based analysis using OCR
     let extractedText = '';
-    let mealAnalysis = null;
+    let mealAnalysis: MealAnalysisResult | null = null;
     let nutritionData = null;
     let analysisFailed = false;
     let failureReason = '';
@@ -235,7 +235,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     try {
       // Step a: Run OCR on the image to extract text
       console.log(`🔍 [${requestId}] Running OCR to extract text from image`);
-      const ocrResult = await runOCR(base64Image, requestId);
+      const ocrResult: OCRResult = await runOCR(base64Image, requestId);
       
       if (!ocrResult.success || !ocrResult.text) {
         console.warn(`⚠️ [${requestId}] OCR extraction failed or returned no text: ${ocrResult.error || 'No text extracted'}`);
@@ -248,7 +248,24 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       
       // Step b: Analyze the extracted text with GPT
       console.log(`🔍 [${requestId}] Analyzing extracted text to identify meal components`);
-      mealAnalysis = await analyzeMealTextOnly(extractedText, healthGoals, requestId);
+      
+      // Convert health goals and dietary preferences to the expected format
+      const healthGoalsObj = {
+        primary: healthGoals.length > 0 ? healthGoals[0] : 'general health',
+        additional: healthGoals.slice(1)
+      };
+      
+      const dietaryPreferencesObj = {
+        allergies: dietaryPreferences.filter(p => p.toLowerCase().includes('allergy') || p.toLowerCase().includes('allergic')),
+        avoidances: dietaryPreferences.filter(p => !p.toLowerCase().includes('allergy') && !p.toLowerCase().includes('allergic'))
+      };
+      
+      mealAnalysis = await analyzeMealTextOnly(
+        extractedText, 
+        healthGoalsObj, 
+        dietaryPreferencesObj, 
+        requestId
+      );
       
       if (!mealAnalysis.success && mealAnalysis.error) {
         console.warn(`⚠️ [${requestId}] Text analysis failed: ${mealAnalysis.error}`);
@@ -257,14 +274,14 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       
       console.log(`✅ [${requestId}] Text analysis successful`);
       console.log(`📋 [${requestId}] Identified meal: ${mealAnalysis.description}`);
-      console.log(`📋 [${requestId}] Identified ingredients: ${mealAnalysis.ingredients.join(', ')}`);
+      console.log(`📋 [${requestId}] Identified ingredients: ${mealAnalysis.ingredients.map(i => i.name).join(', ')}`);
       
       // Step c: Get nutrition data based on identified ingredients
       if (mealAnalysis.ingredients.length > 0) {
         console.log(`🔍 [${requestId}] Getting nutrition data for identified ingredients`);
         
         // Join ingredients for Nutritionix query
-        const ingredientsText = mealAnalysis.ingredients.join(', ');
+        const ingredientsText = mealAnalysis.ingredients.map(i => i.name).join(', ');
         const nutritionResult = await getNutritionData(ingredientsText, requestId);
         
         if (nutritionResult.success && nutritionResult.data) {
@@ -282,14 +299,10 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       // Combine extracted text, meal analysis, and nutrition data
       let analysisResult: any = {
         description: mealAnalysis.description,
-        nutrients: nutritionData?.nutrients || [],
-        detailedIngredients: mealAnalysis.ingredients.map(ingredient => ({
-          name: ingredient,
-          category: "detected",
-          confidence: mealAnalysis.confidence
-        })),
+        nutrients: nutritionData?.nutrients || mealAnalysis.nutrients || [],
+        detailedIngredients: mealAnalysis.ingredients,
         modelInfo: {
-          model: mealAnalysis.modelUsed,
+          model: 'gpt-4o',
           usedFallback: false,
           ocrExtracted: true
         }
@@ -311,12 +324,12 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
           goalName: formatGoalName(healthGoalString)
         };
       } else {
-        // Generic feedback if no nutrition data
-        analysisResult.feedback = [
+        // Use feedback and suggestions from meal analysis if available
+        analysisResult.feedback = mealAnalysis.feedback || [
           "We analyzed your meal based on text extracted from your image.",
           "For more specific nutrition advice, try taking a clearer photo."
         ];
-        analysisResult.suggestions = [
+        analysisResult.suggestions = mealAnalysis.suggestions || [
           "Include all food items in the frame",
           "Take photos in good lighting"
         ];
