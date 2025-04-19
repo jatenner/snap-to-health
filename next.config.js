@@ -22,6 +22,19 @@ const nextConfig = {
     NEXT_PUBLIC_FIREBASE_APP_ID: process.env.NEXT_PUBLIC_FIREBASE_APP_ID,
     NEXT_PUBLIC_FIREBASE_MEASUREMENT_ID: process.env.NEXT_PUBLIC_FIREBASE_MEASUREMENT_ID,
   },
+  // Configure webpack to handle Tesseract.js worker scripts correctly
+  webpack: (config, { isServer }) => {
+    // Prevent the issue with .next/worker-script/node/index.js not found
+    if (!isServer) {
+      config.resolve.fallback = {
+        ...config.resolve.fallback,
+        fs: false,
+        path: false,
+      };
+    }
+
+    return config;
+  },
 };
 
 module.exports = nextConfig; 
