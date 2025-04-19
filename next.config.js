@@ -23,17 +23,54 @@ const nextConfig = {
     NEXT_PUBLIC_FIREBASE_MEASUREMENT_ID: process.env.NEXT_PUBLIC_FIREBASE_MEASUREMENT_ID,
   },
   // Configure webpack to handle Tesseract.js worker scripts correctly
-  webpack: (config, { isServer }) => {
+  webpack: (config, { isServer, dev }) => {
     // Prevent the issue with .next/worker-script/node/index.js not found
     if (!isServer) {
+      // Add fallbacks for Node.js core modules
       config.resolve.fallback = {
         ...config.resolve.fallback,
         fs: false,
         path: false,
+        crypto: false,
+        os: false,
+        stream: false,
+        util: false,
+        buffer: false,
       };
+
+      // Handle Tesseract.js worker script issues
+      if (!dev) {
+        // In production, ensure Tesseract.js uses CDN for worker files
+        config.resolve.alias = {
+          ...config.resolve.alias,
+          'tesseract.js-core': 'tesseract.js-core/dist/tesseract-core.wasm.js',
+        };
+      }
     }
 
+    // Configure how worker scripts are handled
+    config.module.rules.unshift({
+      test: /tesseract\.js-core[\\/]worker\.js$/,
+      loader: 'worker-loader',
+      options: {
+        fallback: true,
+        inline: true,
+      },
+    });
+
     return config;
+  },
+  // Increase serverless function timeout for image processing
+  serverRuntimeConfig: {
+    // Will only be available on the server side
+    functionTimeout: 30, // 30 seconds
+  },
+  // Configure external paths to avoid bundling issues
+  experimental: {
+    // Prevent Next.js from attempting to bundle certain packages
+    externalDir: true,
+    // Enable SWC transpilation for faster builds
+    swcMinify: true,
   },
 };
 
