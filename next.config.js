@@ -1,4 +1,6 @@
 /** @type {import('next').NextConfig} */
+const webpack = require('webpack');
+
 const nextConfig = {
   reactStrictMode: true,
   images: {
@@ -50,7 +52,7 @@ const nextConfig = {
       
       // Add environment definitions for Tesseract workers
       config.plugins.push(
-        new config.webpack.DefinePlugin({
+        new webpack.DefinePlugin({
           'process.env.TESSERACT_WORKER_URL': JSON.stringify('https://cdn.jsdelivr.net/npm/tesseract.js@4.1.1/dist/worker.min.js'),
           'process.env.TESSERACT_CORE_URL': JSON.stringify('https://cdn.jsdelivr.net/npm/tesseract.js-core@4.0.4/tesseract-core.wasm.js'),
           'process.env.TESSERACT_LANG_PATH': JSON.stringify('https://cdn.jsdelivr.net/npm/tesseract.js-data@4.0.0/eng'),
@@ -58,29 +60,21 @@ const nextConfig = {
       );
     }
 
-    // Configure how worker scripts are handled
+    // Configure asset modules for handling wasm files and worker scripts
     config.module.rules.unshift({
       test: /tesseract\.js-core[\\/].*?\.wasm$/,
-      type: 'javascript/auto',
-      loader: 'file-loader',
-      options: {
-        name: 'static/[name].[hash].[ext]',
-        publicPath: '/_next/',
+      type: 'asset/resource',
+      generator: {
+        filename: 'static/chunks/[name].[hash][ext]',
       },
     });
     
     config.module.rules.unshift({
       test: /tesseract\.js[\\/]dist[\\/]worker\.min\.js$/,
-      type: 'javascript/auto',
-      use: [
-        {
-          loader: 'file-loader',
-          options: {
-            name: 'static/[name].[hash].[ext]',
-            publicPath: '/_next/',
-          },
-        },
-      ],
+      type: 'asset/resource',
+      generator: {
+        filename: 'static/chunks/[name].[hash][ext]',
+      },
     });
 
     return config;
