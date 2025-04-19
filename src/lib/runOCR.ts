@@ -115,7 +115,7 @@ export async function runOCR(
     // Create worker with logging
     let worker;
     try {
-      // Use default Tesseract.js worker setup (which will use CDN)
+      // Use CDN worker path to avoid issues with local path in development/production
       worker = await createWorker({
         logger: (m: any) => {
           if (m.status && typeof m.progress === 'number') {
@@ -123,7 +123,8 @@ export async function runOCR(
               console.log(`📊 [${requestId}] OCR progress: ${Math.floor(m.progress * 100)}%`);
             }
           }
-        }
+        },
+        workerPath: 'https://unpkg.com/tesseract.js@v4.1.1/dist/worker.min.js'
       });
     } catch (workerError: any) {
       console.error(`❌ [${requestId}] Failed to create Tesseract worker:`, workerError);
