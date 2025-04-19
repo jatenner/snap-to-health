@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
+import NodeCache from 'node-cache'
+import { OpenAI } from 'openai'
 import axios from 'axios';
 import crypto from 'crypto';
-import NodeCache from 'node-cache';
 import { adminStorage } from '@/lib/firebaseAdmin';
 import { trySaveMealServer } from '@/lib/serverMealUtils';
 import { uploadImageToFirebase } from '@/lib/firebaseStorage';
@@ -14,8 +15,8 @@ import { analyzeMealTextOnly, MealAnalysisResult } from '@/lib/analyzeMealTextOn
 import { API_CONFIG } from '@/lib/constants';
 import { createAnalysisDiagnostics, checkOCRConfig, checkNutritionixCredentials } from '@/lib/diagnostics';
 
-// Setup cache with 1 hour TTL
-const cache = new NodeCache({ stdTTL: 3600 });
+const cache = new NodeCache({ stdTTL: 60 * 60 })  // 1 hour
+const oai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
 
 // Image quality assessment utilities
 interface ImageQualityResult {
