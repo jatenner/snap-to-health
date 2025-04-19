@@ -86,7 +86,7 @@ export async function POST(request: NextRequest) {
 
     // Initialize OpenAI client
     const openai = new OpenAI({
-      apiKey: OPENAI_API_KEY
+      apiKey: process.env.OPENAI_API_KEY
     });
 
     // Prepare text-based analysis request
