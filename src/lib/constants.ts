@@ -2,11 +2,13 @@
  * Constants for OpenAI models and configuration
  */
 
-// Default GPT model for text-based analysis
+// Default GPT model for text-based analysis - use GPT-4o for best results
 export const GPT_MODEL = 'gpt-4o';
 
-// Fallback models in order of preference
+// Fallback models in order of preference if GPT-4o is not available
 export const FALLBACK_MODELS = [
+  'gpt-4-0125-preview',
+  'gpt-4-turbo',
   'gpt-4',
   'gpt-3.5-turbo-16k',
   'gpt-3.5-turbo'
@@ -44,5 +46,25 @@ export const FEATURE_FLAGS = {
   CONFIDENCE_SCORING: true,
   
   // Use OCR text extraction (always enabled now)
-  USE_OCR_EXTRACTION: true
+  USE_OCR_EXTRACTION: true,
+  
+  // Disable Vision-based analysis (deprecated)
+  USE_GPT4_VISION: false
+};
+
+/**
+ * Logging settings
+ */
+export const LOG_CONFIG = {
+  // Whether to log detailed information about analysis steps
+  VERBOSE: true,
+  
+  // Whether to log nutrition API responses
+  LOG_NUTRITION_RESPONSES: false,
+  
+  // Whether to log OpenAI responses
+  LOG_OPENAI_RESPONSES: false,
+  
+  // Maximum length of text to log
+  MAX_LOG_LENGTH: 200
 }; 

@@ -248,6 +248,8 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     const globalTimeoutMs = parseInt(process.env.OPENAI_TIMEOUT_MS || '', 10) || API_CONFIG.DEFAULT_TIMEOUT_MS;
     const signal = controller.signal;
 
+    console.log(`⏱️ [${requestId}] Setting global timeout: ${globalTimeoutMs}ms (${globalTimeoutMs/1000} seconds)`);
+
     // Set global timeout
     const timeoutId = setTimeout(() => {
       console.warn(`⏱️ [${requestId}] Global timeout reached after ${globalTimeoutMs}ms`);
