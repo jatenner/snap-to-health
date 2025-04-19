@@ -1,0 +1,69 @@
+
+> snap-to-health@0.1.0 dev
+> next dev
+
+  ▲ Next.js 14.2.28
+  - Local:        http://localhost:3000
+  - Environments: .env.local
+  - Experiments (use with caution):
+    · externalDir
+
+ ✓ Starting...
+ ✓ Ready in 936ms
+ ○ Compiling /api/analyzeImage ...
+ ✓ Compiled /api/analyzeImage in 599ms (395 modules)
+✅ OpenAI client initialized successfully.
+✅ Firebase private key validation passed
+Processing Firebase private key (base64 length: 2272 chars)
+Initializing Firebase Admin with: 
+        - Project ID: snaphealth-39b14
+        - Client Email: fireb...
+        - Private Key: Successfully decoded (PEM format)
+        - Storage Bucket: snaphealth-39b14.appspot.com
+✅ Firebase Admin initialized successfully
+[analyzeImage] handler start
+📥 [a70fdf5a-ef6b-4eb4-9f69-76688fb9eb51] Analyzing image - request received
+🔍 [a70fdf5a-ef6b-4eb4-9f69-76688fb9eb51] Starting stage: check-ocr-config
+✅ [a70fdf5a-ef6b-4eb4-9f69-76688fb9eb51] Completed stage: check-ocr-config
+⏱️ [a70fdf5a-ef6b-4eb4-9f69-76688fb9eb51] Stage check-ocr-config took 1ms
+📋 [a70fdf5a-ef6b-4eb4-9f69-76688fb9eb51] OCR configuration: {"enabled":true,"confidenceThreshold":0.7,"segmentationEnabled":true,"serverless":false}
+🔍 [a70fdf5a-ef6b-4eb4-9f69-76688fb9eb51] Starting stage: extract-request-data
+📄 [a70fdf5a-ef6b-4eb4-9f69-76688fb9eb51] Content-Type: multipart/form-data; boundary=------------------------S0wvIDD486gE8Dv8GlvrkD
+📝 [a70fdf5a-ef6b-4eb4-9f69-76688fb9eb51] Parsing multipart form data
+📋 [a70fdf5a-ef6b-4eb4-9f69-76688fb9eb51] Form data keys: [ 'image', 'healthGoal' ]
+✅ [a70fdf5a-ef6b-4eb4-9f69-76688fb9eb51] Completed stage: extract-request-data
+⏱️ [a70fdf5a-ef6b-4eb4-9f69-76688fb9eb51] Stage extract-request-data took 2ms
+🔍 [a70fdf5a-ef6b-4eb4-9f69-76688fb9eb51] Starting stage: extract-base64-image
+🔍 [a70fdf5a-ef6b-4eb4-9f69-76688fb9eb51] Extracting base64 from image
+📝 [a70fdf5a-ef6b-4eb4-9f69-76688fb9eb51] Image file info: {
+  "type": "object",
+  "constructor": "File",
+  "isNull": false,
+  "isUndefined": false,
+  "hasProperties": [],
+  "isFormDataEntryValue": true
+}
+📄 [a70fdf5a-ef6b-4eb4-9f69-76688fb9eb51] File name: test.jpg
+📝 [a70fdf5a-ef6b-4eb4-9f69-76688fb9eb51] File details - Type: image/jpeg, Size: 660 bytes
+📊 [a70fdf5a-ef6b-4eb4-9f69-76688fb9eb51] arrayBuffer returned 660 bytes
+✓ [a70fdf5a-ef6b-4eb4-9f69-76688fb9eb51] Successfully converted using arrayBuffer (660 bytes)
+📊 [a70fdf5a-ef6b-4eb4-9f69-76688fb9eb51] Buffer created with size: 660 bytes
+📊 [a70fdf5a-ef6b-4eb4-9f69-76688fb9eb51] Generated base64 string length: 880 chars
+🔍 [a70fdf5a-ef6b-4eb4-9f69-76688fb9eb51] Using MIME type: image/jpeg
+✅ [a70fdf5a-ef6b-4eb4-9f69-76688fb9eb51] Successfully extracted base64 image (903 total chars)
+⏱️ [a70fdf5a-ef6b-4eb4-9f69-76688fb9eb51] extractBase64Image: 0.239ms
+✅ [a70fdf5a-ef6b-4eb4-9f69-76688fb9eb51] Base64 extraction successful (903 chars)
+✅ [a70fdf5a-ef6b-4eb4-9f69-76688fb9eb51] Completed stage: extract-base64-image
+⏱️ [a70fdf5a-ef6b-4eb4-9f69-76688fb9eb51] Stage extract-base64-image took 0ms
+⏱️ [a70fdf5a-ef6b-4eb4-9f69-76688fb9eb51] Setting global timeout: 30000ms (30 seconds)
+🔍 [a70fdf5a-ef6b-4eb4-9f69-76688fb9eb51] Starting stage: check-nutritionix-credentials
+Checking Nutritionix credentials...
+📋 [a70fdf5a-ef6b-4eb4-9f69-76688fb9eb51] Nutritionix credential check: Success: true, App ID: valid, API Key: present
+✅ [a70fdf5a-ef6b-4eb4-9f69-76688fb9eb51] Completed stage: check-nutritionix-credentials
+⏱️ [a70fdf5a-ef6b-4eb4-9f69-76688fb9eb51] Stage check-nutritionix-credentials took 180ms
+🔍 [a70fdf5a-ef6b-4eb4-9f69-76688fb9eb51] Starting stage: run-ocr
+🔍 [a70fdf5a-ef6b-4eb4-9f69-76688fb9eb51] Running OCR to extract text from image
+🔍 [a70fdf5a-ef6b-4eb4-9f69-76688fb9eb51] Starting OCR text extraction
+✅ [a70fdf5a-ef6b-4eb4-9f69-76688fb9eb51] Successfully imported tesseract.js
+ ✓ Compiled in 15ms
+[?25h

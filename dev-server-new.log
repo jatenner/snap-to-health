@@ -1,0 +1,377 @@
+
+> snap-to-health@0.1.0 dev
+> next dev
+
+  ▲ Next.js 14.2.28
+  - Local:        http://localhost:3000
+  - Environments: .env.local
+  - Experiments (use with caution):
+    · externalDir
+
+ ✓ Starting...
+ ✓ Ready in 971ms
+ ✓ Compiled /api/analyzeImage in 272ms (395 modules)
+✅ OpenAI client initialized successfully.
+✅ Firebase private key validation passed
+Processing Firebase private key (base64 length: 2272 chars)
+Initializing Firebase Admin with: 
+        - Project ID: snaphealth-39b14
+        - Client Email: fireb...
+        - Private Key: Successfully decoded (PEM format)
+        - Storage Bucket: snaphealth-39b14.appspot.com
+✅ Firebase Admin initialized successfully
+[analyzeImage] handler start
+📥 [dfcef864-c719-4a0c-89f7-604aa04edd67] Analyzing image - request received
+🔍 [dfcef864-c719-4a0c-89f7-604aa04edd67] Starting stage: check-ocr-config
+✅ [dfcef864-c719-4a0c-89f7-604aa04edd67] Completed stage: check-ocr-config
+⏱️ [dfcef864-c719-4a0c-89f7-604aa04edd67] Stage check-ocr-config took 1ms
+📋 [dfcef864-c719-4a0c-89f7-604aa04edd67] OCR configuration: {"enabled":true,"confidenceThreshold":0.7,"segmentationEnabled":true,"serverless":false}
+🔍 [dfcef864-c719-4a0c-89f7-604aa04edd67] Starting stage: extract-request-data
+📄 [dfcef864-c719-4a0c-89f7-604aa04edd67] Content-Type: multipart/form-data; boundary=------------------------kC8d5xFc2Yok71d9TXqBRY
+📝 [dfcef864-c719-4a0c-89f7-604aa04edd67] Parsing multipart form data
+📋 [dfcef864-c719-4a0c-89f7-604aa04edd67] Form data keys: [ 'image', 'healthGoal' ]
+✅ [dfcef864-c719-4a0c-89f7-604aa04edd67] Completed stage: extract-request-data
+⏱️ [dfcef864-c719-4a0c-89f7-604aa04edd67] Stage extract-request-data took 2ms
+🔍 [dfcef864-c719-4a0c-89f7-604aa04edd67] Starting stage: extract-base64-image
+🔍 [dfcef864-c719-4a0c-89f7-604aa04edd67] Extracting base64 from image
+📝 [dfcef864-c719-4a0c-89f7-604aa04edd67] Image file info: {
+  "type": "object",
+  "constructor": "File",
+  "isNull": false,
+  "isUndefined": false,
+  "hasProperties": [],
+  "isFormDataEntryValue": true
+}
+📄 [dfcef864-c719-4a0c-89f7-604aa04edd67] File name: test.jpg
+📝 [dfcef864-c719-4a0c-89f7-604aa04edd67] File details - Type: image/jpeg, Size: 660 bytes
+📊 [dfcef864-c719-4a0c-89f7-604aa04edd67] arrayBuffer returned 660 bytes
+✓ [dfcef864-c719-4a0c-89f7-604aa04edd67] Successfully converted using arrayBuffer (660 bytes)
+📊 [dfcef864-c719-4a0c-89f7-604aa04edd67] Buffer created with size: 660 bytes
+📊 [dfcef864-c719-4a0c-89f7-604aa04edd67] Generated base64 string length: 880 chars
+🔍 [dfcef864-c719-4a0c-89f7-604aa04edd67] Using MIME type: image/jpeg
+✅ [dfcef864-c719-4a0c-89f7-604aa04edd67] Successfully extracted base64 image (903 total chars)
+⏱️ [dfcef864-c719-4a0c-89f7-604aa04edd67] extractBase64Image: 0.268ms
+✅ [dfcef864-c719-4a0c-89f7-604aa04edd67] Base64 extraction successful (903 chars)
+✅ [dfcef864-c719-4a0c-89f7-604aa04edd67] Completed stage: extract-base64-image
+⏱️ [dfcef864-c719-4a0c-89f7-604aa04edd67] Stage extract-base64-image took 0ms
+⏱️ [dfcef864-c719-4a0c-89f7-604aa04edd67] Setting global timeout: 30000ms (30 seconds)
+🔍 [dfcef864-c719-4a0c-89f7-604aa04edd67] Starting stage: check-nutritionix-credentials
+Checking Nutritionix credentials...
+📋 [dfcef864-c719-4a0c-89f7-604aa04edd67] Nutritionix credential check: Success: true, App ID: valid, API Key: present
+✅ [dfcef864-c719-4a0c-89f7-604aa04edd67] Completed stage: check-nutritionix-credentials
+⏱️ [dfcef864-c719-4a0c-89f7-604aa04edd67] Stage check-nutritionix-credentials took 252ms
+🔍 [dfcef864-c719-4a0c-89f7-604aa04edd67] Starting stage: run-ocr
+🔍 [dfcef864-c719-4a0c-89f7-604aa04edd67] Running OCR to extract text from image
+🔍 [dfcef864-c719-4a0c-89f7-604aa04edd67] Starting OCR text extraction
+✅ [dfcef864-c719-4a0c-89f7-604aa04edd67] Successfully imported tesseract.js
+⏱️ [dfcef864-c719-4a0c-89f7-604aa04edd67] OCR timeout reached after 5000ms
+📋 [dfcef864-c719-4a0c-89f7-604aa04edd67] Using fallback text due to OCR timeout: "Salad with grilled chicken, tomatoes, and avocado...."
+✅ [dfcef864-c719-4a0c-89f7-604aa04edd67] OCR successful, extracted 88 characters
+📋 [dfcef864-c719-4a0c-89f7-604aa04edd67] Extracted text: "Salad with grilled chicken, tomatoes, and avocado. Side of brown rice. A glass of water."
+✅ [dfcef864-c719-4a0c-89f7-604aa04edd67] Completed stage: run-ocr
+⏱️ [dfcef864-c719-4a0c-89f7-604aa04edd67] Stage run-ocr took 5004ms
+🔍 [dfcef864-c719-4a0c-89f7-604aa04edd67] Starting stage: analyze-text
+🔍 [dfcef864-c719-4a0c-89f7-604aa04edd67] Analyzing extracted text to identify meal components
+🔍 [dfcef864-c719-4a0c-89f7-604aa04edd67] Starting text-only meal analysis
+🔍 [dfcef864-c719-4a0c-89f7-604aa04edd67] Extracting food items from text (88 chars)
+📝 [dfcef864-c719-4a0c-89f7-604aa04edd67] Cleaned text: "Salad with grilled chicken, tomatoes, and avocado. Side of brown rice. A glass of water."
+✅ [dfcef864-c719-4a0c-89f7-604aa04edd67] Extracted 3 food items using basic splitting
+📋 [dfcef864-c719-4a0c-89f7-604aa04edd67] Found 3 unique food items
+📋 [dfcef864-c719-4a0c-89f7-604aa04edd67] Extracted food items: Salad with grilled chicken, tomatoes, avocado. Side of brown rice. A glass of water.
+📋 [dfcef864-c719-4a0c-89f7-604aa04edd67] Extracted 3 food items
+🔍 [dfcef864-c719-4a0c-89f7-604aa04edd67] Getting nutrition data for: Salad with grilled chicken, tomatoes, avocado. Side of brown rice. A glass of water.
+🔑 [dfcef864-c719-4a0c-89f7-604aa04edd67] Nutritionix API credentials available: true
+✅ [dfcef864-c719-4a0c-89f7-604aa04edd67] Successfully retrieved nutrition data for 5 food items
+⏱️ [dfcef864-c719-4a0c-89f7-604aa04edd67] getNutritionData: 185.691ms
+💬 [dfcef864-c719-4a0c-89f7-604aa04edd67] Generating feedback based on health goals and dietary preferences
+💡 [dfcef864-c719-4a0c-89f7-604aa04edd67] Generating suggestions based on analysis results
+✅ [dfcef864-c719-4a0c-89f7-604aa04edd67] Text-only meal analysis completed successfully
+✅ [dfcef864-c719-4a0c-89f7-604aa04edd67] Text analysis successful
+📋 [dfcef864-c719-4a0c-89f7-604aa04edd67] Identified meal: This meal contains Salad with grilled chicken, tomatoes and avocado. Side of brown rice. A glass of water.. It provides approximately 755 calories.
+📋 [dfcef864-c719-4a0c-89f7-604aa04edd67] Identified ingredients: Salad with grilled chicken, tomatoes, avocado. Side of brown rice. A glass of water.
+✅ [dfcef864-c719-4a0c-89f7-604aa04edd67] Completed stage: analyze-text
+⏱️ [dfcef864-c719-4a0c-89f7-604aa04edd67] Stage analyze-text took 187ms
+🔍 [dfcef864-c719-4a0c-89f7-604aa04edd67] Starting stage: get-nutrition-data
+🔍 [dfcef864-c719-4a0c-89f7-604aa04edd67] Getting nutrition data for identified ingredients
+🔍 [dfcef864-c719-4a0c-89f7-604aa04edd67] Getting nutrition data for: Salad with grilled chicken, tomatoes, avocado. Side of brown rice. A glass of water.
+🔑 [dfcef864-c719-4a0c-89f7-604aa04edd67] Nutritionix API credentials available: true
+✅ [dfcef864-c719-4a0c-89f7-604aa04edd67] Successfully retrieved nutrition data for 5 food items
+⏱️ [dfcef864-c719-4a0c-89f7-604aa04edd67] getNutritionData: 97.5ms
+✅ [dfcef864-c719-4a0c-89f7-604aa04edd67] Nutrition data retrieved successfully
+✅ [dfcef864-c719-4a0c-89f7-604aa04edd67] Completed stage: get-nutrition-data
+⏱️ [dfcef864-c719-4a0c-89f7-604aa04edd67] Stage get-nutrition-data took 98ms
+🔍 [dfcef864-c719-4a0c-89f7-604aa04edd67] Starting stage: create-final-analysis
+🔍 [dfcef864-c719-4a0c-89f7-604aa04edd67] Creating nutrient analysis with 0 health goals
+✅ [dfcef864-c719-4a0c-89f7-604aa04edd67] Completed stage: create-final-analysis
+⏱️ [dfcef864-c719-4a0c-89f7-604aa04edd67] Stage create-final-analysis took 0ms
+📊 [dfcef864-c719-4a0c-89f7-604aa04edd67] Analysis diagnostics completed:
+📊 [dfcef864-c719-4a0c-89f7-604aa04edd67] Total duration: 5544ms
+📊 [dfcef864-c719-4a0c-89f7-604aa04edd67] Overall success: true
+📊 [dfcef864-c719-4a0c-89f7-604aa04edd67] Summary: Analysis completed successfully in 5544ms through 8 stages
+📤 [dfcef864-c719-4a0c-89f7-604aa04edd67] Analysis complete in 5544ms
+📈 [dfcef864-c719-4a0c-89f7-604aa04edd67] Success: true, Fallback: false
+⏱️ [dfcef864-c719-4a0c-89f7-604aa04edd67] analyzeImage POST: 5.544s
+[analyzeImage] returning SUCCESS
+ POST /api/analyzeImage 200 in 6150ms
+  ▲ Next.js 14.2.28
+  - Local:        http://localhost:3000
+  - Environments: .env.local
+  - Experiments (use with caution):
+    · externalDir
+
+ ✓ Starting...
+ ✓ Ready in 929ms
+  ▲ Next.js 14.2.28
+  - Local:        http://localhost:3000
+  - Environments: .env.local
+  - Experiments (use with caution):
+    · externalDir
+
+ ✓ Starting...
+ ✓ Ready in 971ms
+  ▲ Next.js 14.2.28
+  - Local:        http://localhost:3000
+  - Environments: .env.local
+
+ ✓ Starting...
+ ✓ Ready in 930ms
+  ▲ Next.js 14.2.28
+  - Local:        http://localhost:3000
+  - Environments: .env.local
+  - Experiments (use with caution):
+    · externalDir
+
+ ✓ Starting...
+ ✓ Ready in 1035ms
+ ○ Compiling /api/analyzeImage ...
+ ✓ Compiled /api/analyzeImage in 617ms (395 modules)
+✅ OpenAI client initialized successfully.
+✅ Firebase private key validation passed
+Processing Firebase private key (base64 length: 2272 chars)
+Initializing Firebase Admin with: 
+        - Project ID: snaphealth-39b14
+        - Client Email: fireb...
+        - Private Key: Successfully decoded (PEM format)
+        - Storage Bucket: snaphealth-39b14.appspot.com
+✅ Firebase Admin initialized successfully
+[analyzeImage] handler start
+📥 [6e32196e-227c-433e-8e33-5d561f42cf94] Analyzing image - request received
+🔍 [6e32196e-227c-433e-8e33-5d561f42cf94] Starting stage: check-ocr-config
+✅ [6e32196e-227c-433e-8e33-5d561f42cf94] Completed stage: check-ocr-config
+⏱️ [6e32196e-227c-433e-8e33-5d561f42cf94] Stage check-ocr-config took 0ms
+📋 [6e32196e-227c-433e-8e33-5d561f42cf94] OCR configuration: {"enabled":true,"confidenceThreshold":0.7,"segmentationEnabled":true,"serverless":false}
+🔍 [6e32196e-227c-433e-8e33-5d561f42cf94] Starting stage: extract-request-data
+📄 [6e32196e-227c-433e-8e33-5d561f42cf94] Content-Type: multipart/form-data; boundary=------------------------3HR8W6fxdWMKQAaZvQ3DIb
+📝 [6e32196e-227c-433e-8e33-5d561f42cf94] Parsing multipart form data
+📋 [6e32196e-227c-433e-8e33-5d561f42cf94] Form data keys: [ 'image', 'healthGoal' ]
+✅ [6e32196e-227c-433e-8e33-5d561f42cf94] Completed stage: extract-request-data
+⏱️ [6e32196e-227c-433e-8e33-5d561f42cf94] Stage extract-request-data took 3ms
+🔍 [6e32196e-227c-433e-8e33-5d561f42cf94] Starting stage: extract-base64-image
+🔍 [6e32196e-227c-433e-8e33-5d561f42cf94] Extracting base64 from image
+📝 [6e32196e-227c-433e-8e33-5d561f42cf94] Image file info: {
+  "type": "object",
+  "constructor": "File",
+  "isNull": false,
+  "isUndefined": false,
+  "hasProperties": [],
+  "isFormDataEntryValue": true
+}
+📄 [6e32196e-227c-433e-8e33-5d561f42cf94] File name: test.jpg
+📝 [6e32196e-227c-433e-8e33-5d561f42cf94] File details - Type: image/jpeg, Size: 660 bytes
+📊 [6e32196e-227c-433e-8e33-5d561f42cf94] arrayBuffer returned 660 bytes
+✓ [6e32196e-227c-433e-8e33-5d561f42cf94] Successfully converted using arrayBuffer (660 bytes)
+📊 [6e32196e-227c-433e-8e33-5d561f42cf94] Buffer created with size: 660 bytes
+📊 [6e32196e-227c-433e-8e33-5d561f42cf94] Generated base64 string length: 880 chars
+🔍 [6e32196e-227c-433e-8e33-5d561f42cf94] Using MIME type: image/jpeg
+✅ [6e32196e-227c-433e-8e33-5d561f42cf94] Successfully extracted base64 image (903 total chars)
+⏱️ [6e32196e-227c-433e-8e33-5d561f42cf94] extractBase64Image: 0.208ms
+✅ [6e32196e-227c-433e-8e33-5d561f42cf94] Base64 extraction successful (903 chars)
+✅ [6e32196e-227c-433e-8e33-5d561f42cf94] Completed stage: extract-base64-image
+⏱️ [6e32196e-227c-433e-8e33-5d561f42cf94] Stage extract-base64-image took 0ms
+⏱️ [6e32196e-227c-433e-8e33-5d561f42cf94] Setting global timeout: 30000ms (30 seconds)
+🔍 [6e32196e-227c-433e-8e33-5d561f42cf94] Starting stage: check-nutritionix-credentials
+Checking Nutritionix credentials...
+📋 [6e32196e-227c-433e-8e33-5d561f42cf94] Nutritionix credential check: Success: true, App ID: valid, API Key: present
+✅ [6e32196e-227c-433e-8e33-5d561f42cf94] Completed stage: check-nutritionix-credentials
+⏱️ [6e32196e-227c-433e-8e33-5d561f42cf94] Stage check-nutritionix-credentials took 195ms
+🔍 [6e32196e-227c-433e-8e33-5d561f42cf94] Starting stage: run-ocr
+🔍 [6e32196e-227c-433e-8e33-5d561f42cf94] Running OCR to extract text from image
+🔍 [6e32196e-227c-433e-8e33-5d561f42cf94] Starting OCR text extraction
+✅ [6e32196e-227c-433e-8e33-5d561f42cf94] Successfully imported tesseract.js
+⏱️ [6e32196e-227c-433e-8e33-5d561f42cf94] OCR timeout reached after 5000ms
+📋 [6e32196e-227c-433e-8e33-5d561f42cf94] Using fallback text due to OCR timeout: "Salad with grilled chicken, tomatoes, and avocado...."
+✅ [6e32196e-227c-433e-8e33-5d561f42cf94] OCR successful, extracted 88 characters
+📋 [6e32196e-227c-433e-8e33-5d561f42cf94] Extracted text: "Salad with grilled chicken, tomatoes, and avocado. Side of brown rice. A glass of water."
+✅ [6e32196e-227c-433e-8e33-5d561f42cf94] Completed stage: run-ocr
+⏱️ [6e32196e-227c-433e-8e33-5d561f42cf94] Stage run-ocr took 5003ms
+🔍 [6e32196e-227c-433e-8e33-5d561f42cf94] Starting stage: analyze-text
+🔍 [6e32196e-227c-433e-8e33-5d561f42cf94] Analyzing extracted text to identify meal components
+🔍 [6e32196e-227c-433e-8e33-5d561f42cf94] Starting text-only meal analysis
+🔍 [6e32196e-227c-433e-8e33-5d561f42cf94] Extracting food items from text (88 chars)
+📝 [6e32196e-227c-433e-8e33-5d561f42cf94] Cleaned text: "Salad with grilled chicken, tomatoes, and avocado. Side of brown rice. A glass of water."
+✅ [6e32196e-227c-433e-8e33-5d561f42cf94] Extracted 3 food items using basic splitting
+📋 [6e32196e-227c-433e-8e33-5d561f42cf94] Found 3 unique food items
+📋 [6e32196e-227c-433e-8e33-5d561f42cf94] Extracted food items: Salad with grilled chicken, tomatoes, avocado. Side of brown rice. A glass of water.
+📋 [6e32196e-227c-433e-8e33-5d561f42cf94] Extracted 3 food items
+🔍 [6e32196e-227c-433e-8e33-5d561f42cf94] Getting nutrition data for: Salad with grilled chicken, tomatoes, avocado. Side of brown rice. A glass of water.
+🔑 [6e32196e-227c-433e-8e33-5d561f42cf94] Nutritionix API credentials available: true
+✅ [6e32196e-227c-433e-8e33-5d561f42cf94] Successfully retrieved nutrition data for 5 food items
+⏱️ [6e32196e-227c-433e-8e33-5d561f42cf94] getNutritionData: 210.737ms
+💬 [6e32196e-227c-433e-8e33-5d561f42cf94] Generating feedback based on health goals and dietary preferences
+💡 [6e32196e-227c-433e-8e33-5d561f42cf94] Generating suggestions based on analysis results
+✅ [6e32196e-227c-433e-8e33-5d561f42cf94] Text-only meal analysis completed successfully
+✅ [6e32196e-227c-433e-8e33-5d561f42cf94] Text analysis successful
+📋 [6e32196e-227c-433e-8e33-5d561f42cf94] Identified meal: This meal contains Salad with grilled chicken, tomatoes and avocado. Side of brown rice. A glass of water.. It provides approximately 755 calories.
+📋 [6e32196e-227c-433e-8e33-5d561f42cf94] Identified ingredients: Salad with grilled chicken, tomatoes, avocado. Side of brown rice. A glass of water.
+✅ [6e32196e-227c-433e-8e33-5d561f42cf94] Completed stage: analyze-text
+⏱️ [6e32196e-227c-433e-8e33-5d561f42cf94] Stage analyze-text took 213ms
+🔍 [6e32196e-227c-433e-8e33-5d561f42cf94] Starting stage: get-nutrition-data
+🔍 [6e32196e-227c-433e-8e33-5d561f42cf94] Getting nutrition data for identified ingredients
+🔍 [6e32196e-227c-433e-8e33-5d561f42cf94] Getting nutrition data for: Salad with grilled chicken, tomatoes, avocado. Side of brown rice. A glass of water.
+🔑 [6e32196e-227c-433e-8e33-5d561f42cf94] Nutritionix API credentials available: true
+✅ [6e32196e-227c-433e-8e33-5d561f42cf94] Successfully retrieved nutrition data for 5 food items
+⏱️ [6e32196e-227c-433e-8e33-5d561f42cf94] getNutritionData: 107.522ms
+✅ [6e32196e-227c-433e-8e33-5d561f42cf94] Nutrition data retrieved successfully
+✅ [6e32196e-227c-433e-8e33-5d561f42cf94] Completed stage: get-nutrition-data
+⏱️ [6e32196e-227c-433e-8e33-5d561f42cf94] Stage get-nutrition-data took 107ms
+🔍 [6e32196e-227c-433e-8e33-5d561f42cf94] Starting stage: create-final-analysis
+🔍 [6e32196e-227c-433e-8e33-5d561f42cf94] Creating nutrient analysis with 0 health goals
+✅ [6e32196e-227c-433e-8e33-5d561f42cf94] Completed stage: create-final-analysis
+⏱️ [6e32196e-227c-433e-8e33-5d561f42cf94] Stage create-final-analysis took 0ms
+📊 [6e32196e-227c-433e-8e33-5d561f42cf94] Analysis diagnostics completed:
+📊 [6e32196e-227c-433e-8e33-5d561f42cf94] Total duration: 5522ms
+📊 [6e32196e-227c-433e-8e33-5d561f42cf94] Overall success: true
+📊 [6e32196e-227c-433e-8e33-5d561f42cf94] Summary: Analysis completed successfully in 5522ms through 8 stages
+📤 [6e32196e-227c-433e-8e33-5d561f42cf94] Analysis complete in 5522ms
+📈 [6e32196e-227c-433e-8e33-5d561f42cf94] Success: true, Fallback: false
+⏱️ [6e32196e-227c-433e-8e33-5d561f42cf94] analyzeImage POST: 5.522s
+[analyzeImage] returning SUCCESS
+ POST /api/analyzeImage 200 in 6481ms
+ ✓ Compiled in 29ms
+ ✓ Compiled /api/analyzeImage in 272ms (399 modules)
+✅ OpenAI client initialized successfully.
+[analyzeImage] handler start
+📥 [f108f690-2f1e-4585-bc67-3582d84e8b7d] Analyzing image - request received
+🔍 [f108f690-2f1e-4585-bc67-3582d84e8b7d] Starting stage: check-ocr-config
+✅ [f108f690-2f1e-4585-bc67-3582d84e8b7d] Completed stage: check-ocr-config
+⏱️ [f108f690-2f1e-4585-bc67-3582d84e8b7d] Stage check-ocr-config took 0ms
+📋 [f108f690-2f1e-4585-bc67-3582d84e8b7d] OCR configuration: {"enabled":true,"confidenceThreshold":0.7,"segmentationEnabled":true,"serverless":false}
+🔍 [f108f690-2f1e-4585-bc67-3582d84e8b7d] Starting stage: extract-request-data
+📄 [f108f690-2f1e-4585-bc67-3582d84e8b7d] Content-Type: multipart/form-data; boundary=------------------------JXRaDVTlYDVFgAwYEhHbUg
+📝 [f108f690-2f1e-4585-bc67-3582d84e8b7d] Parsing multipart form data
+📋 [f108f690-2f1e-4585-bc67-3582d84e8b7d] Form data keys: [ 'image', 'healthGoal' ]
+✅ [f108f690-2f1e-4585-bc67-3582d84e8b7d] Completed stage: extract-request-data
+⏱️ [f108f690-2f1e-4585-bc67-3582d84e8b7d] Stage extract-request-data took 1ms
+🔍 [f108f690-2f1e-4585-bc67-3582d84e8b7d] Starting stage: extract-base64-image
+🔍 [f108f690-2f1e-4585-bc67-3582d84e8b7d] Extracting base64 from image
+📝 [f108f690-2f1e-4585-bc67-3582d84e8b7d] Image file info: {
+  "type": "object",
+  "constructor": "File",
+  "isNull": false,
+  "isUndefined": false,
+  "hasProperties": [],
+  "isFormDataEntryValue": true
+}
+📄 [f108f690-2f1e-4585-bc67-3582d84e8b7d] File name: test.jpg
+📝 [f108f690-2f1e-4585-bc67-3582d84e8b7d] File details - Type: image/jpeg, Size: 660 bytes
+📊 [f108f690-2f1e-4585-bc67-3582d84e8b7d] arrayBuffer returned 660 bytes
+✓ [f108f690-2f1e-4585-bc67-3582d84e8b7d] Successfully converted using arrayBuffer (660 bytes)
+📊 [f108f690-2f1e-4585-bc67-3582d84e8b7d] Buffer created with size: 660 bytes
+📊 [f108f690-2f1e-4585-bc67-3582d84e8b7d] Generated base64 string length: 880 chars
+🔍 [f108f690-2f1e-4585-bc67-3582d84e8b7d] Using MIME type: image/jpeg
+✅ [f108f690-2f1e-4585-bc67-3582d84e8b7d] Successfully extracted base64 image (903 total chars)
+⏱️ [f108f690-2f1e-4585-bc67-3582d84e8b7d] extractBase64Image: 0.109ms
+✅ [f108f690-2f1e-4585-bc67-3582d84e8b7d] Base64 extraction successful (903 chars)
+✅ [f108f690-2f1e-4585-bc67-3582d84e8b7d] Completed stage: extract-base64-image
+⏱️ [f108f690-2f1e-4585-bc67-3582d84e8b7d] Stage extract-base64-image took 0ms
+⏱️ [f108f690-2f1e-4585-bc67-3582d84e8b7d] Setting global timeout: 30000ms (30 seconds)
+🔍 [f108f690-2f1e-4585-bc67-3582d84e8b7d] Starting stage: check-nutritionix-credentials
+Checking Nutritionix credentials...
+📋 [f108f690-2f1e-4585-bc67-3582d84e8b7d] Nutritionix credential check: Success: true, App ID: valid, API Key: present
+✅ [f108f690-2f1e-4585-bc67-3582d84e8b7d] Completed stage: check-nutritionix-credentials
+⏱️ [f108f690-2f1e-4585-bc67-3582d84e8b7d] Stage check-nutritionix-credentials took 139ms
+🔍 [f108f690-2f1e-4585-bc67-3582d84e8b7d] Starting stage: run-ocr
+🔍 [f108f690-2f1e-4585-bc67-3582d84e8b7d] Running OCR to extract text from image
+🔍 [f108f690-2f1e-4585-bc67-3582d84e8b7d] Starting OCR text extraction
+✅ [f108f690-2f1e-4585-bc67-3582d84e8b7d] Successfully imported tesseract.js
+⏱️ [f108f690-2f1e-4585-bc67-3582d84e8b7d] OCR timeout reached after 5000ms
+📋 [f108f690-2f1e-4585-bc67-3582d84e8b7d] Using fallback text due to OCR timeout: "Salad with grilled chicken, tomatoes, and avocado...."
+✅ [f108f690-2f1e-4585-bc67-3582d84e8b7d] OCR successful, extracted 88 characters
+📋 [f108f690-2f1e-4585-bc67-3582d84e8b7d] Extracted text: "Salad with grilled chicken, tomatoes, and avocado. Side of brown rice. A glass of water."
+✅ [f108f690-2f1e-4585-bc67-3582d84e8b7d] Completed stage: run-ocr
+⏱️ [f108f690-2f1e-4585-bc67-3582d84e8b7d] Stage run-ocr took 5002ms
+🔍 [f108f690-2f1e-4585-bc67-3582d84e8b7d] Starting stage: analyze-text
+🔍 [f108f690-2f1e-4585-bc67-3582d84e8b7d] Analyzing extracted text to identify meal components
+🔍 [f108f690-2f1e-4585-bc67-3582d84e8b7d] Starting text-only meal analysis
+🔍 [f108f690-2f1e-4585-bc67-3582d84e8b7d] Extracting food items from text (88 chars)
+📝 [f108f690-2f1e-4585-bc67-3582d84e8b7d] Cleaned text: "Salad with grilled chicken, tomatoes, and avocado. Side of brown rice. A glass of water."
+✅ [f108f690-2f1e-4585-bc67-3582d84e8b7d] Extracted 3 food items using basic splitting
+📋 [f108f690-2f1e-4585-bc67-3582d84e8b7d] Found 3 unique food items
+📋 [f108f690-2f1e-4585-bc67-3582d84e8b7d] Extracted food items: Salad with grilled chicken, tomatoes, avocado. Side of brown rice. A glass of water.
+📋 [f108f690-2f1e-4585-bc67-3582d84e8b7d] Extracted 3 food items
+🔍 [f108f690-2f1e-4585-bc67-3582d84e8b7d] Getting nutrition data for: Salad with grilled chicken, tomatoes, avocado. Side of brown rice. A glass of water.
+🔑 [f108f690-2f1e-4585-bc67-3582d84e8b7d] Nutritionix API credentials available: true
+✅ [f108f690-2f1e-4585-bc67-3582d84e8b7d] Successfully retrieved nutrition data for 5 food items
+⏱️ [f108f690-2f1e-4585-bc67-3582d84e8b7d] getNutritionData: 241.474ms
+💬 [f108f690-2f1e-4585-bc67-3582d84e8b7d] Generating feedback based on health goals and dietary preferences
+💡 [f108f690-2f1e-4585-bc67-3582d84e8b7d] Generating suggestions based on analysis results
+✅ [f108f690-2f1e-4585-bc67-3582d84e8b7d] Text-only meal analysis completed successfully
+✅ [f108f690-2f1e-4585-bc67-3582d84e8b7d] Text analysis successful
+📋 [f108f690-2f1e-4585-bc67-3582d84e8b7d] Identified meal: This meal contains Salad with grilled chicken, tomatoes and avocado. Side of brown rice. A glass of water.. It provides approximately 755 calories.
+📋 [f108f690-2f1e-4585-bc67-3582d84e8b7d] Identified ingredients: Salad with grilled chicken, tomatoes, avocado. Side of brown rice. A glass of water.
+✅ [f108f690-2f1e-4585-bc67-3582d84e8b7d] Completed stage: analyze-text
+⏱️ [f108f690-2f1e-4585-bc67-3582d84e8b7d] Stage analyze-text took 242ms
+🔍 [f108f690-2f1e-4585-bc67-3582d84e8b7d] Starting stage: get-nutrition-data
+🔍 [f108f690-2f1e-4585-bc67-3582d84e8b7d] Getting nutrition data for identified ingredients
+[analyzeImage] OCR text: Salad with grilled chicken, tomatoes, and avocado. Side of brown rice. A glass of water.
+🔍 [f108f690-2f1e-4585-bc67-3582d84e8b7d] Getting nutrition data for: Salad with grilled chicken, tomatoes, and avocado. Side of brown rice. A glass of water.
+🔑 [f108f690-2f1e-4585-bc67-3582d84e8b7d] Nutritionix API credentials available: true
+[GPT Fallback] Generating nutrition data for: "Salad with grilled chicken, tomatoes, and avocado. Side of brown rice. A glass of water."
+✅ [f108f690-2f1e-4585-bc67-3582d84e8b7d] Successfully retrieved nutrition data for 5 food items
+⏱️ [f108f690-2f1e-4585-bc67-3582d84e8b7d] getNutritionData: 170.528ms
+[analyzeImage] using path: nutritionix
+✅ [f108f690-2f1e-4585-bc67-3582d84e8b7d] Completed stage: get-nutrition-data
+⏱️ [f108f690-2f1e-4585-bc67-3582d84e8b7d] Stage get-nutrition-data took 172ms
+🔍 [f108f690-2f1e-4585-bc67-3582d84e8b7d] Starting stage: create-final-analysis
+🔍 [f108f690-2f1e-4585-bc67-3582d84e8b7d] Creating nutrient analysis with 0 health goals
+✅ [f108f690-2f1e-4585-bc67-3582d84e8b7d] Completed stage: create-final-analysis
+⏱️ [f108f690-2f1e-4585-bc67-3582d84e8b7d] Stage create-final-analysis took 0ms
+📊 [f108f690-2f1e-4585-bc67-3582d84e8b7d] Analysis diagnostics completed:
+📊 [f108f690-2f1e-4585-bc67-3582d84e8b7d] Total duration: 5558ms
+📊 [f108f690-2f1e-4585-bc67-3582d84e8b7d] Overall success: true
+📊 [f108f690-2f1e-4585-bc67-3582d84e8b7d] Summary: Analysis completed successfully in 5558ms through 8 stages
+📤 [f108f690-2f1e-4585-bc67-3582d84e8b7d] Analysis complete in 5558ms
+📈 [f108f690-2f1e-4585-bc67-3582d84e8b7d] Success: true, Fallback: false
+⏱️ [f108f690-2f1e-4585-bc67-3582d84e8b7d] analyzeImage POST: 5.558s
+[analyzeImage] returning SUCCESS
+ POST /api/analyzeImage 200 in 5875ms
+[GPT Fallback] Successfully generated nutrition data with 8 nutrients
+ ✓ Compiled in 545ms (601 modules)
+ ✓ Compiled in 17ms
+ ✓ Compiled /api/analyzeImage in 107ms (386 modules)
+[analyzeImage] handler start
+[analyzeImage] Content-Type: multipart/form-data; boundary=------------------------htxR25HYsB55hHcMjHweIN
+[analyzeImage] Form data keys: [ 'image', 'healthGoal' ]
+📝 [b1009ea9-d08f-45bb-ae58-f4ce3fafb4b6] Image file info: {
+  "type": "object",
+  "constructor": "File",
+  "isNull": false,
+  "isUndefined": false,
+  "hasProperties": [],
+  "isFormDataEntryValue": true
+}
+📄 [b1009ea9-d08f-45bb-ae58-f4ce3fafb4b6] File name: test.jpg
+📝 [b1009ea9-d08f-45bb-ae58-f4ce3fafb4b6] File details - Type: image/jpeg, Size: 660 bytes
+📊 [b1009ea9-d08f-45bb-ae58-f4ce3fafb4b6] arrayBuffer returned 660 bytes
+✓ [b1009ea9-d08f-45bb-ae58-f4ce3fafb4b6] Successfully converted using arrayBuffer (660 bytes)
+📊 [b1009ea9-d08f-45bb-ae58-f4ce3fafb4b6] Buffer created with size: 660 bytes
+📊 [b1009ea9-d08f-45bb-ae58-f4ce3fafb4b6] Generated base64 string length: 880 chars
+🔍 [b1009ea9-d08f-45bb-ae58-f4ce3fafb4b6] Using MIME type: image/jpeg
+✅ [b1009ea9-d08f-45bb-ae58-f4ce3fafb4b6] Successfully extracted base64 image (903 total chars)
+⏱️ [b1009ea9-d08f-45bb-ae58-f4ce3fafb4b6] extractBase64Image: 0.534ms
+[analyzeImage] Extracted base64 image (903 chars)
+[analyzeImage] Cache miss for Test_34e6e7653e7e681fc256173b605ab5fe, processing...
+[analyzeImage] Running OCR to extract text from image
+🔍 [b1009ea9-d08f-45bb-ae58-f4ce3fafb4b6] Starting OCR text extraction
+✅ [b1009ea9-d08f-45bb-ae58-f4ce3fafb4b6] Successfully imported tesseract.js
+ POST /api/analyzeImage 200 in 172452ms
