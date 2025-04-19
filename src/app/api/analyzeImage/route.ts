@@ -1,16 +1,21 @@
 import { NextRequest, NextResponse } from 'next/server';
 import axios from 'axios';
 import crypto from 'crypto';
+import NodeCache from 'node-cache';
 import { adminStorage } from '@/lib/firebaseAdmin';
 import { trySaveMealServer } from '@/lib/serverMealUtils';
 import { uploadImageToFirebase } from '@/lib/firebaseStorage';
 import { extractBase64Image } from '@/lib/imageProcessing';
 import { getNutritionData, createNutrientAnalysis, NutritionData } from '@/lib/nutritionixApi';
+import { callGptNutritionFallback } from '@/lib/gptNutrition';
 import { createEmptyFallbackAnalysis } from '@/lib/analyzeImageWithOCR';
 import { runOCR, OCRResult } from '@/lib/runOCR';
 import { analyzeMealTextOnly, MealAnalysisResult } from '@/lib/analyzeMealTextOnly';
 import { API_CONFIG } from '@/lib/constants';
 import { createAnalysisDiagnostics, checkOCRConfig, checkNutritionixCredentials } from '@/lib/diagnostics';
+
+// Setup cache with 10 minute TTL
+const cache = new NodeCache({ stdTTL: 600 });
 
 // Image quality assessment utilities
 interface ImageQualityResult {
@@ -120,6 +125,68 @@ function createFallbackResponse(reason: string, partialResult: any, reqId: strin
       imageQuality: "unknown"
     }
   };
+}
+
+/**
+ * Fetch nutrition data with caching and fallback
+ * @param text OCR text to analyze
+ * @param requestId Request identifier for tracking
+ * @returns Nutrition data from either Nutritionix or GPT fallback
+ */
+async function fetchNutrition(text: string, requestId: string): Promise<NutritionData> {
+  console.log(`[analyzeImage] OCR text: ${text}`);
+  
+  // Create a cache key from the text
+  const key = text.trim().toLowerCase();
+  
+  // Check cache first
+  if (cache.has(key)) {
+    const cachedData = cache.get<NutritionData>(key);
+    console.log(`[analyzeImage] Using cached nutrition data for text`);
+    return cachedData!;
+  }
+  
+  // Set up both Nutritionix and GPT calls
+  const nutritionixPromise = getNutritionData(text, requestId)
+    .then(result => {
+      if (!result.success || !result.data) {
+        throw new Error('NUTRITIONIX_FAILED');
+      }
+      // Add source tag to identify which provider we used
+      return { ...result.data, source: 'nutritionix' };
+    })
+    .catch(err => {
+      // Only handle specific errors we expect
+      if (err.response && [401, 429, 500, 502, 503].includes(err.response.status)) {
+        console.log(`[analyzeImage] Nutritionix failed with status ${err.response.status}`);
+        throw new Error('NUTRITIONIX_FAILED');
+      }
+      throw err; // Propagate other errors
+    });
+  
+  // GPT fallback
+  const gptPromise = callGptNutritionFallback(text);
+  
+  let result: NutritionData;
+  try {
+    // Race the promises
+    result = await Promise.race([nutritionixPromise, gptPromise]);
+    console.log(`[analyzeImage] using path: ${(result as any).source}`);
+  } catch (e) {
+    // If Nutritionix failed but GPT might still be working, wait for GPT
+    if (e instanceof Error && e.message === 'NUTRITIONIX_FAILED') {
+      console.log(`[analyzeImage] Nutritionix failed, falling back to GPT`);
+      result = await gptPromise;
+      console.log(`[analyzeImage] using path: ${(result as any).source}`);
+    } else {
+      // Something else went wrong, re-throw
+      throw e;
+    }
+  }
+  
+  // Cache the result
+  cache.set(key, result);
+  return result;
 }
 
 // The main POST handler for image analysis
@@ -409,23 +476,14 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
         return analysis;
       });
       
-      // Step c: Get nutrition data based on identified ingredients
+      // Step c: Get nutrition data with race between Nutritionix and GPT
       if (mealAnalysis && mealAnalysis.ingredients.length > 0) {
         try {
           nutritionData = await recordStage('get-nutrition-data', async () => {
             console.log(`🔍 [${requestId}] Getting nutrition data for identified ingredients`);
             
-            // Join ingredients for Nutritionix query
-            const ingredientsText = mealAnalysis!.ingredients.map(i => i.name).join(', ');
-            const nutritionResult = await getNutritionData(ingredientsText, requestId);
-            
-            if (nutritionResult.success && nutritionResult.data) {
-              console.log(`✅ [${requestId}] Nutrition data retrieved successfully`);
-              return nutritionResult.data;
-            } else {
-              console.warn(`⚠️ [${requestId}] Nutrition data fetch failed: ${nutritionResult.error}`);
-              throw new Error(nutritionResult.error || 'Failed to retrieve nutrition data');
-            }
+            // Use the fetchNutrition function to get data with fallback
+            return await fetchNutrition(extractedText, requestId);
           });
         } catch (error) {
           console.warn(`⚠️ [${requestId}] Failed to get nutrition data: ${error instanceof Error ? error.message : String(error)}`);
@@ -449,6 +507,9 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
           throw new Error('Meal analysis failed or returned null');
         }
         
+        // Determine if fallback was used
+        const usedFallback = nutritionData ? (nutritionData as any)?.source === 'gpt' || (nutritionData as any)?.source === 'gpt_fallback_error' : false;
+        
         // Combine extracted text, meal analysis, and nutrition data
         let result: AnalysisResult = {
           description: mealAnalysis.description,
@@ -461,8 +522,8 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
             specific: {}
           },
           modelInfo: {
-            model: 'ocr-text-analysis',
-            usedFallback: false,
+            model: usedFallback ? 'gpt' : 'nutritionix',
+            usedFallback,
             ocrExtracted: true
           }
         };
