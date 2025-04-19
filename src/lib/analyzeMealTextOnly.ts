@@ -202,24 +202,147 @@ export async function analyzeMealTextOnly(
 }
 
 /**
- * Extracts food items from OCR text
- * @param text The OCR text to analyze
- * @param requestId Request identifier for logging
- * @returns Array of identified food items
+ * Extract food items from text, handling OCR noise and formatting issues
+ * @param text Raw text from OCR
+ * @param requestId Request ID for logging
+ * @returns Array of food items
  */
 function extractFoodItems(text: string, requestId: string): string[] {
-  console.log(`🔍 [${requestId}] Extracting food items from text: "${text.substring(0, 100)}${text.length > 100 ? '...' : ''}"`);
+  console.log(`🔍 [${requestId}] Extracting food items from text (${text.length} chars)`);
   
-  // Simple extraction logic - split by commas, newlines, or "and"
-  const items = text
-    .split(/,|\n|and/)
+  if (!text || text.length < 3) {
+    console.warn(`⚠️ [${requestId}] Text too short to extract food items`);
+    return [];
+  }
+  
+  // Clean up text - handle common OCR issues
+  let cleanedText = text
+    .replace(/\r\n/g, ' ') // Replace Windows line breaks
+    .replace(/\n/g, ' ')   // Replace Unix line breaks
+    .replace(/\s{2,}/g, ' ') // Replace multiple spaces with single space
+    .replace(/[^\w\s,.:;()&%-]/g, ' ') // Replace non-word chars except common punctuation
+    .trim();
+  
+  // Make common corrections for OCR errors
+  cleanedText = cleanedText
+    .replace(/0 (g|mg)/gi, '0g') // Fix spacing in nutrient values
+    .replace(/\bo\b/gi, '0')     // Replace standalone 'o' with '0'
+    .replace(/calo ries/gi, 'calories')
+    .replace(/protem/gi, 'protein')
+    .replace(/carb0/gi, 'carbo')
+    .replace(/carbO/gi, 'carbo')
+    .replace(/\bl\b/gi, '1')     // OCR often confuses l and 1
+    .replace(/\bI\b/g, '1')      // OCR often confuses I and 1
+    .replace(/\bO\b/g, '0')      // OCR often confuses O and 0
+    .replace(/grarns/gi, 'grams');
+  
+  console.log(`📝 [${requestId}] Cleaned text: "${cleanedText.substring(0, 100)}${cleanedText.length > 100 ? '...' : ''}"`);
+  
+  // Try different splitting strategies
+  let foodItems: string[] = [];
+  
+  // Strategy 1: Split by commas, semicolons, or "and"
+  const basicItems = cleanedText
+    .split(/[,;]|\band\b/i)
     .map(item => item.trim())
-    .filter(item => item.length > 2) // Filter out very short items
-    .filter(item => !/^\d+$/.test(item)) // Filter out items that are just numbers
-    .filter((item, index, self) => self.indexOf(item) === index); // Remove duplicates
+    .filter(item => item.length >= 3);
   
-  console.log(`📊 [${requestId}] Extracted ${items.length} potential food items`);
-  return items;
+  if (basicItems.length >= 2) {
+    foodItems = basicItems;
+    console.log(`✅ [${requestId}] Extracted ${foodItems.length} food items using basic splitting`);
+  } 
+  // Strategy 2: Look for food items with quantities/measurements
+  else {
+    const foodWithQuantityRegex = /(\d+\s*(?:g|mg|oz|cup|tbsp|tsp|lb|slice|piece|serving)s?\s+of\s+)?([a-zA-Z\s]{3,}?)(?=\d|\s+\d|$|,|;|\s+and\s+|\s+with\s+)/gi;
+    // Use Array.from instead of spread operator for better compatibility
+    const matches = Array.from(cleanedText.matchAll(foodWithQuantityRegex));
+    
+    if (matches.length >= 2) {
+      foodItems = matches
+        .map(match => (match[1] || '') + (match[2] || '').trim())
+        .filter(item => item.length >= 3);
+      console.log(`✅ [${requestId}] Extracted ${foodItems.length} food items using quantity pattern matching`);
+    }
+  }
+  
+  // Strategy 3: If we still don't have enough items, try a line-break approach
+  if (foodItems.length < 2) {
+    const lineItems = text
+      .split('\n')
+      .map(line => line.trim())
+      .filter(line => line.length >= 3 && line.length <= 50 && !/^\d+$/.test(line) && !/protein|carb|fat|calor/i.test(line));
+    
+    if (lineItems.length >= 2) {
+      foodItems = lineItems;
+      console.log(`✅ [${requestId}] Extracted ${foodItems.length} food items using line-break parsing`);
+    }
+  }
+  
+  // Strategy 4: If all else fails, just break the text into phrases
+  if (foodItems.length < 2) {
+    const phrases = cleanedText
+      .replace(/[.;,]/g, '#')
+      .split('#')
+      .map(phrase => phrase.trim())
+      .filter(phrase => 
+        phrase.length >= 5 && 
+        phrase.length <= 60 && 
+        !/^\d+$/.test(phrase) && 
+        !/^(protein|carb|fat|calor)/i.test(phrase) &&
+        !/grams|per serving/i.test(phrase)
+      );
+    
+    if (phrases.length > 0) {
+      foodItems = phrases;
+      console.log(`✅ [${requestId}] Extracted ${foodItems.length} food items using phrase breaking`);
+    }
+  }
+  
+  // Post-process the food items
+  const processedItems = foodItems
+    .map(item => {
+      // Try to remove nutrition info from food items
+      return item
+        .replace(/\d+\s*(?:calories|cal|kcal|kj)/gi, '')
+        .replace(/\d+\s*(?:g|mg|mcg)\s+(?:protein|carb|sugar|fat)/gi, '')
+        .replace(/\(.*?\)/g, '') // Remove parenthetical information
+        .trim();
+    })
+    .filter(item => 
+      item.length >= 3 && 
+      item.length <= 100 &&
+      !/^\d+$/.test(item) &&  // Not just numbers
+      !/^(?:protein|carb|fat|fiber|sugar)s?$/i.test(item) && // Not just nutrient names
+      !/^(?:total|daily|value|amount)$/i.test(item) // Not just label words
+    )
+    .filter((item, i, arr) => arr.indexOf(item) === i); // Remove duplicates
+  
+  console.log(`📋 [${requestId}] Found ${processedItems.length} unique food items`);
+  
+  // If we still don't have food items, extract the longest phrases from the text
+  if (processedItems.length === 0) {
+    const words = cleanedText.split(/\s+/);
+    if (words.length >= 4) {
+      // Take a few 2-3 word combinations from the cleaned text
+      processedItems.push(words.slice(0, 3).join(' '));
+      if (words.length >= 7) {
+        processedItems.push(words.slice(3, 6).join(' '));
+      }
+      if (words.length >= 10) {
+        processedItems.push(words.slice(6, 9).join(' '));
+      }
+      console.log(`📋 [${requestId}] Created ${processedItems.length} phrase-based food items`);
+    }
+  }
+  
+  // Log the extracted food items for debugging
+  if (processedItems.length > 0) {
+    console.log(`📋 [${requestId}] Extracted food items:`, processedItems.join(', '));
+  } else {
+    console.warn(`⚠️ [${requestId}] No food items could be extracted from text`);
+  }
+  
+  return processedItems;
 }
 
 /**

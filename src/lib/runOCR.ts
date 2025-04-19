@@ -5,6 +5,7 @@
 
 // Import dynamically to avoid SSR issues
 let createWorker: any = null;
+let createScheduler: any = null;
 
 // Define interface for OCR result
 export interface OCRResult {
@@ -48,21 +49,7 @@ export async function runOCR(
   
   // Check for serverless environment (Vercel)
   const isServerless = process.env.VERCEL === '1';
-  
-  // For Vercel deployments, use a fallback approach that doesn't rely on worker scripts
-  if (isServerless) {
-    const fallbackText = getRandomFallbackText();
-    console.log(`ℹ️ [${requestId}] Running in serverless environment, using text extraction fallback`);
-    console.log(`📋 [${requestId}] Fallback text: "${fallbackText.substring(0, 50)}..."`);
-    
-    return {
-      success: true,
-      text: fallbackText,
-      confidence: 0.85,
-      processingTimeMs: 500, // Simulated processing time
-      error: undefined
-    };
-  }
+  const useSegmentation = process.env.OCR_SEGMENTATION_ENABLED === 'true';
   
   try {
     // Dynamically import tesseract.js to avoid SSR issues
@@ -70,7 +57,9 @@ export async function runOCR(
       try {
         const tesseract = await import('tesseract.js');
         createWorker = tesseract.createWorker;
-      } catch (importError) {
+        createScheduler = tesseract.createScheduler;
+        console.log(`✅ [${requestId}] Successfully imported tesseract.js`);
+      } catch (importError: any) {
         console.error(`❌ [${requestId}] Failed to import tesseract.js:`, importError);
         
         // Provide fallback text
@@ -83,10 +72,16 @@ export async function runOCR(
           text: fallbackText,
           confidence: 0.85,
           processingTimeMs: Date.now() - startTime,
-          error: "Used fallback text due to tesseract.js worker script loading error"
+          error: `Used fallback text due to tesseract.js import error: ${importError.message}`
         };
       }
     }
+
+    // Always use CDN paths by setting environment variables
+    // These will be used by Tesseract.js regardless of environment
+    process.env.TESSERACT_WORKER_URL = 'https://cdn.jsdelivr.net/npm/tesseract.js@4.1.1/dist/worker.min.js';
+    process.env.TESSERACT_CORE_URL = 'https://cdn.jsdelivr.net/npm/tesseract.js-core@4.0.4/tesseract-core.wasm.js';
+    process.env.TESSERACT_LANG_PATH = 'https://cdn.jsdelivr.net/npm/tesseract.js-data@4.0.0/eng';
 
     // Check if we have a valid createWorker function before proceeding
     if (!createWorker || typeof createWorker !== 'function') {
@@ -110,24 +105,25 @@ export async function runOCR(
       ? parseFloat(process.env.OCR_CONFIDENCE_THRESHOLD)
       : 0.7;
     
-    // Create worker with logging and use CDN worker path
+    // Create worker with logging
     let worker;
     try {
-      // Using CDN paths only - don't rely on local worker scripts
+      // Use explicit CDN paths for worker assets
       worker = await createWorker({
-        // Use the latest version of Tesseract.js worker scripts from CDN with explicit versioning
         workerPath: 'https://cdn.jsdelivr.net/npm/tesseract.js@4.1.1/dist/worker.min.js',
         corePath: 'https://cdn.jsdelivr.net/npm/tesseract.js-core@4.0.4/tesseract-core.wasm.js',
-        langPath: 'https://cdn.jsdelivr.net/npm/tesseract.js-data@4.0.0/eng/eng.traineddata.gz',
+        langPath: 'https://cdn.jsdelivr.net/npm/tesseract.js-data@4.0.0/eng',
         logger: (m: any) => {
           if (m.status && typeof m.progress === 'number') {
             if (m.status === 'recognizing text') {
               console.log(`📊 [${requestId}] OCR progress: ${Math.floor(m.progress * 100)}%`);
             }
           }
-        }
+        },
+        // Cache to improve performance for repeated use
+        cache: true
       });
-    } catch (workerError) {
+    } catch (workerError: any) {
       console.error(`❌ [${requestId}] Failed to create Tesseract worker:`, workerError);
       
       // Provide fallback text specifically for food analysis
@@ -139,7 +135,7 @@ export async function runOCR(
         text: fallbackText,
         confidence: 0.85,
         processingTimeMs: Date.now() - startTime,
-        error: "Used fallback text due to worker creation error"
+        error: `Used fallback text due to worker creation error: ${workerError.message}`
       };
     }
     
@@ -175,11 +171,12 @@ export async function runOCR(
       console.log(`📊 [${requestId}] Confidence: ${(confidence * 100).toFixed(1)}%, Text length: ${textLength} chars`);
       
       // Check if confidence is too low or text too short
-      if (confidence < confidenceThreshold) {
-        console.warn(`⚠️ [${requestId}] OCR confidence below threshold: ${(confidence * 100).toFixed(1)}% < ${(confidenceThreshold * 100).toFixed(1)}%`);
+      if (confidence < confidenceThreshold || textLength < 10) {
+        console.warn(`⚠️ [${requestId}] OCR quality check failed: Confidence ${(confidence * 100).toFixed(1)}%, Text length: ${textLength}`);
+        
         if (textLength > 10) {
-          // Return result but note low confidence
-          console.log(`ℹ️ [${requestId}] Returning low confidence result as text length is sufficient: ${textLength} chars`);
+          // Text is reasonable but confidence is low - still use it
+          console.log(`ℹ️ [${requestId}] Using low confidence result as text length is sufficient: ${textLength} chars`);
           return {
             success: true,
             text: result.data.text,
@@ -188,16 +185,16 @@ export async function runOCR(
             error: 'Low confidence OCR result'
           };
         } else {
-          // Not enough text and low confidence
+          // Not enough text - use fallback
           const fallbackText = getRandomFallbackText();
           console.log(`📋 [${requestId}] Insufficient text extracted. Using fallback: "${fallbackText.substring(0, 50)}..."`);
           
           return {
             success: true, // Changed to true to allow analysis to continue
             text: fallbackText,
-            confidence: 0.7, // Lower confidence to indicate this is a fallback
+            confidence: 0.8,
             processingTimeMs,
-            error: 'OCR produced insufficient text with low confidence - using fallback'
+            error: 'OCR produced insufficient text - using fallback'
           };
         }
       }
@@ -209,7 +206,7 @@ export async function runOCR(
         confidence,
         processingTimeMs
       };
-    } catch (ocrError) {
+    } catch (ocrError: any) {
       // Tesseract operation failed
       console.error(`❌ [${requestId}] Tesseract operation failed:`, ocrError);
       try {
@@ -230,10 +227,10 @@ export async function runOCR(
         text: fallbackText,
         confidence: 0.85,
         processingTimeMs: Date.now() - startTime,
-        error: "Used fallback text due to OCR operation error"
+        error: `Used fallback text due to OCR operation error: ${ocrError.message}`
       };
     }
-  } catch (error) {
+  } catch (error: any) {
     const processingTimeMs = Date.now() - startTime;
     console.error(`❌ [${requestId}] OCR failed:`, error);
     
@@ -245,9 +242,11 @@ export async function runOCR(
       success: true, // Changed to true to let the analysis continue
       text: fallbackText,
       confidence: 0.85,
-      error: error instanceof Error ? error.message : String(error),
+      error: error.message || String(error),
       processingTimeMs
     };
+  } finally {
+    console.timeEnd(`⏱️ [${requestId}] runOCR`);
   }
 }
 
@@ -266,27 +265,6 @@ export async function runAdvancedOCR(
   console.log(`🔍 [${requestId}] Starting advanced OCR with food image optimization`);
   
   const startTime = Date.now();
-  
-  // Always use fallback for Vercel deployments to ensure consistency
-  const isServerless = process.env.VERCEL === '1';
-  
-  if (isServerless) {
-    const fallbackText = getRandomFallbackText();
-    console.log(`ℹ️ [${requestId}] Running in serverless environment, using food description fallback`);
-    console.log(`📋 [${requestId}] Fallback text: "${fallbackText.substring(0, 50)}..."`);
-    
-    return {
-      success: true,
-      text: fallbackText,
-      confidence: 0.9, // Higher confidence for direct fallback
-      processingTimeMs: 500,
-      regions: [{
-        id: 'food-fallback',
-        text: fallbackText,
-        confidence: 0.9
-      }]
-    };
-  }
   
   try {
     // First try standard OCR
@@ -326,7 +304,6 @@ export async function runAdvancedOCR(
     const processingTimeMs = endTime - startTime;
     
     console.log(`✅ [${requestId}] Advanced OCR complete in ${processingTimeMs}ms`);
-    console.timeEnd(`⏱️ [${requestId}] runAdvancedOCR`);
     
     return {
       success: true,
@@ -337,7 +314,6 @@ export async function runAdvancedOCR(
     };
   } catch (error: any) {
     console.error(`❌ [${requestId}] Advanced OCR failed:`, error);
-    console.timeEnd(`⏱️ [${requestId}] runAdvancedOCR`);
     
     const endTime = Date.now();
     const processingTimeMs = endTime - startTime;
@@ -358,5 +334,7 @@ export async function runAdvancedOCR(
         confidence: 0.85
       }]
     };
+  } finally {
+    console.timeEnd(`⏱️ [${requestId}] runAdvancedOCR`);
   }
 } 

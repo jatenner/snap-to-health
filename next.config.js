@@ -21,6 +21,10 @@ const nextConfig = {
     NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID: process.env.NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID,
     NEXT_PUBLIC_FIREBASE_APP_ID: process.env.NEXT_PUBLIC_FIREBASE_APP_ID,
     NEXT_PUBLIC_FIREBASE_MEASUREMENT_ID: process.env.NEXT_PUBLIC_FIREBASE_MEASUREMENT_ID,
+    // Add Tesseract.js CDN environment variables
+    TESSERACT_WORKER_URL: 'https://cdn.jsdelivr.net/npm/tesseract.js@4.1.1/dist/worker.min.js',
+    TESSERACT_CORE_URL: 'https://cdn.jsdelivr.net/npm/tesseract.js-core@4.0.4/tesseract-core.wasm.js',
+    TESSERACT_LANG_PATH: 'https://cdn.jsdelivr.net/npm/tesseract.js-data@4.0.0/eng',
   },
   // Configure webpack to handle Tesseract.js worker scripts correctly
   webpack: (config, { isServer, dev }) => {
@@ -38,24 +42,45 @@ const nextConfig = {
         buffer: false,
       };
 
-      // Handle Tesseract.js worker script issues
-      if (!dev) {
-        // In production, ensure Tesseract.js uses CDN for worker files
-        config.resolve.alias = {
-          ...config.resolve.alias,
-          'tesseract.js-core': 'tesseract.js-core/dist/tesseract-core.wasm.js',
-        };
-      }
+      // Force Tesseract.js to use CDN paths in all environments
+      config.resolve.alias = {
+        ...config.resolve.alias,
+        'tesseract.js-core': 'tesseract.js-core/dist/tesseract-core.wasm.js',
+      };
+      
+      // Add environment definitions for Tesseract workers
+      config.plugins.push(
+        new config.webpack.DefinePlugin({
+          'process.env.TESSERACT_WORKER_URL': JSON.stringify('https://cdn.jsdelivr.net/npm/tesseract.js@4.1.1/dist/worker.min.js'),
+          'process.env.TESSERACT_CORE_URL': JSON.stringify('https://cdn.jsdelivr.net/npm/tesseract.js-core@4.0.4/tesseract-core.wasm.js'),
+          'process.env.TESSERACT_LANG_PATH': JSON.stringify('https://cdn.jsdelivr.net/npm/tesseract.js-data@4.0.0/eng'),
+        })
+      );
     }
 
     // Configure how worker scripts are handled
     config.module.rules.unshift({
-      test: /tesseract\.js-core[\\/]worker\.js$/,
-      loader: 'worker-loader',
+      test: /tesseract\.js-core[\\/].*?\.wasm$/,
+      type: 'javascript/auto',
+      loader: 'file-loader',
       options: {
-        fallback: true,
-        inline: true,
+        name: 'static/[name].[hash].[ext]',
+        publicPath: '/_next/',
       },
+    });
+    
+    config.module.rules.unshift({
+      test: /tesseract\.js[\\/]dist[\\/]worker\.min\.js$/,
+      type: 'javascript/auto',
+      use: [
+        {
+          loader: 'file-loader',
+          options: {
+            name: 'static/[name].[hash].[ext]',
+            publicPath: '/_next/',
+          },
+        },
+      ],
     });
 
     return config;
