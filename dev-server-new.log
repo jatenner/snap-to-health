@@ -375,3 +375,6 @@ Checking Nutritionix credentials...
 🔍 [b1009ea9-d08f-45bb-ae58-f4ce3fafb4b6] Starting OCR text extraction
 ✅ [b1009ea9-d08f-45bb-ae58-f4ce3fafb4b6] Successfully imported tesseract.js
  POST /api/analyzeImage 200 in 172452ms
+   Reload env: .env.local
+ ✓ Compiled in 50ms (202 modules)
+ ✓ Compiled in 31ms (202 modules)
