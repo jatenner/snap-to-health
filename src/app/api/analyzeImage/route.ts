@@ -124,6 +124,7 @@ function createFallbackResponse(reason: string, partialResult: any, reqId: strin
 
 // The main POST handler for image analysis
 export async function POST(request: NextRequest): Promise<NextResponse> {
+  console.log('[analyzeImage] handler start');
   const requestId = crypto.randomUUID();
   console.time(`⏱️ [${requestId}] analyzeImage POST`);
   console.log(`📥 [${requestId}] Analyzing image - request received`);
@@ -199,7 +200,11 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
           }
         } catch (error) {
           console.error(`❌ [${requestId}] Failed to parse multipart form data:`, error);
-          throw new Error(`Failed to parse form data: ${error}`);
+          console.log('[analyzeImage] returning ERROR: Failed to parse form data');
+          return NextResponse.json(
+            { success: false, error: `Failed to parse form data: ${error}` },
+            { status: 500 }
+          );
         }
       } else if (contentType.includes('application/json')) {
         console.log(`📝 [${requestId}] Parsing JSON data`);
@@ -220,17 +225,29 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
           console.log(`🖼️ [${requestId}] Image/file provided:`, !!formData);
         } catch (error) {
           console.error(`❌ [${requestId}] Failed to parse JSON:`, error);
-          throw new Error(`Failed to parse JSON: ${error}`);
+          console.log('[analyzeImage] returning ERROR: Failed to parse JSON data');
+          return NextResponse.json(
+            { success: false, error: `Failed to parse JSON: ${error}` },
+            { status: 500 }
+          );
         }
       } else {
         console.error(`❌ [${requestId}] Unsupported content type: ${contentType}`);
-        throw new Error(`Unsupported content type: ${contentType}`);
+        console.log('[analyzeImage] returning ERROR: Unsupported content type');
+        return NextResponse.json(
+          { success: false, error: `Unsupported content type: ${contentType}` },
+          { status: 500 }
+        );
       }
       
       // Validate that we have image data
       if (!formData) {
         console.error(`❌ [${requestId}] No image data provided`);
-        throw new Error('No image provided. Please include an image file.');
+        console.log('[analyzeImage] returning ERROR: No image provided');
+        return NextResponse.json(
+          { success: false, error: 'No image provided. Please include an image file.' },
+          { status: 400 }
+        );
       }
       
       return { userId, healthGoals, dietaryPreferences, formDataReceived: !!formData };
@@ -245,7 +262,11 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
         return base64;
       } catch (error) {
         console.error(`❌ [${requestId}] Failed to extract base64 from image:`, error);
-        throw new Error(`Failed to process image: ${error}`);
+        console.log('[analyzeImage] returning ERROR: Failed to process image');
+        return NextResponse.json(
+          { success: false, error: `Failed to process image: ${error}` },
+          { status: 500 }
+        );
       }
     });
     
@@ -311,6 +332,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
         
         if (!ocrResult.success || !ocrResult.text) {
           console.warn(`⚠️ [${requestId}] OCR extraction failed or returned no text: ${ocrResult.error || 'No text extracted'}`);
+          console.log('[analyzeImage] returning ERROR: Failed to extract text from image');
           throw new Error(ocrResult.error || 'Failed to extract text from image');
         }
         
@@ -380,6 +402,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       
       // Do a final check that we have a valid mealAnalysis before proceeding
       if (!mealAnalysis) {
+        console.log('[analyzeImage] returning ERROR: Text analysis failed');
         throw new Error('Text analysis failed or returned null');
       }
       
@@ -389,6 +412,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
         
         // Ensure mealAnalysis is not null before accessing properties
         if (!mealAnalysis) {
+          console.log('[analyzeImage] returning ERROR: Meal analysis failed');
           throw new Error('Meal analysis failed or returned null');
         }
         
@@ -508,11 +532,13 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     console.log(`📈 [${requestId}] Success: ${response.success}, Fallback: ${response.fallback}`);
     console.timeEnd(`⏱️ [${requestId}] analyzeImage POST`);
 
+    console.log(response.success ? '[analyzeImage] returning SUCCESS' : '[analyzeImage] returning ERROR');
     return NextResponse.json(response);
   } catch (error) {
     // Handle any unexpected errors
     const errorMessage = error instanceof Error ? error.message : String(error);
     console.error(`❌ [${requestId}] Unexpected error in analyze route:`, errorMessage);
+    console.error('🚨 analyzeImage error:', error);
     
     // Complete diagnostics with failure
     const diagResults = complete(false);
@@ -524,7 +550,11 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     response.diagnostics = diagResults;
     
     console.timeEnd(`⏱️ [${requestId}] analyzeImage POST`);
-    return NextResponse.json(response, { status: 500 });
+    console.log('[analyzeImage] returning ERROR');
+    return NextResponse.json(
+      { success: false, error: errorMessage || 'Unknown error' },
+      { status: 500 }
+    );
   }
 }
 
