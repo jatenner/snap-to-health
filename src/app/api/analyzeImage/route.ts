@@ -378,6 +378,11 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
         }
       }
       
+      // Do a final check that we have a valid mealAnalysis before proceeding
+      if (!mealAnalysis) {
+        throw new Error('Text analysis failed or returned null');
+      }
+      
       // Step d: Create the final analysis result
       const analysisResult = await recordStage('create-final-analysis', async () => {
         const healthGoalString = healthGoals.length > 0 ? healthGoals[0] : 'general health';
@@ -452,7 +457,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
               analysis: analysisResult,
               imageUrl,
               requestId,
-              mealName: mealAnalysis.description.split(',')[0] // Use first part of description as meal name
+              mealName: mealAnalysis?.description ? mealAnalysis.description.split(',')[0] : 'Meal' // Use first part of description as meal name, with fallback
             });
             
             if (saveResult.success) {
