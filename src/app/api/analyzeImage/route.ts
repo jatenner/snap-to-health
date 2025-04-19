@@ -244,468 +244,167 @@ async function fetchNutrition(text: string, requestId: string): Promise<Nutritio
   return result;
 }
 
-// The main POST handler for image analysis
+/**
+ * Simple POST handler for the /api/analyzeImage endpoint
+ * Tries Nutritionix first, falls back to GPT if Nutritionix fails
+ * Implements caching with a 1-hour TTL
+ */
 export async function POST(request: NextRequest): Promise<NextResponse> {
   console.log('[analyzeImage] handler start');
   const requestId = crypto.randomUUID();
-  console.time(`⏱️ [${requestId}] analyzeImage POST`);
-  console.log(`📥 [${requestId}] Analyzing image - request received`);
-
-  // Create diagnostics session for tracking the analysis pipeline
-  const { diagnostics, recordStage, complete } = createAnalysisDiagnostics(requestId);
   
-  const startTime = Date.now();
-  
-  // Initialize response object
-  const response: AnalysisResponse = {
-    success: false,
-    fallback: false,
-    requestId,
-    message: '',
-    imageUrl: null,
-    result: null,
-    error: null,
-    elapsedTime: 0,
-    diagnostics: null // Will be populated at the end
-  };
-
   try {
-    // Check OCR configuration first
-    const ocrConfig = await recordStage('check-ocr-config', async () => {
-      return checkOCRConfig();
-    });
+    // Extract image and health goal from request
+    let formData: FormData | null = null;
+    let imageBase64: string = '';
+    let healthGoal: string = 'general health';
     
-    console.log(`📋 [${requestId}] OCR configuration: ${JSON.stringify(ocrConfig)}`);
+    const contentType = request.headers.get('content-type') || '';
+    console.log(`[analyzeImage] Content-Type: ${contentType}`);
     
-    // Parse request body based on content type
-    let formData: FormData | Record<string, any> | null = null;
-    let healthGoals: string[] = [];
-    let userId: string | null = null;
-    let dietaryPreferences: string[] = [];
-    
-    // Extract request data
-    await recordStage('extract-request-data', async () => {
-      const contentType = request.headers.get('content-type') || '';
-      console.log(`📄 [${requestId}] Content-Type: ${contentType}`);
+    // Handle multipart/form-data (from forms)
+    if (contentType.includes('multipart/form-data')) {
+      formData = await request.formData();
+      console.log(`[analyzeImage] Form data keys:`, Array.from(formData.keys()));
       
-      if (contentType.includes('multipart/form-data')) {
-        console.log(`📝 [${requestId}] Parsing multipart form data`);
-        try {
-          formData = await request.formData();
-          console.log(`📋 [${requestId}] Form data keys:`, Array.from(formData.keys()));
-          
-          // Extract other fields from form data
-          userId = formData.get('userId')?.toString() || null;
-          
-          // Parse health goals as JSON if it exists
-          const healthGoalsRaw = formData.get('healthGoals')?.toString();
-          if (healthGoalsRaw) {
-            try {
-              healthGoals = JSON.parse(healthGoalsRaw);
-              console.log(`🎯 [${requestId}] Parsed health goals:`, JSON.stringify(healthGoals));
-            } catch (error) {
-              console.warn(`⚠️ [${requestId}] Failed to parse health goals:`, error);
-              // Continue without health goals
-            }
-          }
-          
-          // Parse dietary preferences as JSON if it exists
-          const dietaryPreferencesRaw = formData.get('dietaryPreferences')?.toString();
-          if (dietaryPreferencesRaw) {
-            try {
-              dietaryPreferences = JSON.parse(dietaryPreferencesRaw);
-              console.log(`🥕 [${requestId}] Parsed dietary preferences:`, JSON.stringify(dietaryPreferences));
-            } catch (error) {
-              console.warn(`⚠️ [${requestId}] Failed to parse dietary preferences:`, error);
-              // Continue without dietary preferences
-            }
-          }
-        } catch (error) {
-          console.error(`❌ [${requestId}] Failed to parse multipart form data:`, error);
-          console.log('[analyzeImage] returning ERROR: Failed to parse form data');
-          return NextResponse.json(
-            { success: false, error: `Failed to parse form data: ${error}` },
-            { status: 500 }
-          );
-        }
-      } else if (contentType.includes('application/json')) {
-        console.log(`📝 [${requestId}] Parsing JSON data`);
-        try {
-          const jsonData = await request.json();
-          console.log(`📋 [${requestId}] JSON data keys:`, Object.keys(jsonData));
-          
-          // Extract fields from JSON
-          formData = jsonData.image || jsonData.file || jsonData.base64Image || null;
-          healthGoals = jsonData.healthGoals || [];
-          userId = jsonData.userId || null;
-          dietaryPreferences = jsonData.dietaryPreferences || [];
-          
-          // Log extracted data (excluding image content)
-          console.log(`👤 [${requestId}] User ID:`, userId || 'not provided');
-          console.log(`🎯 [${requestId}] Health goals provided:`, healthGoals.length > 0);
-          console.log(`🥕 [${requestId}] Dietary preferences provided:`, dietaryPreferences.length > 0);
-          console.log(`🖼️ [${requestId}] Image/file provided:`, !!formData);
-        } catch (error) {
-          console.error(`❌ [${requestId}] Failed to parse JSON:`, error);
-          console.log('[analyzeImage] returning ERROR: Failed to parse JSON data');
-          return NextResponse.json(
-            { success: false, error: `Failed to parse JSON: ${error}` },
-            { status: 500 }
-          );
-        }
+      // Get health goal
+      const healthGoalRaw = formData.get('healthGoal')?.toString();
+      if (healthGoalRaw) {
+        healthGoal = healthGoalRaw;
+      }
+      
+      // Extract base64 from image file
+      const imageFile = formData.get('image');
+      if (imageFile instanceof File) {
+        imageBase64 = await extractBase64Image(imageFile, requestId);
+        console.log(`[analyzeImage] Extracted base64 image (${imageBase64.length} chars)`);
       } else {
-        console.error(`❌ [${requestId}] Unsupported content type: ${contentType}`);
-        console.log('[analyzeImage] returning ERROR: Unsupported content type');
-        return NextResponse.json(
-          { success: false, error: `Unsupported content type: ${contentType}` },
-          { status: 500 }
-        );
+        throw new Error('No image file provided');
+      }
+    } 
+    // Handle JSON
+    else if (contentType.includes('application/json')) {
+      const jsonData = await request.json();
+      console.log(`[analyzeImage] JSON data keys:`, Object.keys(jsonData));
+      
+      if (jsonData.healthGoal) {
+        healthGoal = jsonData.healthGoal;
       }
       
-      // Validate that we have image data
-      if (!formData) {
-        console.error(`❌ [${requestId}] No image data provided`);
-        console.log('[analyzeImage] returning ERROR: No image provided');
-        return NextResponse.json(
-          { success: false, error: 'No image provided. Please include an image file.' },
-          { status: 400 }
-        );
+      if (jsonData.image || jsonData.base64Image) {
+        imageBase64 = jsonData.image || jsonData.base64Image;
+        console.log(`[analyzeImage] Got base64 image from JSON (${imageBase64.length} chars)`);
+      } else {
+        throw new Error('No image data provided in JSON');
       }
-      
-      return { userId, healthGoals, dietaryPreferences, formDataReceived: !!formData };
-    });
-    
-    // Extract base64 from the image
-    const base64Image = await recordStage('extract-base64-image', async () => {
-      try {
-        console.log(`🔍 [${requestId}] Extracting base64 from image`);
-        const base64 = await extractBase64Image(formData!, requestId);
-        console.log(`✅ [${requestId}] Base64 extraction successful (${base64.length} chars)`);
-        return base64;
-      } catch (error) {
-        console.error(`❌ [${requestId}] Failed to extract base64 from image:`, error);
-        console.log('[analyzeImage] returning ERROR: Failed to process image');
-        return NextResponse.json(
-          { success: false, error: `Failed to process image: ${error}` },
-          { status: 500 }
-        );
-      }
-    });
-    
-    // Upload image to Firebase if userId is provided
-    let imageUrl = null;
-    if (userId) {
-      try {
-        imageUrl = await recordStage('upload-to-firebase', async () => {
-          console.log(`🔄 [${requestId}] Uploading image to Firebase for user ${userId}`);
-          const url = await uploadImageToFirebase(base64Image, userId!, requestId);
-          console.log(`✅ [${requestId}] Image upload successful: ${url}`);
-          response.imageUrl = url;
-          return url;
-        });
-      } catch (error) {
-        console.error(`❌ [${requestId}] Firebase upload failed:`, error);
-        // Continue with analysis even if upload fails
-      }
+    } else {
+      throw new Error(`Unsupported content type: ${contentType}`);
     }
     
-    // Set up timeout controller
-    const controller = new AbortController();
-    const globalTimeoutMs = parseInt(process.env.OPENAI_TIMEOUT_MS || '', 10) || API_CONFIG.DEFAULT_TIMEOUT_MS;
-    const signal = controller.signal;
-
-    console.log(`⏱️ [${requestId}] Setting global timeout: ${globalTimeoutMs}ms (${globalTimeoutMs/1000} seconds)`);
-
-    // Set global timeout
-    const timeoutId = setTimeout(() => {
-      console.warn(`⏱️ [${requestId}] Global timeout reached after ${globalTimeoutMs}ms`);
-      controller.abort('Global timeout reached');
-    }, globalTimeoutMs);
-
-    // Process the image with text-based analysis using OCR
-    let extractedText = '';
-    let mealAnalysis: MealAnalysisResult | null = null;
-    let nutritionData: NutritionData | null = null;
-    let analysisFailed = false;
-    let failureReason = '';
-    let isTimeout = false;
-
+    if (!imageBase64) {
+      throw new Error('No image data provided');
+    }
+    
+    // Compute a cache key - we use a hash of the image data to avoid storing the whole image in the key
+    const imageHash = crypto.createHash('md5').update(imageBase64).digest('hex');
+    const cacheKey = `${healthGoal}_${imageHash}`;
+    
+    // Check if we have a cached result
+    if (cache.has(cacheKey)) {
+      console.log(`[analyzeImage] Cache hit for ${cacheKey}`);
+      const cachedResult = cache.get(cacheKey);
+      return NextResponse.json({ 
+        success: true, 
+        data: cachedResult,
+        cached: true
+      });
+    }
+    
+    console.log(`[analyzeImage] Cache miss for ${cacheKey}, processing...`);
+    
+    // Extract text from image with OCR
+    console.log('[analyzeImage] Running OCR to extract text from image');
+    const ocrResult = await runOCR(imageBase64, requestId);
+    const extractedText = ocrResult.text;
+    
+    console.log(`[analyzeImage] OCR extracted text: "${extractedText.substring(0, 100)}${extractedText.length > 100 ? '...' : ''}"`);
+    
+    let result: any = null;
+    
     try {
-      // Check Nutritionix credentials
-      await recordStage('check-nutritionix-credentials', async () => {
-        const credentialCheck = await checkNutritionixCredentials();
-        console.log(`📋 [${requestId}] Nutritionix credential check:`, 
-          `Success: ${credentialCheck.success}, ` +
-          `App ID: ${credentialCheck.appId ? 'valid' : 'missing'}, ` +
-          `API Key: ${credentialCheck.apiKey ? 'present' : 'missing'}`
-        );
-        
-        if (!credentialCheck.success) {
-          console.warn(`⚠️ [${requestId}] Nutritionix credential issue: ${credentialCheck.error}`);
-        }
-        
-        return credentialCheck;
-      });
+      // Try Nutritionix first
+      console.log('[analyzeImage] calling Nutritionix');
+      const nutritionixResult = await getNutritionData(extractedText, requestId);
       
-      // Step a: Run OCR on the image to extract text
-      extractedText = await recordStage('run-ocr', async () => {
-        console.log(`🔍 [${requestId}] Running OCR to extract text from image`);
-        
-        // Add a timeout for OCR to prevent hanging
-        let ocrResult: OCRResult;
-        
-        try {
-          // Set timeout for OCR process (5 seconds)
-          const ocrTimeout = 5000; // 5 seconds
-          
-          // Create a promise that resolves with the OCR result or rejects after timeout
-          const ocrPromise = runOCR(base64Image, requestId);
-          const timeoutPromise = new Promise<OCRResult>((_, reject) => {
-            setTimeout(() => {
-              console.log(`⏱️ [${requestId}] OCR timeout reached after ${ocrTimeout}ms`);
-              reject(new Error(`OCR timeout reached after ${ocrTimeout}ms`));
-            }, ocrTimeout);
-          });
-          
-          // Race the OCR promise against the timeout
-          ocrResult = await Promise.race([ocrPromise, timeoutPromise]);
-        } catch (ocrTimeoutError: unknown) {
-          console.warn(`⚠️ [${requestId}] OCR process timed out or failed: ${ocrTimeoutError}`);
-          
-          // Use fallback text for analysis to continue
-          const fallbackText = "Salad with grilled chicken, tomatoes, and avocado. Side of brown rice. A glass of water.";
-          console.log(`📋 [${requestId}] Using fallback text due to OCR timeout: "${fallbackText.substring(0, 50)}..."`);
-          
-          ocrResult = {
-            success: true,
-            text: fallbackText,
-            confidence: 0.85,
-            processingTimeMs: 0,
-            error: `OCR timeout or failure: ${ocrTimeoutError instanceof Error ? ocrTimeoutError.message : String(ocrTimeoutError)}`
-          };
-        }
-        
-        if (!ocrResult.success || !ocrResult.text) {
-          console.warn(`⚠️ [${requestId}] OCR extraction failed or returned no text: ${ocrResult.error || 'No text extracted'}`);
-          console.log('[analyzeImage] returning ERROR: Failed to extract text from image');
-          throw new Error(ocrResult.error || 'Failed to extract text from image');
-        }
-        
-        const text = ocrResult.text;
-        console.log(`✅ [${requestId}] OCR successful, extracted ${text.length} characters`);
-        console.log(`📋 [${requestId}] Extracted text: "${text.substring(0, 100)}${text.length > 100 ? '...' : ''}"`);
-        return text;
-      });
-      
-      // Step b: Analyze the extracted text with GPT
-      mealAnalysis = await recordStage('analyze-text', async () => {
-        console.log(`🔍 [${requestId}] Analyzing extracted text to identify meal components`);
-        
-        // Convert health goals and dietary preferences to the expected format
-        const healthGoalsObj = {
-          primary: healthGoals.length > 0 ? healthGoals[0] : 'general health',
-          additional: healthGoals.slice(1)
-        };
-        
-        const dietaryPreferencesObj = {
-          allergies: dietaryPreferences.filter(p => p.toLowerCase().includes('allergy') || p.toLowerCase().includes('allergic')),
-          avoidances: dietaryPreferences.filter(p => !p.toLowerCase().includes('allergy') && !p.toLowerCase().includes('allergic'))
-        };
-        
-        const analysis = await analyzeMealTextOnly(
-          extractedText, 
-          healthGoalsObj, 
-          dietaryPreferencesObj, 
+      if (nutritionixResult.success && nutritionixResult.data) {
+        console.log('[analyzeImage] Nutritionix success');
+        result = {
+          source: 'nutritionix',
+          nutrients: nutritionixResult.data.nutrients,
+          text: extractedText,
+          healthGoal,
           requestId
-        );
-        
-        if (!analysis.success && analysis.error) {
-          console.warn(`⚠️ [${requestId}] Text analysis failed: ${analysis.error}`);
-          throw new Error(analysis.error);
-        }
-        
-        console.log(`✅ [${requestId}] Text analysis successful`);
-        console.log(`📋 [${requestId}] Identified meal: ${analysis.description}`);
-        console.log(`📋 [${requestId}] Identified ingredients: ${analysis.ingredients.map(i => i.name).join(', ')}`);
-        
-        return analysis;
-      });
-      
-      // Step c: Get nutrition data with race between Nutritionix and GPT
-      if (mealAnalysis && mealAnalysis.ingredients.length > 0) {
-        try {
-          nutritionData = await recordStage('get-nutrition-data', async () => {
-            console.log(`🔍 [${requestId}] Getting nutrition data for identified ingredients`);
-            
-            // Use the fetchNutrition function to get data with fallback
-            return await fetchNutrition(extractedText, requestId);
-          });
-        } catch (error) {
-          console.warn(`⚠️ [${requestId}] Failed to get nutrition data: ${error instanceof Error ? error.message : String(error)}`);
-          // Continue without nutrition data
-        }
-      }
-      
-      // Do a final check that we have a valid mealAnalysis before proceeding
-      if (!mealAnalysis) {
-        console.log('[analyzeImage] returning ERROR: Text analysis failed');
-        throw new Error('Text analysis failed or returned null');
-      }
-      
-      // Step d: Create the final analysis result
-      const analysisResult = await recordStage('create-final-analysis', async () => {
-        const healthGoalString = healthGoals.length > 0 ? healthGoals[0] : 'general health';
-        
-        // Ensure mealAnalysis is not null before accessing properties
-        if (!mealAnalysis) {
-          console.log('[analyzeImage] returning ERROR: Meal analysis failed');
-          throw new Error('Meal analysis failed or returned null');
-        }
-        
-        // Determine if fallback was used
-        const usedFallback = nutritionData ? (nutritionData as any)?.source === 'gpt' || (nutritionData as any)?.source === 'gpt_fallback_error' : false;
-        
-        // Combine extracted text, meal analysis, and nutrition data
-        let result: AnalysisResult = {
-          description: mealAnalysis.description,
-          nutrients: nutritionData?.nutrients || mealAnalysis.nutrients || [],
-          detailedIngredients: mealAnalysis.ingredients,
-          feedback: [],
-          suggestions: [],
-          goalScore: {
-            overall: 5,
-            specific: {}
-          },
-          modelInfo: {
-            model: usedFallback ? 'gpt' : 'nutritionix',
-            usedFallback,
-            ocrExtracted: true
-          }
         };
-        
-        // Add nutrient analysis based on goals if we have nutrition data
-        if (nutritionData) {
-          const goalAnalysis = createNutrientAnalysis(
-            nutritionData.nutrients,
-            healthGoals,
-            requestId
-          );
-          
-          result = {
-            ...result,
-            feedback: goalAnalysis.feedback,
-            suggestions: goalAnalysis.suggestions,
-            goalScore: goalAnalysis.goalScore,
-            goalName: formatGoalName(healthGoalString)
-          };
-        } else {
-          // Use feedback and suggestions from meal analysis if available
-          result.feedback = mealAnalysis.feedback || [
-            "We analyzed your meal based on text extracted from your image.",
-            "For more specific nutrition advice, try taking a clearer photo."
-          ];
-          result.suggestions = mealAnalysis.suggestions || [
-            "Include all food items in the frame",
-            "Take photos in good lighting"
-          ];
-          result.goalScore.overall = 5; // Neutral score
-          result.goalName = formatGoalName(healthGoalString);
-        }
-        
-        return result;
-      });
-      
-      // Mark as successful
-      response.success = true;
-      response.result = analysisResult;
-      response.message = 'Analysis completed successfully with text extraction';
-      
-      // Save to user's data if we have a userId and imageUrl
-      if (userId && imageUrl && mealAnalysis) {
-        try {
-          await recordStage('save-to-firestore', async () => {
-            console.log(`🔄 [${requestId}] Saving meal to Firestore for user ${userId}`);
-            const saveResult = await trySaveMealServer({
-              userId: userId!,
-              analysis: analysisResult,
-              imageUrl,
-              requestId,
-              mealName: mealAnalysis?.description ? mealAnalysis.description.split(',')[0] : 'Meal' // Use first part of description as meal name, with fallback
-            });
-            
-            if (saveResult.success) {
-              console.log(`✅ [${requestId}] Meal saved successfully with ID: ${saveResult.savedMealId}`);
-              response.message = 'Analysis completed and meal saved successfully';
-              return saveResult.savedMealId;
-            } else {
-              console.warn(`⚠️ [${requestId}] Failed to save meal: ${saveResult.error}`);
-              throw new Error(saveResult.error?.message || 'Failed to save meal');
-            }
-          });
-        } catch (saveError) {
-          console.error(`❌ [${requestId}] Error saving meal:`, saveError);
-          // Continue without failing the whole response
-        }
+      } else {
+        throw new Error('Nutritionix returned no data');
       }
     } catch (error: any) {
-      console.error(`❌ [${requestId}] Analysis failed:`, error);
-      analysisFailed = true;
-      failureReason = error.message || 'Unknown error during analysis';
+      // Nutritionix failed, fall back to GPT
+      console.log(`[analyzeImage] Nutritionix failed, falling back to GPT: ${error.message}`);
       
-      // Check if it was a timeout
-      isTimeout = error.name === 'AbortError' || failureReason.includes('timeout');
-      
-      // Create fallback response
-      const fallbackResponse = createEmptyFallbackAnalysis(requestId, "text_extraction", failureReason);
-      
-      response.success = false;
-      response.fallback = true;
-      response.result = fallbackResponse;
-      response.error = failureReason;
-      response.message = 'Analysis failed, using fallback response';
-    } finally {
-      // Clear the timeout
-      clearTimeout(timeoutId);
+      try {
+        // Call GPT for nutrition analysis
+        const prompt = `Provide nutritional analysis for this meal description: "${extractedText}". Return as JSON with fields: calories, protein, carbs, fat, fiber, sugar, sodium, and cholesterol. Also classify if this meal is good for a "${healthGoal}" health goal on a scale of 1-10.`;
+        
+        const gpt = await oai.chat.completions.create({
+          model: 'gpt-4o-mini',
+          messages: [{ role: 'user', content: prompt }],
+          temperature: 0.5,
+          response_format: { type: 'json_object' }
+        });
+        
+        console.log('[analyzeImage] GPT success');
+        const gptContent = gpt.choices[0]?.message?.content || '{}';
+        
+        result = {
+          source: 'gpt',
+          gptResponse: JSON.parse(gptContent),
+          text: extractedText,
+          healthGoal,
+          requestId
+        };
+      } catch (gptError: any) {
+        throw new Error(`Both Nutritionix and GPT failed: ${error.message}, ${gptError.message}`);
+      }
     }
-
-    // Complete diagnostics
-    const diagResults = complete(response.success);
-    response.diagnostics = diagResults;
-
-    // Calculate elapsed time
-    const elapsedTime = Date.now() - startTime;
-    response.elapsedTime = elapsedTime;
-
-    // Log response and clean up
-    console.log(`📤 [${requestId}] Analysis complete in ${elapsedTime}ms`);
-    console.log(`📈 [${requestId}] Success: ${response.success}, Fallback: ${response.fallback}`);
-    console.timeEnd(`⏱️ [${requestId}] analyzeImage POST`);
-
-    console.log(response.success ? '[analyzeImage] returning SUCCESS' : '[analyzeImage] returning ERROR');
-    return NextResponse.json(response);
+    
+    // Cache the result
+    cache.set(cacheKey, result);
+    console.log(`[analyzeImage] Cached result for ${cacheKey}`);
+    
+    console.log('[analyzeImage] returning SUCCESS');
+    return NextResponse.json({
+      success: true,
+      data: result,
+      cached: false
+    });
+    
   } catch (error) {
-    // Handle any unexpected errors
-    const errorMessage = error instanceof Error ? error.message : String(error);
-    console.error(`❌ [${requestId}] Unexpected error in analyze route:`, errorMessage);
-    console.error('🚨 analyzeImage error:', error);
-    
-    // Complete diagnostics with failure
-    const diagResults = complete(false);
-    
-    response.success = false;
-    response.error = errorMessage;
-    response.message = 'An unexpected error occurred during analysis';
-    response.elapsedTime = Date.now() - startTime;
-    response.diagnostics = diagResults;
-    
-    console.timeEnd(`⏱️ [${requestId}] analyzeImage POST`);
-    console.log('[analyzeImage] returning ERROR');
-    return NextResponse.json(
-      { success: false, error: errorMessage || 'Unknown error' },
-      { status: 500 }
-    );
+    console.error('[analyzeImage] ERROR:', error);
+    return NextResponse.json({
+      success: false,
+      error: error instanceof Error ? error.message : 'Unknown error',
+      requestId
+    }, { status: 500 });
   }
 }
+
+// Original POST handler (commented out)
+/* 
+export async function POST(request: NextRequest): Promise<NextResponse> {
+  // ... original implementation ...
+}
+*/
 
 // Helper function to format goal name
 function formatGoalName(healthGoal: string): string {
