@@ -51,13 +51,17 @@ const nextConfig = {
       };
       
       // Add environment definitions for Tesseract workers
-      config.plugins.push(
-        new webpack.DefinePlugin({
-          'process.env.TESSERACT_WORKER_URL': JSON.stringify('https://cdn.jsdelivr.net/npm/tesseract.js@4.1.1/dist/worker.min.js'),
-          'process.env.TESSERACT_CORE_URL': JSON.stringify('https://cdn.jsdelivr.net/npm/tesseract.js-core@4.0.4/tesseract-core.wasm.js'),
-          'process.env.TESSERACT_LANG_PATH': JSON.stringify('https://cdn.jsdelivr.net/npm/tesseract.js-data@4.0.0/eng'),
-        })
-      );
+      if (webpack && webpack.DefinePlugin) {
+        config.plugins.push(
+          new webpack.DefinePlugin({
+            'process.env.TESSERACT_WORKER_URL': JSON.stringify('https://cdn.jsdelivr.net/npm/tesseract.js@4.1.1/dist/worker.min.js'),
+            'process.env.TESSERACT_CORE_URL': JSON.stringify('https://cdn.jsdelivr.net/npm/tesseract.js-core@4.0.4/tesseract-core.wasm.js'),
+            'process.env.TESSERACT_LANG_PATH': JSON.stringify('https://cdn.jsdelivr.net/npm/tesseract.js-data@4.0.0/eng'),
+          })
+        );
+      } else {
+        console.warn('webpack.DefinePlugin is not available, skipping Tesseract environment variables');
+      }
     }
 
     // Configure asset modules for handling wasm files and worker scripts
