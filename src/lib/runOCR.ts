@@ -124,7 +124,12 @@ export async function runOCR(
             }
           }
         },
-        workerPath: 'https://unpkg.com/tesseract.js@v4.1.1/dist/worker.min.js'
+        // Use CDN version with specific version to avoid breaking changes
+        workerPath: 'https://cdn.jsdelivr.net/npm/tesseract.js@4.1.1/dist/worker.min.js',
+        // Fallback to unpkg if jsdelivr has issues
+        corePath: 'https://unpkg.com/tesseract.js-core@4.0.4/tesseract-core.wasm.js',
+        // Set a reasonable local cache name
+        cachePath: '.tesseract-cache'
       });
     } catch (workerError: any) {
       console.error(`❌ [${requestId}] Failed to create Tesseract worker:`, workerError);

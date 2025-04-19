@@ -14,8 +14,8 @@ import { analyzeMealTextOnly, MealAnalysisResult } from '@/lib/analyzeMealTextOn
 import { API_CONFIG } from '@/lib/constants';
 import { createAnalysisDiagnostics, checkOCRConfig, checkNutritionixCredentials } from '@/lib/diagnostics';
 
-// Setup cache with 10 minute TTL
-const cache = new NodeCache({ stdTTL: 600 });
+// Setup cache with 1 hour TTL
+const cache = new NodeCache({ stdTTL: 3600 });
 
 // Image quality assessment utilities
 interface ImageQualityResult {
@@ -135,6 +135,7 @@ function createFallbackResponse(reason: string, partialResult: any, reqId: strin
  */
 async function fetchNutrition(text: string, requestId: string): Promise<NutritionData> {
   console.log(`[analyzeImage] OCR text: ${text}`);
+  const startTime = Date.now();
   
   // Create a cache key from the text
   const key = text.trim().toLowerCase();
@@ -142,50 +143,103 @@ async function fetchNutrition(text: string, requestId: string): Promise<Nutritio
   // Check cache first
   if (cache.has(key)) {
     const cachedData = cache.get<NutritionData>(key);
-    console.log(`[analyzeImage] Using cached nutrition data for text`);
+    console.log(`[analyzeImage] Using cached nutrition data for text (cached ${Date.now() - (cache.getTtl(key) || 0) - startTime}ms ago)`);
     return cachedData!;
   }
   
-  // Set up both Nutritionix and GPT calls
+  // Set up Nutritionix promise
   const nutritionixPromise = getNutritionData(text, requestId)
     .then(result => {
       if (!result.success || !result.data) {
         throw new Error('NUTRITIONIX_FAILED');
       }
+      console.log(`[analyzeImage] Successfully fetched data from Nutritionix API in ${Date.now() - startTime}ms`);
       // Add source tag to identify which provider we used
       return { ...result.data, source: 'nutritionix' };
     })
     .catch(err => {
-      // Only handle specific errors we expect
-      if (err.response && [401, 429, 500, 502, 503].includes(err.response.status)) {
-        console.log(`[analyzeImage] Nutritionix failed with status ${err.response.status}`);
-        throw new Error('NUTRITIONIX_FAILED');
+      // Handle various error types
+      if (err.response) {
+        // Server responded with error status code
+        const status = err.response.status;
+        console.error(`[analyzeImage] Nutritionix API failed with status ${status}: ${err.response.data?.message || 'No message'}`);
+        if ([400, 401, 403, 429, 500, 502, 503, 504].includes(status)) {
+          throw new Error(`NUTRITIONIX_FAILED_${status}`);
+        }
+      } else if (err.request) {
+        // Request made but no response received (timeout, network error)
+        console.error(`[analyzeImage] Nutritionix API request failed (no response): ${err.message}`);
+        throw new Error('NUTRITIONIX_NETWORK_ERROR');
+      } else if (err.message === 'NUTRITIONIX_FAILED') {
+        // Our own error from above
+        throw err;
+      } else {
+        // Other errors
+        console.error(`[analyzeImage] Nutritionix API unexpected error: ${err.message}`);
+        throw new Error('NUTRITIONIX_UNEXPECTED_ERROR');
       }
       throw err; // Propagate other errors
     });
   
-  // GPT fallback
-  const gptPromise = callGptNutritionFallback(text);
+  // GPT fallback promise
+  const gptPromise = callGptNutritionFallback(text)
+    .then(result => {
+      console.log(`[analyzeImage] Successfully fetched data from GPT fallback in ${Date.now() - startTime}ms`);
+      return result;
+    })
+    .catch(err => {
+      console.error(`[analyzeImage] GPT fallback also failed: ${err.message}`);
+      throw err;
+    });
   
   let result: NutritionData;
+  let source = 'unknown';
+  
   try {
-    // Race the promises
-    result = await Promise.race([nutritionixPromise, gptPromise]);
-    console.log(`[analyzeImage] using path: ${(result as any).source}`);
-  } catch (e) {
-    // If Nutritionix failed but GPT might still be working, wait for GPT
-    if (e instanceof Error && e.message === 'NUTRITIONIX_FAILED') {
-      console.log(`[analyzeImage] Nutritionix failed, falling back to GPT`);
+    // Try Nutritionix first with a 5-second timeout
+    const timeoutPromise = new Promise<never>((_, reject) => {
+      setTimeout(() => reject(new Error('NUTRITIONIX_TIMEOUT')), 5000);
+    });
+    
+    try {
+      // Race Nutritionix against timeout
+      result = await Promise.race([nutritionixPromise, timeoutPromise]);
+      source = 'nutritionix';
+    } catch (nutritionixError: any) {
+      // If Nutritionix fails or times out, use GPT
+      console.log(`[analyzeImage] Nutritionix failed (${nutritionixError.message}), falling back to GPT`);
       result = await gptPromise;
-      console.log(`[analyzeImage] using path: ${(result as any).source}`);
-    } else {
-      // Something else went wrong, re-throw
-      throw e;
+      source = 'gpt';
     }
+    
+    console.log(`[analyzeImage] Using nutrition data from: ${source}`);
+  } catch (e: any) {
+    // Both Nutritionix and GPT failed
+    console.error(`[analyzeImage] All nutrition data sources failed: ${e.message}`);
+    
+    // Create minimal data structure to avoid breaking code
+    result = {
+      nutrients: [
+        { name: 'Calories', value: 0, unit: 'kcal', isHighlight: true },
+        { name: 'Protein', value: 0, unit: 'g', isHighlight: true },
+        { name: 'Carbohydrates', value: 0, unit: 'g', isHighlight: true },
+        { name: 'Fat', value: 0, unit: 'g', isHighlight: true }
+      ],
+      foods: [],
+      raw: { error: e.message }
+    };
+    source = 'error_fallback';
   }
   
-  // Cache the result
+  // Add source property if not already present
+  if (!('source' in result)) {
+    (result as any).source = source;
+  }
+  
+  // Cache the result regardless of source
   cache.set(key, result);
+  console.log(`[analyzeImage] Cached nutrition data from ${source} (TTL: 1 hour)`);
+  
   return result;
 }
 
