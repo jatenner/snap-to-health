@@ -83,25 +83,43 @@ export async function getNutritionData(
     const NUTRITIONIX_APP_ID = process.env.NUTRITIONIX_APP_ID;
     const NUTRITIONIX_API_KEY = process.env.NUTRITIONIX_API_KEY;
     
-    console.log(`🔑 [${requestId}] Nutritionix API credentials available:`, !!NUTRITIONIX_APP_ID && !!NUTRITIONIX_API_KEY);
+    // Debug: Check that we're using the correct keys
+    console.log(`🔑 [${requestId}] Nutritionix APP ID: ${NUTRITIONIX_APP_ID?.substring(0, 5)}...`);
+    console.log(`🔑 [${requestId}] Nutritionix API KEY: ${NUTRITIONIX_API_KEY?.substring(0, 5)}...`);
     
     if (!NUTRITIONIX_APP_ID || !NUTRITIONIX_API_KEY) {
       throw new Error('Nutritionix API credentials are not configured');
     }
+
+    if (NUTRITIONIX_API_KEY.startsWith('sk-')) {
+      console.error(`❌ [${requestId}] ERROR: Nutritionix API key appears to be an OpenAI key (starts with sk-). Using correct key from .env.local`);
+      throw new Error('Incorrect API key format detected - OpenAI key is being used for Nutritionix');
+    }
+    
+    console.log(`🔑 [${requestId}] Nutritionix API credentials available:`, !!NUTRITIONIX_APP_ID && !!NUTRITIONIX_API_KEY);
     
     // Set timeout for request
     const timeoutMs = 10000; // 10 seconds
+    
+    // Add explicit headers object for clarity
+    const headers = {
+      'Content-Type': 'application/json',
+      'x-app-id': NUTRITIONIX_APP_ID,
+      'x-app-key': NUTRITIONIX_API_KEY,
+    };
+    
+    console.log(`🔑 [${requestId}] Making Nutritionix API request with headers:`, {
+      'Content-Type': headers['Content-Type'],
+      'x-app-id': headers['x-app-id']?.substring(0, 5) + '...',
+      'x-app-key': headers['x-app-key']?.substring(0, 5) + '...',
+    });
     
     // Make request to Nutritionix API
     const response = await axios.post(
       'https://trackapi.nutritionix.com/v2/natural/nutrients',
       { query: foodDescription },
       {
-        headers: {
-          'Content-Type': 'application/json',
-          'x-app-id': NUTRITIONIX_APP_ID,
-          'x-app-key': NUTRITIONIX_API_KEY,
-        },
+        headers,
         timeout: timeoutMs,
       }
     );
