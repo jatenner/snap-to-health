@@ -273,6 +273,9 @@ export function createEmptyFallbackAnalysis(
     has_detailedIngredients: Array.isArray(fallbackResponse.detailedIngredients) && fallbackResponse.detailedIngredients.length > 0
   }));
   
+  // Debug the FINAL structure being returned
+  console.log("FINAL FALLBACK", fallbackResponse);
+  
   return fallbackResponse;
 }
 
@@ -707,6 +710,9 @@ export function createFallbackResponse(
     source: fallback.source
   }));
   
+  // Debug the FINAL structure being returned
+  console.log("FINAL FALLBACK", fallback);
+  
   return fallback;
 }
 
@@ -759,6 +765,9 @@ export function createEmergencyFallbackResponse(): any {
     has_suggestions: Array.isArray(response.suggestions) && response.suggestions.length > 0,
     has_detailedIngredients: Array.isArray(response.detailedIngredients) && response.detailedIngredients.length > 0
   }));
+  
+  // Debug the FINAL structure being returned
+  console.log("FINAL FALLBACK", response);
   
   return response;
 }

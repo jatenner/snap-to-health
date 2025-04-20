@@ -235,6 +235,9 @@ export async function callGptNutritionFallback(
           nutrients_length: successResponse.nutrients?.length || 0
         }));
         
+        // Debug the FINAL success structure being returned
+        console.log("FINAL FALLBACK SUCCESS", successResponse);
+        
         return successResponse;
       } catch (parseError: any) {
         console.error(`❌ [${requestId}] Failed to parse GPT nutrition response:`, parseError);
@@ -285,6 +288,9 @@ export async function callGptNutritionFallback(
     source: fallbackResponse.raw?.source,
     nutrients_length: fallbackResponse.nutrients?.length || 0
   }));
+  
+  // Debug the FINAL structure being returned
+  console.log("FINAL FALLBACK", fallbackResponse);
   
   return fallbackResponse;
 } 
