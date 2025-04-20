@@ -1271,3 +1271,131 @@ function ensureValidResponseStructure(result: any): AnalysisResult {
 
   return validatedResult;
 }
+
+// First, add an additional validation function:
+/**
+ * Ensures critical fields are present in the analysis result
+ * This is the last line of defense before storage
+ */
+function ensureCriticalFields(result: any): any {
+  if (!result) {
+    console.error('Analysis result is null or undefined, returning emergency fallback');
+    return createUniversalErrorFallback("null-result-before-save");
+  }
+  
+  // Create a copy to avoid mutating the original
+  const validResult = { ...result };
+  
+  // Absolutely ensure description exists
+  if (!validResult.description || typeof validResult.description !== 'string' || validResult.description.trim() === '') {
+    console.error('CRITICAL: Missing description in analysis result before save, fixing...');
+    validResult.description = "Could not analyze this meal properly.";
+  }
+  
+  // Absolutely ensure nutrients exists as a non-empty array
+  if (!Array.isArray(validResult.nutrients) || validResult.nutrients.length === 0) {
+    console.error('CRITICAL: Missing nutrients array in analysis result before save, fixing...');
+    validResult.nutrients = [
+      { name: 'Calories', value: 0, unit: 'kcal', isHighlight: true },
+      { name: 'Protein', value: 0, unit: 'g', isHighlight: true },
+      { name: 'Carbohydrates', value: 0, unit: 'g', isHighlight: true },
+      { name: 'Fat', value: 0, unit: 'g', isHighlight: true }
+    ];
+  }
+  
+  // Ensure each nutrient has the required properties
+  if (Array.isArray(validResult.nutrients)) {
+    for (let i = 0; i < validResult.nutrients.length; i++) {
+      const nutrient = validResult.nutrients[i];
+      if (!nutrient || typeof nutrient !== 'object') {
+        console.error(`CRITICAL: Invalid nutrient at index ${i}, fixing...`);
+        validResult.nutrients[i] = { name: 'Calories', value: 0, unit: 'kcal', isHighlight: true };
+        continue;
+      }
+      
+      if (!nutrient.name) {
+        console.error(`CRITICAL: Missing name for nutrient at index ${i}, fixing...`);
+        nutrient.name = `Nutrient ${i + 1}`;
+      }
+      
+      if (nutrient.value === undefined) {
+        console.error(`CRITICAL: Missing value for nutrient at index ${i}, fixing...`);
+        nutrient.value = 0;
+      }
+      
+      if (!nutrient.unit) {
+        console.error(`CRITICAL: Missing unit for nutrient at index ${i}, fixing...`);
+        nutrient.unit = 'g';
+      }
+      
+      if (nutrient.isHighlight === undefined) {
+        nutrient.isHighlight = false;
+      }
+    }
+  }
+  
+  // Ensure feedback exists as an array
+  if (!Array.isArray(validResult.feedback) || validResult.feedback.length === 0) {
+    console.error('CRITICAL: Missing feedback in analysis result before save, fixing...');
+    validResult.feedback = ["Unable to analyze the image."];
+  }
+  
+  // Ensure suggestions exists as an array
+  if (!Array.isArray(validResult.suggestions) || validResult.suggestions.length === 0) {
+    console.error('CRITICAL: Missing suggestions in analysis result before save, fixing...');
+    validResult.suggestions = ["Try a clearer photo with more lighting."];
+  }
+  
+  // Ensure detailedIngredients exists as an array
+  if (!Array.isArray(validResult.detailedIngredients)) {
+    console.error('CRITICAL: Missing detailedIngredients in analysis result before save, fixing...');
+    validResult.detailedIngredients = [];
+  }
+  
+  // Ensure goalScore exists
+  if (!validResult.goalScore || typeof validResult.goalScore !== 'object') {
+    console.error('CRITICAL: Missing goalScore in analysis result before save, fixing...');
+    validResult.goalScore = { overall: 0, specific: {} };
+  }
+  
+  // Log the final structure for debugging
+  console.log('Final validated structure before save:', {
+    has_description: !!validResult.description,
+    description_length: validResult.description?.length || 0,
+    nutrients_count: validResult.nutrients?.length || 0,
+    feedback_count: validResult.feedback?.length || 0,
+    suggestions_count: validResult.suggestions?.length || 0
+  });
+  
+  return validResult;
+}
+
+// Now find the code where meals are saved and add the validation
+// Look for trySaveMealServer or saveMealToFirestore function calls
+// Add this before the save:
+
+// For example, find code like:
+if (userId) {
+  try {
+    console.log(`[analyzeImage] Saving analysis to Firestore for user ${userId}`);
+    
+    // Add validation right before the save
+    if (result) {
+      const validatedResultForSave = ensureCriticalFields(result);
+      
+      // Save with a timeout to prevent blocking
+      const savePromise = trySaveMealServer({
+        userId,
+        imageUrl,
+        analysis: validatedResultForSave, // Use the validated result
+        requestId
+      });
+      
+      // Rest of the save code...
+    }
+    
+    // ... existing code ...
+  } catch (error) {
+    // ... existing code ...
+  }
+}
