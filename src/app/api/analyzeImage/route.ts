@@ -403,6 +403,32 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
         result_nutrients_count: timeoutResponse.result?.nutrients?.length || 0
       });
       
+      // Final validation check for timeout response
+      console.log("Final timeout result:", timeoutResponse.result);
+      if (!timeoutResponse.result || !timeoutResponse.result.description || !Array.isArray(timeoutResponse.result.nutrients)) {
+        console.warn(`[${requestId}] CRITICAL: Timeout response still has invalid structure, applying emergency fallback`);
+        timeoutResponse.result = {
+          description: "Could not analyze this meal properly.",
+          nutrients: [{ name: "Calories", value: 0, unit: "kcal", isHighlight: true }],
+          feedback: ["Analysis timed out."],
+          suggestions: ["Try again with a clearer image."],
+          detailedIngredients: [],
+          source: "timeout_error_fallback",
+          fallback: true,
+          lowConfidence: true,
+          goalScore: { overall: 0, specific: {} },
+          modelInfo: {
+            model: "emergency_timeout_fallback",
+            usedFallback: true,
+            ocrExtracted: false
+          }
+        };
+        console.log("💥 [EMERGENCY FALLBACK APPLIED TO TIMEOUT]", {
+          description: timeoutResponse.result.description,
+          nutrients_count: timeoutResponse.result.nutrients.length
+        });
+      }
+      
       resolve(NextResponse.json(timeoutResponse));
     }, GLOBAL_TIMEOUT_MS);
   });
@@ -751,6 +777,34 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
         result_suggestions_count: response.result?.suggestions?.length || 0
       });
       
+      // Final validation before returning to ensure a valid structure
+      console.log("Final result:", response.result);
+      if (!response.result || !response.result.description || !Array.isArray(response.result.nutrients)) {
+        console.warn(`[${requestId}] CRITICAL: Response still has invalid structure at return point, applying emergency fallback`);
+        response.result = {
+          description: "Could not analyze this meal properly.",
+          nutrients: [{ name: "Calories", value: 0, unit: "kcal", isHighlight: true }],
+          feedback: ["Unable to analyze the image."],
+          suggestions: ["Try a clearer photo with better lighting."],
+          detailedIngredients: [],
+          source: "error_fallback",
+          fallback: true,
+          lowConfidence: true,
+          goalScore: { overall: 0, specific: {} },
+          modelInfo: {
+            model: "emergency_fallback",
+            usedFallback: true,
+            ocrExtracted: false
+          }
+        };
+        response.fallback = true;
+        response.message = "Analysis completed with emergency fallback";
+        console.log("💥 [EMERGENCY FALLBACK APPLIED]", {
+          description: response.result.description,
+          nutrients_count: response.result.nutrients.length
+        });
+      }
+      
       return NextResponse.json(response);
       
     } catch (error) {
@@ -780,12 +834,41 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       const elapsedMs = Date.now() - startTime;
       console.log(`[${requestId}] Request failed in ${elapsedMs}ms`);
       
-      return NextResponse.json({
+      // Create the error response
+      const errorResponse = {
         success: false,
         message: errorMessage,
         result: fallbackResult,
         diagnostics: diagnostics.diagnostics
-      });
+      };
+      
+      // Final validation check for error response
+      console.log("Final error result:", errorResponse.result);
+      if (!errorResponse.result || !errorResponse.result.description || !Array.isArray(errorResponse.result.nutrients)) {
+        console.warn(`[${requestId}] CRITICAL: Error response has invalid structure, applying emergency fallback`);
+        errorResponse.result = {
+          description: "Could not analyze this meal properly.",
+          nutrients: [{ name: "Calories", value: 0, unit: "kcal", isHighlight: true }],
+          feedback: ["Unable to analyze the image."],
+          suggestions: ["Try a clearer photo with better lighting."],
+          detailedIngredients: [],
+          source: "error_fallback",
+          fallback: true,
+          lowConfidence: true,
+          goalScore: { overall: 0, specific: {} },
+          modelInfo: {
+            model: "emergency_fallback",
+            usedFallback: true,
+            ocrExtracted: false
+          }
+        };
+        console.log("💥 [EMERGENCY FALLBACK APPLIED TO ERROR RESPONSE]", {
+          description: errorResponse.result.description,
+          nutrients_count: errorResponse.result.nutrients.length
+        });
+      }
+      
+      return NextResponse.json(errorResponse);
     }
   })();
   
