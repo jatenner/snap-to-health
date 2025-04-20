@@ -74,6 +74,10 @@ interface AnalysisResponse {
   error: string | null;
   elapsedTime: number;
   diagnostics: any | null;
+  timing?: {
+    total: number;
+    components: Record<string, number>;
+  };
 }
 
 interface AnalysisResult {
@@ -431,14 +435,23 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
         source: fallbackResult.source
       });
       
-      const timeoutResponse = {
+      const timeoutResponse: AnalysisResponse = {
         success: false,
         fallback: true,
         message: "Meal analysis timed out or failed. Please try again.",
         requestId,
         error: "Global timeout reached",
         result: fallbackResult,
-        elapsedTime: Date.now() - startTime
+        elapsedTime: Date.now() - startTime,
+        imageUrl: null,
+        diagnostics: {
+          error: "Global timeout reached",
+          timeoutMs: GLOBAL_TIMEOUT_MS
+        },
+        timing: {
+          total: Date.now() - startTime,
+          components: {}
+        }
       };
       
       // Final validation check for timeout response
@@ -502,6 +515,25 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
         result_feedback_count: timeoutResponse.result?.feedback?.length || 0,
         result_suggestions_count: timeoutResponse.result?.suggestions?.length || 0
       }, null, 2));
+      
+      // Final validation before sending timeout response
+      if (!timeoutResponse.requestId) {
+        timeoutResponse.requestId = requestId;
+      }
+      
+      if (!timeoutResponse.elapsedTime) {
+        timeoutResponse.elapsedTime = Date.now() - startTime;
+      }
+      
+      if (timeoutResponse.imageUrl === undefined) {
+        timeoutResponse.imageUrl = null;
+      }
+      
+      console.log("✅ Final timeout response sent to client:", {
+        success: timeoutResponse.success, 
+        result_description: timeoutResponse.result?.description?.substring(0, 30),
+        result_nutrients_count: timeoutResponse.result?.nutrients?.length
+      });
       
       resolve(NextResponse.json(timeoutResponse));
     }, GLOBAL_TIMEOUT_MS);
@@ -813,15 +845,15 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       if (globalTimeoutId) clearTimeout(globalTimeoutId);
       
       // Create the final response
-      const response = {
+      const response: AnalysisResponse = {
         success: true,
         fallback: (nutritionData as any).source !== 'nutritionix',
         requestId,
         message: "Analysis completed successfully" + (ocrResult.error ? " (with text extraction fallback)" : ""),
         result: validatedResult,
         elapsedTime,
-        savedMealId,
         error: null,
+        imageUrl: null,
         diagnostics: {
           ocrConfidence: ocrResult.confidence,
           usedFallback: (nutritionData as any).source !== 'nutritionix',
@@ -830,6 +862,11 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
           processingTimeMs: elapsedTime
         }
       };
+      
+      // Add savedMealId if we have one
+      if (savedMealId) {
+        (response as any).savedMealId = savedMealId;
+      }
       
       // Debug log the final response structure
       console.log(`[RESPONSE_DEBUG] Final response structure:`, JSON.stringify({
@@ -851,59 +888,6 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
         result_suggestions_count: response.result?.suggestions?.length || 0
       });
       
-      // Final validation before returning to ensure a valid structure
-      console.log("Final result:", response.result);
-      if (!response.result || 
-          !response.result.description || 
-          typeof response.result.description !== 'string' ||
-          !Array.isArray(response.result.nutrients) || 
-          response.result.nutrients.length === 0 ||
-          !Array.isArray(response.result.feedback) ||
-          !Array.isArray(response.result.suggestions)) {
-        console.warn(`[${requestId}] CRITICAL: Response still has invalid structure at return point, applying emergency fallback`);
-        response.result = {
-          description: "Could not analyze this meal properly.",
-          nutrients: [{ name: "Calories", value: 0, unit: "kcal", isHighlight: true }],
-          feedback: ["Unable to analyze the image."],
-          suggestions: ["Try a clearer photo with better lighting."],
-          detailedIngredients: [],
-          source: "error_fallback",
-          fallback: true,
-          lowConfidence: true,
-          goalScore: { overall: 0, specific: {} },
-          modelInfo: {
-            model: "emergency_fallback",
-            usedFallback: true,
-            ocrExtracted: false
-          }
-        };
-        response.fallback = true;
-        response.message = "Analysis completed with emergency fallback";
-        console.log("💥 [EMERGENCY FALLBACK APPLIED]", {
-          description: response.result.description,
-          nutrients_count: response.result.nutrients.length
-        });
-      }
-      
-      // Final stringent check to ensure each nutrient has required properties
-      if (response.result && Array.isArray(response.result.nutrients)) {
-        for (let i = 0; i < response.result.nutrients.length; i++) {
-          const nutrient = response.result.nutrients[i];
-          if (!nutrient || 
-              !nutrient.name || 
-              (nutrient.value === undefined) || 
-              !nutrient.unit) {
-            console.warn(`[${requestId}] CRITICAL: Nutrient at index ${i} has invalid structure, fixing...`);
-            response.result.nutrients[i] = { 
-              name: nutrient?.name || 'Unknown', 
-              value: nutrient?.value ?? 0, 
-              unit: nutrient?.unit || 'g',
-              isHighlight: nutrient?.isHighlight || false 
-            };
-          }
-        }
-      }
-      
       // One final log of the actual response object being sent
       console.log(`💥 [FINAL RESPONSE STRUCTURE SENT TO CLIENT]`, JSON.stringify({
         success: response.success,
@@ -918,62 +902,26 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
         result_fallback: response.result?.fallback
       }, null, 2));
       
-      return NextResponse.json(response);
-      
-    } catch (error) {
-      // Complete the diagnostics for error tracking
-      const diagnostics = createAnalysisDiagnostics(requestId);
-      diagnostics.complete(false);
-      
-      // Log the actual error for debugging
-      console.error(`[${requestId}] Error processing image:`, error instanceof Error ? error.message : String(error));
-      if (error instanceof Error && error.stack) {
-        console.error(`[${requestId}] Error stack:`, error.stack);
-      }
-      
-      // For timeout errors, create a more specific message
-      const errorMessage = error instanceof Error && error.message.includes('timeout') 
-        ? 'Analysis timed out. Please try again.'
-        : 'There was an error analyzing your image.';
-      
-      // Create a consistent fallback response
-      const fallbackResult = createFallbackResponse(
-        `Error during analysis: ${errorMessage}`, 
-        error as Error || "Unknown error", 
-        requestId
-      );
-      
-      // Calculate elapsed time for metrics
-      const elapsedMs = Date.now() - startTime;
-      console.log(`[${requestId}] Request failed in ${elapsedMs}ms`);
-      
-      // Create the error response
-      const errorResponse = {
-        success: false,
-        message: errorMessage,
-        result: fallbackResult,
-        diagnostics: diagnostics.diagnostics
-      };
-      
-      // Final validation check for error response
-      console.log("Final error result:", errorResponse.result);
-      if (!errorResponse.result || 
-          !errorResponse.result.description || 
-          typeof errorResponse.result.description !== 'string' ||
-          !Array.isArray(errorResponse.result.nutrients) || 
-          errorResponse.result.nutrients.length === 0 ||
-          !Array.isArray(errorResponse.result.feedback) ||
-          !Array.isArray(errorResponse.result.suggestions)) {
-        console.warn(`[${requestId}] CRITICAL: Error response has invalid structure, applying emergency fallback`);
-        errorResponse.result = {
+      // 💥 Fallback patch to enforce structure
+      if (
+        !response.result ||
+        !response.result.description ||
+        !Array.isArray(response.result.nutrients) ||
+        response.result.nutrients.length === 0 ||
+        !Array.isArray(response.result.feedback) ||
+        !Array.isArray(response.result.suggestions) ||
+        !Array.isArray(response.result.detailedIngredients)
+      ) {
+        console.warn("💥 [SUCCESS PATH] Applying emergency fallback: result was invalid", response.result);
+        response.result = {
           description: "Could not analyze this meal properly.",
           nutrients: [{ name: "Calories", value: 0, unit: "kcal", isHighlight: true }],
           feedback: ["Unable to analyze the image."],
-          suggestions: ["Try a clearer photo with better lighting."],
+          suggestions: ["Try a clearer photo with more lighting."],
           detailedIngredients: [],
           source: "error_fallback",
-          fallback: true,
           lowConfidence: true,
+          fallback: true,
           goalScore: { overall: 0, specific: {} },
           modelInfo: {
             model: "emergency_fallback",
@@ -981,43 +929,93 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
             ocrExtracted: false
           }
         };
-        console.log("💥 [EMERGENCY FALLBACK APPLIED TO ERROR RESPONSE]", {
-          description: errorResponse.result.description,
-          nutrients_count: errorResponse.result.nutrients.length
-        });
+        response.fallback = true;
+        response.message = "Analysis completed with emergency fallback";
       }
       
-      // Final stringent check to ensure each nutrient has required properties
-      if (errorResponse.result && Array.isArray(errorResponse.result.nutrients)) {
-        for (let i = 0; i < errorResponse.result.nutrients.length; i++) {
-          const nutrient = errorResponse.result.nutrients[i];
-          if (!nutrient || 
-              !nutrient.name || 
-              (nutrient.value === undefined) || 
-              !nutrient.unit) {
-            console.warn(`[${requestId}] CRITICAL: Nutrient at index ${i} in error response has invalid structure, fixing...`);
-            errorResponse.result.nutrients[i] = { 
-              name: nutrient?.name || 'Unknown', 
-              value: nutrient?.value ?? 0, 
-              unit: nutrient?.unit || 'g',
-              isHighlight: nutrient?.isHighlight || false 
-            };
+      // Ensure all required properties exist in the response
+      if (!response.requestId) response.requestId = requestId;
+      if (response.imageUrl === undefined) response.imageUrl = null;
+      if (!response.elapsedTime) response.elapsedTime = Date.now() - startTime;
+      if (!response.error) response.error = null;
+
+      console.log("✅ Final response sent to client:", {
+        success: response.success,
+        result_description: response.result?.description?.substring(0, 30),
+        result_nutrients_count: response.result?.nutrients?.length
+      });
+      
+      return NextResponse.json(response);
+      
+    } catch (error: any) {
+      // Log the error
+      const errorMessage = error?.message || 'Unknown error';
+      const stack = error?.stack || '';
+      const diagnostics = {
+        message: errorMessage,
+        stack,
+        route: 'analyzeImage',
+        statusCode: error?.statusCode || 500
+      };
+      
+      console.error(`[${requestId}] Error in analyzeImage:`, errorMessage);
+      if (stack) console.error(`[${requestId}] Stack trace:`, stack);
+      
+      // Create error response
+      const errorResponse: AnalysisResponse = {
+        success: false,
+        message: diagnostics.statusCode === 429 
+          ? 'Too many requests. Please try again later.'
+          : 'Error analyzing image',
+        error: errorMessage,
+        result: createFallbackResponse(
+          `Error during analysis: ${errorMessage}`, 
+          error as Error || "Unknown error", 
+          requestId
+        ),
+        timing: {
+          total: Date.now() - startTime,
+          components: {}
+        },
+        diagnostics,
+        fallback: true,
+        requestId: requestId,
+        imageUrl: null,
+        elapsedTime: Date.now() - startTime
+      };
+      
+      // 💥 Universal fallback patch
+      if (!errorResponse.result || 
+          !errorResponse.result.description || 
+          !Array.isArray(errorResponse.result.nutrients) || 
+          errorResponse.result.nutrients.length === 0) {
+        console.warn("💥 [ERROR PATH] Applying emergency fallback: result was invalid");
+        errorResponse.result = {
+          description: "Could not analyze this meal properly.",
+          nutrients: [{ name: "Calories", value: 0, unit: "kcal", isHighlight: true }],
+          feedback: ["Unable to analyze the image."],
+          suggestions: ["Try a clearer photo with more lighting."],
+          detailedIngredients: [],
+          source: "error_fallback",
+          lowConfidence: true,
+          fallback: true,
+          goalScore: { overall: 0, specific: {} },
+          modelInfo: {
+            model: "emergency_fallback",
+            usedFallback: true,
+            ocrExtracted: false
           }
-        }
+        };
       }
-      
-      // One final log of the actual error response object being sent
-      console.log(`💥 [FINAL ERROR RESPONSE STRUCTURE SENT TO CLIENT]`, JSON.stringify({
+
+      console.log("❌ Error response sent to client:", {
         success: errorResponse.success,
-        has_result: !!errorResponse.result,
-        result_description: !!errorResponse.result?.description,
-        result_description_type: typeof errorResponse.result?.description,
-        result_nutrients_count: errorResponse.result?.nutrients?.length || 0,
-        result_feedback_count: errorResponse.result?.feedback?.length || 0,
-        result_suggestions_count: errorResponse.result?.suggestions?.length || 0
-      }, null, 2));
+        message: errorResponse.message,
+        result_description: errorResponse.result?.description?.substring(0, 30),
+        result_nutrients_count: errorResponse.result?.nutrients?.length
+      });
       
-      return NextResponse.json(errorResponse);
+      return NextResponse.json(errorResponse, { status: diagnostics.statusCode || 500 });
     }
   })();
   
