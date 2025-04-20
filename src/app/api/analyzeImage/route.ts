@@ -311,32 +311,7 @@ async function fetchNutrition(text: string, requestId: string): Promise<Nutritio
     // Both Nutritionix and GPT failed
     console.error(`[analyzeImage] All nutrition data sources failed: ${e.message}`);
     
-    // Create a mock food item to ensure frontend compatibility
-    const mockFood: NutritionixFood = {
-      food_name: "Unknown meal",
-      serving_qty: 1,
-      serving_unit: "serving",
-      serving_weight_grams: 100,
-      nf_calories: 0,
-      nf_total_fat: 0,
-      nf_saturated_fat: 0,
-      nf_cholesterol: 0,
-      nf_sodium: 0,
-      nf_total_carbohydrate: 0,
-      nf_dietary_fiber: 0,
-      nf_sugars: 0,
-      nf_protein: 0,
-      nf_potassium: 0,
-      nf_p: 0,
-      full_nutrients: [],
-      photo: {
-        thumb: '',
-        highres: '',
-        is_user_uploaded: false
-      }
-    };
-    
-    // Create minimal data structure with all required fields to avoid breaking code
+    // Create a fallback response with valid structure
     result = {
       nutrients: [
         { name: 'Calories', value: 0, unit: 'kcal', isHighlight: true },
@@ -344,39 +319,90 @@ async function fetchNutrition(text: string, requestId: string): Promise<Nutritio
         { name: 'Carbohydrates', value: 0, unit: 'g', isHighlight: true },
         { name: 'Fat', value: 0, unit: 'g', isHighlight: true }
       ],
-      foods: [mockFood],
-      raw: { 
-        description: "Unable to analyze this meal. Please try again.",
-        feedback: ["We couldn't analyze your meal properly. Try again with a clearer photo."],
-        suggestions: ["Make sure your meal is clearly visible in the image."],
-        goalScore: { overall: 0, specific: {} },
-        error: e.message,
-        fallback: true
-      }
+      foods: [{
+        food_name: "Unknown food",
+        serving_qty: 1,
+        serving_unit: "serving",
+        serving_weight_grams: 100,
+        nf_calories: 0,
+        nf_total_fat: 0,
+        nf_saturated_fat: 0,
+        nf_cholesterol: 0,
+        nf_sodium: 0,
+        nf_total_carbohydrate: 0,
+        nf_dietary_fiber: 0,
+        nf_sugars: 0,
+        nf_protein: 0,
+        nf_potassium: 0,
+        nf_p: 0,
+        full_nutrients: [],
+        photo: {
+          thumb: '',
+          highres: '',
+          is_user_uploaded: false
+        }
+      }],
+      raw: {
+        description: "Could not analyze this meal properly.",
+        feedback: ["Unable to analyze the image."],
+        suggestions: ["Try a clearer photo with more lighting."],
+        goalScore: {
+          overall: 0,
+          specific: {} as Record<string, number>
+        },
+        fallback: true,
+        error: "All nutrition services failed"
+      },
+      source: "error_fallback"
     };
-    source = 'error_fallback';
+    source = "error_fallback";
     
-    // Debug log the error fallback result structure
-    console.log(`[NUTRITION_DEBUG] Error fallback result structure:`, JSON.stringify({
-      has_nutrients: Array.isArray(result?.nutrients) && result?.nutrients.length > 0,
-      has_foods: Array.isArray(result?.foods) && result?.foods.length > 0,
-      has_raw: Boolean(result?.raw),
-      has_raw_description: Boolean(result?.raw?.description),
-      nutrients_length: result?.nutrients?.length || 0,
-      foods_length: result?.foods?.length || 0
+    // Debug log the emergency fallback structure
+    console.log(`[EMERGENCY_NUTRITION_FALLBACK] Structure:`, JSON.stringify({
+      has_nutrients: Array.isArray(result.nutrients) && result.nutrients.length > 0,
+      has_foods: Array.isArray(result.foods) && result.foods.length > 0,
+      has_raw: Boolean(result.raw),
+      has_raw_description: Boolean(result.raw?.description),
+      nutrients_length: result.nutrients?.length || 0,
+      foods_length: result.foods?.length || 0,
+      source
     }));
   }
   
-  // Add source property to track which provider was used
-  (result as any).source = source;
+  // Cache the result for future requests (if we have a valid result)
+  if (result && key) {
+    cache.set(key, result);
+  }
   
-  // Cache the result regardless of source
-  cache.set(key, result);
-  console.log(`[analyzeImage] Cached nutrition data from ${source} (TTL: 1 hour)`);
+  // Final validation to ensure we're not returning undefined or null values
+  // which could break the client
+  if (!result) {
+    console.warn(`[analyzeImage] WARNING: Nutrition result is nullish, creating valid fallback`);
+    result = {
+      nutrients: [
+        { name: 'Calories', value: 0, unit: 'kcal', isHighlight: true },
+        { name: 'Protein', value: 0, unit: 'g', isHighlight: true },
+        { name: 'Carbohydrates', value: 0, unit: 'g', isHighlight: true },
+        { name: 'Fat', value: 0, unit: 'g', isHighlight: true }
+      ],
+      foods: [],
+      raw: {
+        description: "Unable to analyze this meal. Please try again.",
+        feedback: ["Unable to analyze the image."],
+        suggestions: ["Try a clearer photo with more lighting."],
+        goalScore: {
+          overall: 0,
+          specific: {} as Record<string, number>
+        },
+        fallback: true
+      },
+      source: "error_fallback"
+    };
+  }
   
-  // Final check to ensure result has all required fields
-  if (!result.nutrients || !Array.isArray(result.nutrients) || result.nutrients.length === 0) {
-    console.warn(`[analyzeImage] WARNING: Nutrition data has missing or empty nutrients array, adding defaults`);
+  // Make sure nutrients is always an array with at least one item
+  if (!Array.isArray(result.nutrients) || result.nutrients.length === 0) {
+    console.warn(`[analyzeImage] WARNING: Nutrition data has missing nutrients array, adding default`);
     result.nutrients = [
       { name: 'Calories', value: 0, unit: 'kcal', isHighlight: true },
       { name: 'Protein', value: 0, unit: 'g', isHighlight: true },
@@ -385,38 +411,66 @@ async function fetchNutrition(text: string, requestId: string): Promise<Nutritio
     ];
   }
   
-  if (!result.foods || !Array.isArray(result.foods) || result.foods.length === 0) {
-    console.warn(`[analyzeImage] WARNING: Nutrition data has missing or empty foods array, adding default food`);
-    result.foods = [{
-      food_name: "Unknown meal",
-      serving_qty: 1,
-      serving_unit: "serving",
-      serving_weight_grams: 100,
-      nf_calories: 0,
-      nf_total_fat: 0,
-      nf_saturated_fat: 0,
-      nf_cholesterol: 0,
-      nf_sodium: 0,
-      nf_total_carbohydrate: 0,
-      nf_dietary_fiber: 0,
-      nf_sugars: 0,
-      nf_protein: 0,
-      nf_potassium: 0,
-      nf_p: 0,
-      full_nutrients: [],
-      photo: {
-        thumb: '',
-        highres: '',
-        is_user_uploaded: false
-      }
-    }];
+  // Make sure foods is always an array (even if empty)
+  if (!Array.isArray(result.foods)) {
+    console.warn(`[analyzeImage] WARNING: Nutrition data has missing foods array, adding empty array`);
+    result.foods = [];
   }
   
-  if (!result.raw || !result.raw.description) {
+  // Make sure raw object and required fields exist
+  if (!result.raw) {
+    console.warn(`[analyzeImage] WARNING: Nutrition data has missing raw object, adding default`);
+    result.raw = {
+      description: "Unable to analyze this meal. Please try again.",
+      feedback: ["Unable to analyze the image."],
+      suggestions: ["Try a clearer photo with more lighting."],
+      goalScore: {
+        overall: 0,
+        specific: {} as Record<string, number>
+      },
+      fallback: true
+    };
+  }
+  
+  if (!result.raw.description) {
     console.warn(`[analyzeImage] WARNING: Nutrition data has missing raw.description, adding default`);
-    result.raw = result.raw || {};
     result.raw.description = "Unable to analyze this meal. Please try again.";
   }
+  
+  // Ensure feedback and suggestions are arrays
+  if (!Array.isArray(result.raw.feedback)) {
+    console.warn(`[analyzeImage] WARNING: Nutrition data has missing raw.feedback array, adding default`);
+    result.raw.feedback = ["Unable to analyze the image."];
+  }
+  
+  if (!Array.isArray(result.raw.suggestions)) {
+    console.warn(`[analyzeImage] WARNING: Nutrition data has missing raw.suggestions array, adding default`);
+    result.raw.suggestions = ["Try a clearer photo with more lighting."];
+  }
+  
+  // Add the source indicator if it's missing
+  if (!result.source) {
+    result.source = source;
+  }
+  
+  // Set fallback flag for proper frontend handling
+  if (!result.raw.fallback && (source === "error_fallback" || source === "gpt_error")) {
+    result.raw.fallback = true;
+  }
+  
+  // Final debug log of the structure we're returning
+  console.log(`[NUTRITION_FINAL] Final nutrition data structure:`, JSON.stringify({
+    has_nutrients: Array.isArray(result.nutrients) && result.nutrients.length > 0,
+    has_foods: Array.isArray(result.foods) && result.foods.length > 0,
+    has_raw: Boolean(result.raw),
+    has_raw_description: Boolean(result.raw?.description),
+    has_raw_feedback: Array.isArray(result.raw?.feedback) && result.raw?.feedback.length > 0,
+    has_raw_suggestions: Array.isArray(result.raw?.suggestions) && result.raw?.suggestions.length > 0,
+    nutrients_length: result.nutrients?.length || 0,
+    foods_length: result.foods?.length || 0,
+    source: result.source || source,
+    fallback: Boolean(result.raw?.fallback)
+  }));
   
   return result;
 }

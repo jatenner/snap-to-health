@@ -277,6 +277,35 @@ export async function callGptNutritionFallback(
     }
   };
   
+  // CRITICAL: Ensure nutrients are in the proper format (object with name, value, unit, isHighlight)
+  if (!Array.isArray(fallbackResponse.nutrients) || fallbackResponse.nutrients.length === 0) {
+    fallbackResponse.nutrients = [
+      { name: 'Calories', value: 500, unit: 'kcal', isHighlight: true },
+      { name: 'Protein', value: 15, unit: 'g', isHighlight: true },
+      { name: 'Carbs', value: 40, unit: 'g', isHighlight: true },
+      { name: 'Fat', value: 20, unit: 'g', isHighlight: true }
+    ];
+  }
+  
+  // Ensure each nutrient has the required properties
+  fallbackResponse.nutrients = fallbackResponse.nutrients.map(nutrient => {
+    if (typeof nutrient !== 'object' || nutrient === null) {
+      return { name: 'Unknown', value: 0, unit: 'g', isHighlight: false };
+    }
+    
+    return {
+      name: nutrient.name || 'Unknown',
+      value: nutrient.value !== undefined ? nutrient.value : 0,
+      unit: nutrient.unit || 'g',
+      isHighlight: nutrient.isHighlight !== undefined ? nutrient.isHighlight : false
+    };
+  });
+  
+  // Ensure raw object has a description
+  if (!fallbackResponse.raw.description || typeof fallbackResponse.raw.description !== 'string') {
+    fallbackResponse.raw.description = "Could not analyze this meal properly.";
+  }
+  
   // Debug log to verify fallback structure
   console.log(`[${requestId}] GPT_ERROR_FALLBACK_STRUCTURE:`, JSON.stringify({
     has_nutrients: Array.isArray(fallbackResponse.nutrients) && fallbackResponse.nutrients.length > 0,

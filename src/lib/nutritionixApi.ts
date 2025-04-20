@@ -59,6 +59,7 @@ export interface NutritionData {
   nutrients: NutrientInfo[];
   foods: NutritionixFood[];
   raw: any;
+  source?: string;
 }
 
 /**
