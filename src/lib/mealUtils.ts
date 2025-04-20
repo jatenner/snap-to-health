@@ -295,6 +295,22 @@ export const saveMealToFirestore = async (
     const mealDocRef = doc(mealsCollection);
     console.log(`Document ID: ${mealDocRef.id}`);
     
+    // Ensure analysis has required fields with fallbacks if missing
+    if (!analysis.description || typeof analysis.description !== 'string') {
+      console.warn('Missing or invalid description in analysis data, using fallback');
+      analysis.description = "No description available. Please try again with a clearer image.";
+    }
+    
+    if (!analysis.nutrients || !Array.isArray(analysis.nutrients) || analysis.nutrients.length === 0) {
+      console.warn('Missing or invalid nutrients in analysis data, using fallback');
+      analysis.nutrients = [
+        { name: "Calories", value: 0, unit: "kcal", isHighlight: true },
+        { name: "Protein", value: 0, unit: "g", isHighlight: true },
+        { name: "Carbohydrates", value: 0, unit: "g", isHighlight: true },
+        { name: "Fat", value: 0, unit: "g", isHighlight: true }
+      ];
+    }
+    
     // Generate automatic meal name if none provided
     const autoMealName = mealName || 
       (analysis.description && analysis.description.length > 0 
@@ -495,13 +511,18 @@ export async function trySaveMeal({
     };
   }
 
-  // Only save if we have valid analysis and not a complete failure
-  if (!analysis.success || analysis.fallback) {
-    console.warn(`⚠️ [${requestId}] Not saving meal due to analysis issues: success=${analysis.success}, fallback=${analysis.fallback}`);
+  // Only validate that we have an analysis object, allow fallbacks
+  if (!analysis) {
+    console.warn(`⚠️ [${requestId}] Not saving meal due to missing analysis data`);
     return { 
       success: false, 
-      error: new Error('Cannot save insufficient analysis results')
+      error: new Error('Cannot save without analysis data')
     };
+  }
+
+  // If it's a fallback result, log it but continue with the save
+  if (analysis.fallback) {
+    console.log(`ℹ️ [${requestId}] Saving meal with fallback analysis data`);
   }
 
   // Create a promise that resolves with either the save operation or a timeout

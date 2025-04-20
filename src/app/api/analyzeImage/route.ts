@@ -450,6 +450,32 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
         }
       };
       
+      // Validate the analysis result - ensure it has the required fields
+      // Add fallbacks for any missing required fields to prevent storage errors
+      if (!analysisResult.description || typeof analysisResult.description !== 'string') {
+        console.warn(`[analyzeImage] Missing or invalid description in analysis result, using fallback`);
+        analysisResult.description = "No description available. Please try again with a clearer image.";
+      }
+      
+      if (!analysisResult.nutrients || !Array.isArray(analysisResult.nutrients) || analysisResult.nutrients.length === 0) {
+        console.warn(`[analyzeImage] Missing or invalid nutrients in analysis result, using fallback`);
+        analysisResult.nutrients = [
+          { name: "Calories", value: 0, unit: "kcal", isHighlight: true },
+          { name: "Protein", value: 0, unit: "g", isHighlight: true },
+          { name: "Carbohydrates", value: 0, unit: "g", isHighlight: true },
+          { name: "Fat", value: 0, unit: "g", isHighlight: true }
+        ];
+      }
+      
+      // Ensure feedback and suggestions exist
+      if (!Array.isArray(analysisResult.feedback) || analysisResult.feedback.length === 0) {
+        analysisResult.feedback = ["No specific feedback available for this meal."];
+      }
+      
+      if (!Array.isArray(analysisResult.suggestions) || analysisResult.suggestions.length === 0) {
+        analysisResult.suggestions = ["Try to include a variety of foods in your meals for balanced nutrition."];
+      }
+      
       // If userId is provided, save the analysis result to Firestore
       let savedMealId: string | null = null;
       if (userId && imageBase64) {
@@ -509,13 +535,33 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       // Clear the timeout since we're handling the error
       if (globalTimeoutId) clearTimeout(globalTimeoutId);
       
+      // Create a minimal valid result structure even for error responses
+      const fallbackResult: AnalysisResult = {
+        description: "Unable to analyze this meal. Please try again with a clearer image.",
+        nutrients: [
+          { name: "Calories", value: 0, unit: "kcal", isHighlight: true },
+          { name: "Protein", value: 0, unit: "g", isHighlight: true },
+          { name: "Carbohydrates", value: 0, unit: "g", isHighlight: true },
+          { name: "Fat", value: 0, unit: "g", isHighlight: true }
+        ],
+        feedback: ["We couldn't analyze this image properly."],
+        suggestions: ["Try taking a clearer photo with good lighting."],
+        detailedIngredients: [],
+        goalScore: { overall: 0, specific: {} },
+        modelInfo: {
+          model: "error_fallback",
+          usedFallback: true,
+          ocrExtracted: false
+        }
+      };
+      
       // Return structured error response
       return NextResponse.json({
         success: false,
         fallback: true,
         requestId,
         message: "Failed to analyze image: " + (error.message || "Unknown error"),
-        result: null,
+        result: fallbackResult,
         imageUrl: null,
         error: error.message || "Unknown error occurred during analysis",
         elapsedTime,
