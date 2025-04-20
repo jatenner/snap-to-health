@@ -983,14 +983,24 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       let savedMealId: string | null = null;
       if (userId && imageBase64) {
         try {
-          // Try to save the meal to Firestore (with a 5-second timeout)
-          const savePromise = saveMealToFirestore(userId, imageBase64, validatedResult);
-          const saveTimeoutPromise = new Promise<never>((_, reject) => {
-            setTimeout(() => reject(new Error('SAVE_TIMEOUT')), 5000);
-          });
+          console.log(`[analyzeImage] Saving analysis to Firestore for user ${userId}`);
           
-          savedMealId = await Promise.race([savePromise, saveTimeoutPromise]);
-          console.log(`[analyzeImage] Saved meal to Firestore with ID: ${savedMealId}`);
+          // Add validation right before the save
+          if (validatedResult) {
+            const validatedResultForSave = ensureCriticalFields(validatedResult);
+            
+            // Save with a timeout to prevent blocking
+            const savePromise = trySaveMealServer({
+              userId,
+              imageUrl: imageBase64,
+              analysis: validatedResultForSave, // Use the validated result
+              requestId
+            });
+            
+            const saveResult = await savePromise;
+            savedMealId = saveResult.savedMealId || null;
+            console.log(`[analyzeImage] Saved meal to Firestore with ID: ${savedMealId}`);
+          }
         } catch (saveError) {
           console.error(`[analyzeImage] Failed to save meal to Firestore:`, saveError);
           // Don't fail the whole request if saving fails
@@ -1368,34 +1378,4 @@ function ensureCriticalFields(result: any): any {
   });
   
   return validResult;
-}
-
-// Now find the code where meals are saved and add the validation
-// Look for trySaveMealServer or saveMealToFirestore function calls
-// Add this before the save:
-
-// For example, find code like:
-if (userId) {
-  try {
-    console.log(`[analyzeImage] Saving analysis to Firestore for user ${userId}`);
-    
-    // Add validation right before the save
-    if (result) {
-      const validatedResultForSave = ensureCriticalFields(result);
-      
-      // Save with a timeout to prevent blocking
-      const savePromise = trySaveMealServer({
-        userId,
-        imageUrl,
-        analysis: validatedResultForSave, // Use the validated result
-        requestId
-      });
-      
-      // Rest of the save code...
-    }
-    
-    // ... existing code ...
-  } catch (error) {
-    // ... existing code ...
-  }
 }
