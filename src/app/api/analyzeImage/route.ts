@@ -298,6 +298,60 @@ async function fetchNutrition(
       source: "error_fallback"
     };
     
+    // Stringent validation to ensure the fallback response has all required fields
+    if (!Array.isArray(fallbackNutritionData.nutrients) || fallbackNutritionData.nutrients.length === 0) {
+      console.error(`[${requestId}] CRITICAL: Missing nutrients in fallback response, adding default nutrients`);
+      fallbackNutritionData.nutrients = [
+        { name: 'Calories', value: 0, unit: 'kcal', isHighlight: true },
+        { name: 'Protein', value: 0, unit: 'g', isHighlight: true }
+      ];
+    }
+    
+    if (!Array.isArray(fallbackNutritionData.foods) || fallbackNutritionData.foods.length === 0) {
+      console.error(`[${requestId}] CRITICAL: Missing foods in fallback response, adding default food`);
+      fallbackNutritionData.foods = [{
+        food_name: "Unknown food",
+        serving_qty: 1,
+        serving_unit: "serving",
+        serving_weight_grams: 100,
+        nf_calories: 0,
+        nf_total_fat: 0,
+        nf_saturated_fat: 0,
+        nf_cholesterol: 0,
+        nf_sodium: 0,
+        nf_total_carbohydrate: 0,
+        nf_dietary_fiber: 0,
+        nf_sugars: 0,
+        nf_protein: 0,
+        nf_potassium: 0,
+        nf_p: 0,
+        full_nutrients: [],
+        photo: {
+          thumb: '',
+          highres: '',
+          is_user_uploaded: false
+        }
+      }];
+    }
+    
+    if (!fallbackNutritionData.raw) {
+      console.error(`[${requestId}] CRITICAL: Missing raw object in fallback response, adding default raw data`);
+      fallbackNutritionData.raw = {
+        description: "Could not analyze this meal properly.",
+        feedback: ["Unable to analyze the image."],
+        suggestions: ["Try a clearer photo with more lighting."],
+        goalScore: {
+          overall: 5,
+          specific: {} as Record<string, number>
+        }
+      };
+    }
+    
+    if (!fallbackNutritionData.raw.description || typeof fallbackNutritionData.raw.description !== 'string') {
+      console.error(`[${requestId}] CRITICAL: Missing description in fallback response, adding default description`);
+      fallbackNutritionData.raw.description = "Could not analyze this meal properly.";
+    }
+    
     // Debug log the structure
     console.log(`✅ [Returning emergency nutrition fallback]`, {
       nutrients_count: fallbackNutritionData.nutrients.length,
@@ -307,6 +361,18 @@ async function fetchNutrition(
       has_suggestions: Array.isArray(fallbackNutritionData.raw?.suggestions),
       source: fallbackNutritionData.source
     });
+    
+    // Log the complete structure for debugging
+    console.log(`💥 Final fallback nutrition data:`, JSON.stringify({
+      has_nutrients: Array.isArray(fallbackNutritionData.nutrients) && fallbackNutritionData.nutrients.length > 0,
+      nutrients_count: fallbackNutritionData.nutrients.length,
+      has_foods: Array.isArray(fallbackNutritionData.foods) && fallbackNutritionData.foods.length > 0,
+      foods_count: fallbackNutritionData.foods.length,
+      has_raw: !!fallbackNutritionData.raw,
+      has_raw_description: !!fallbackNutritionData.raw?.description,
+      raw_description: fallbackNutritionData.raw?.description?.substring(0, 30),
+      source: fallbackNutritionData.source
+    }, null, 2));
     
     return fallbackNutritionData;
   }
@@ -375,37 +441,15 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
         elapsedTime: Date.now() - startTime
       };
       
-      // Final sanity check to ensure required fields are present in timeout response
-      if (!timeoutResponse.result || !timeoutResponse.result.description || typeof timeoutResponse.result.description !== 'string') {
-        console.error(`[analyzeImage] CRITICAL: Timeout response missing description, fixing...`);
-        if (!timeoutResponse.result) {
-          timeoutResponse.result = createFallbackResponse("Missing result object in timeout response", "Timeout error", requestId);
-        } else {
-          timeoutResponse.result.description = "Could not analyze this meal properly.";
-        }
-      }
-      
-      // Double-check nutrients array
-      if (!Array.isArray(timeoutResponse.result.nutrients) || timeoutResponse.result.nutrients.length === 0) {
-        console.error(`[analyzeImage] CRITICAL: Timeout response missing nutrients, fixing...`);
-        timeoutResponse.result.nutrients = [
-          { name: "Calories", value: 0, unit: "kcal", isHighlight: true },
-          { name: "Protein", value: 0, unit: "g", isHighlight: true },
-          { name: "Carbohydrates", value: 0, unit: "g", isHighlight: true },
-          { name: "Fat", value: 0, unit: "g", isHighlight: true }
-        ];
-      }
-      
-      console.log("🚨 [TIMEOUT RESULT RETURNED TO FRONTEND]", {
-        success: timeoutResponse.success,
-        has_result: !!timeoutResponse.result,
-        result_description: timeoutResponse.result?.description?.substring(0, 30),
-        result_nutrients_count: timeoutResponse.result?.nutrients?.length || 0
-      });
-      
       // Final validation check for timeout response
       console.log("Final timeout result:", timeoutResponse.result);
-      if (!timeoutResponse.result || !timeoutResponse.result.description || !Array.isArray(timeoutResponse.result.nutrients)) {
+      if (!timeoutResponse.result || 
+          !timeoutResponse.result.description || 
+          typeof timeoutResponse.result.description !== 'string' ||
+          !Array.isArray(timeoutResponse.result.nutrients) || 
+          timeoutResponse.result.nutrients.length === 0 ||
+          !Array.isArray(timeoutResponse.result.feedback) ||
+          !Array.isArray(timeoutResponse.result.suggestions)) {
         console.warn(`[${requestId}] CRITICAL: Timeout response still has invalid structure, applying emergency fallback`);
         timeoutResponse.result = {
           description: "Could not analyze this meal properly.",
@@ -428,6 +472,36 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
           nutrients_count: timeoutResponse.result.nutrients.length
         });
       }
+      
+      // Final stringent check to ensure each nutrient has required properties
+      if (timeoutResponse.result && Array.isArray(timeoutResponse.result.nutrients)) {
+        for (let i = 0; i < timeoutResponse.result.nutrients.length; i++) {
+          const nutrient = timeoutResponse.result.nutrients[i];
+          if (!nutrient || 
+              !nutrient.name || 
+              (nutrient.value === undefined) || 
+              !nutrient.unit) {
+            console.warn(`[${requestId}] CRITICAL: Nutrient at index ${i} in timeout has invalid structure, fixing...`);
+            timeoutResponse.result.nutrients[i] = { 
+              name: nutrient?.name || 'Unknown', 
+              value: nutrient?.value ?? 0, 
+              unit: nutrient?.unit || 'g',
+              isHighlight: nutrient?.isHighlight || false 
+            };
+          }
+        }
+      }
+      
+      // One final log of the actual timeout response object being sent
+      console.log(`💥 [FINAL TIMEOUT RESPONSE SENT TO CLIENT]`, JSON.stringify({
+        success: timeoutResponse.success,
+        has_result: !!timeoutResponse.result,
+        result_description: !!timeoutResponse.result?.description,
+        result_description_type: typeof timeoutResponse.result?.description,
+        result_nutrients_count: timeoutResponse.result?.nutrients?.length || 0,
+        result_feedback_count: timeoutResponse.result?.feedback?.length || 0,
+        result_suggestions_count: timeoutResponse.result?.suggestions?.length || 0
+      }, null, 2));
       
       resolve(NextResponse.json(timeoutResponse));
     }, GLOBAL_TIMEOUT_MS);
@@ -779,7 +853,13 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       
       // Final validation before returning to ensure a valid structure
       console.log("Final result:", response.result);
-      if (!response.result || !response.result.description || !Array.isArray(response.result.nutrients)) {
+      if (!response.result || 
+          !response.result.description || 
+          typeof response.result.description !== 'string' ||
+          !Array.isArray(response.result.nutrients) || 
+          response.result.nutrients.length === 0 ||
+          !Array.isArray(response.result.feedback) ||
+          !Array.isArray(response.result.suggestions)) {
         console.warn(`[${requestId}] CRITICAL: Response still has invalid structure at return point, applying emergency fallback`);
         response.result = {
           description: "Could not analyze this meal properly.",
@@ -804,6 +884,39 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
           nutrients_count: response.result.nutrients.length
         });
       }
+      
+      // Final stringent check to ensure each nutrient has required properties
+      if (response.result && Array.isArray(response.result.nutrients)) {
+        for (let i = 0; i < response.result.nutrients.length; i++) {
+          const nutrient = response.result.nutrients[i];
+          if (!nutrient || 
+              !nutrient.name || 
+              (nutrient.value === undefined) || 
+              !nutrient.unit) {
+            console.warn(`[${requestId}] CRITICAL: Nutrient at index ${i} has invalid structure, fixing...`);
+            response.result.nutrients[i] = { 
+              name: nutrient?.name || 'Unknown', 
+              value: nutrient?.value ?? 0, 
+              unit: nutrient?.unit || 'g',
+              isHighlight: nutrient?.isHighlight || false 
+            };
+          }
+        }
+      }
+      
+      // One final log of the actual response object being sent
+      console.log(`💥 [FINAL RESPONSE STRUCTURE SENT TO CLIENT]`, JSON.stringify({
+        success: response.success,
+        has_result: !!response.result,
+        result_description: !!response.result?.description,
+        result_description_type: typeof response.result?.description,
+        result_description_length: response.result?.description?.length,
+        result_nutrients_count: response.result?.nutrients?.length || 0,
+        result_feedback_count: response.result?.feedback?.length || 0,
+        result_suggestions_count: response.result?.suggestions?.length || 0,
+        result_source: response.result?.source,
+        result_fallback: response.result?.fallback
+      }, null, 2));
       
       return NextResponse.json(response);
       
@@ -844,7 +957,13 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       
       // Final validation check for error response
       console.log("Final error result:", errorResponse.result);
-      if (!errorResponse.result || !errorResponse.result.description || !Array.isArray(errorResponse.result.nutrients)) {
+      if (!errorResponse.result || 
+          !errorResponse.result.description || 
+          typeof errorResponse.result.description !== 'string' ||
+          !Array.isArray(errorResponse.result.nutrients) || 
+          errorResponse.result.nutrients.length === 0 ||
+          !Array.isArray(errorResponse.result.feedback) ||
+          !Array.isArray(errorResponse.result.suggestions)) {
         console.warn(`[${requestId}] CRITICAL: Error response has invalid structure, applying emergency fallback`);
         errorResponse.result = {
           description: "Could not analyze this meal properly.",
@@ -867,6 +986,36 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
           nutrients_count: errorResponse.result.nutrients.length
         });
       }
+      
+      // Final stringent check to ensure each nutrient has required properties
+      if (errorResponse.result && Array.isArray(errorResponse.result.nutrients)) {
+        for (let i = 0; i < errorResponse.result.nutrients.length; i++) {
+          const nutrient = errorResponse.result.nutrients[i];
+          if (!nutrient || 
+              !nutrient.name || 
+              (nutrient.value === undefined) || 
+              !nutrient.unit) {
+            console.warn(`[${requestId}] CRITICAL: Nutrient at index ${i} in error response has invalid structure, fixing...`);
+            errorResponse.result.nutrients[i] = { 
+              name: nutrient?.name || 'Unknown', 
+              value: nutrient?.value ?? 0, 
+              unit: nutrient?.unit || 'g',
+              isHighlight: nutrient?.isHighlight || false 
+            };
+          }
+        }
+      }
+      
+      // One final log of the actual error response object being sent
+      console.log(`💥 [FINAL ERROR RESPONSE STRUCTURE SENT TO CLIENT]`, JSON.stringify({
+        success: errorResponse.success,
+        has_result: !!errorResponse.result,
+        result_description: !!errorResponse.result?.description,
+        result_description_type: typeof errorResponse.result?.description,
+        result_nutrients_count: errorResponse.result?.nutrients?.length || 0,
+        result_feedback_count: errorResponse.result?.feedback?.length || 0,
+        result_suggestions_count: errorResponse.result?.suggestions?.length || 0
+      }, null, 2));
       
       return NextResponse.json(errorResponse);
     }
