@@ -206,7 +206,7 @@ export async function callGptNutritionFallback(
         
         console.timeEnd(`⏱️ [${requestId}] GPT nutrition fallback`);
         
-        return {
+        const successResponse = {
           nutrients,
           foods: [food],
           raw: {
@@ -223,6 +223,19 @@ export async function callGptNutritionFallback(
             fallback: !hasValidNutritionData
           }
         };
+        
+        // Debug log to confirm response structure
+        console.log(`[${requestId}] GPT_SUCCESS_STRUCTURE:`, JSON.stringify({
+          has_nutrients: Array.isArray(successResponse.nutrients) && successResponse.nutrients.length > 0,
+          has_foods: Array.isArray(successResponse.foods) && successResponse.foods.length > 0,
+          has_raw_description: Boolean(successResponse.raw?.description),
+          has_raw_feedback: Array.isArray(successResponse.raw?.feedback) && successResponse.raw?.feedback.length > 0,
+          has_raw_suggestions: Array.isArray(successResponse.raw?.suggestions) && successResponse.raw?.suggestions.length > 0,
+          source: successResponse.raw?.source,
+          nutrients_length: successResponse.nutrients?.length || 0
+        }));
+        
+        return successResponse;
       } catch (parseError: any) {
         console.error(`❌ [${requestId}] Failed to parse GPT nutrition response:`, parseError);
         console.error(`❌ [${requestId}] Raw response:`, response.choices[0]?.message?.content);
@@ -247,7 +260,7 @@ export async function callGptNutritionFallback(
       : `This appears to be ${safeDescription}. Unable to provide detailed analysis.`;
   
   // Return default values in case of any error - ensure we always have all required fields
-  return {
+  const fallbackResponse = {
     nutrients: defaultNutrients,
     foods: [mockFood], // Always include at least one food item
     raw: {
@@ -260,4 +273,18 @@ export async function callGptNutritionFallback(
       fallback: true
     }
   };
+  
+  // Debug log to verify fallback structure
+  console.log(`[${requestId}] GPT_ERROR_FALLBACK_STRUCTURE:`, JSON.stringify({
+    has_nutrients: Array.isArray(fallbackResponse.nutrients) && fallbackResponse.nutrients.length > 0,
+    has_foods: Array.isArray(fallbackResponse.foods) && fallbackResponse.foods.length > 0,
+    has_raw_description: Boolean(fallbackResponse.raw?.description),
+    description_type: typeof fallbackResponse.raw?.description,
+    has_raw_feedback: Array.isArray(fallbackResponse.raw?.feedback) && fallbackResponse.raw?.feedback.length > 0, 
+    has_raw_suggestions: Array.isArray(fallbackResponse.raw?.suggestions) && fallbackResponse.raw?.suggestions.length > 0,
+    source: fallbackResponse.raw?.source,
+    nutrients_length: fallbackResponse.nutrients?.length || 0
+  }));
+  
+  return fallbackResponse;
 } 

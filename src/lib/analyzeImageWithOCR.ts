@@ -238,8 +238,8 @@ export function createEmptyFallbackAnalysis(
 ): any {
   console.log(`[${requestId}] Creating empty fallback analysis due to: ${errorMessage}`);
   
-  return {
-    description: "We couldn't analyze this meal properly. Please try again with a clearer photo.",
+  const fallbackResponse = {
+    description: "Could not analyze this meal properly.",
     nutrients: [
       { name: "Calories", value: 0, unit: "kcal", isHighlight: true },
       { name: "Protein", value: 0, unit: "g", isHighlight: true },
@@ -254,12 +254,26 @@ export function createEmptyFallbackAnalysis(
     fallback: true,
     lowConfidence: true,
     message: errorMessage || "Analysis failed",
+    source: "fallback_analysis",
     modelInfo: {
       model: modelUsed || "none",
       usedFallback: true,
       ocrExtracted: true
     }
   };
+  
+  // Debug log the fallback structure
+  console.log(`[${requestId}] FALLBACK STRUCTURE:`, JSON.stringify({
+    has_description: Boolean(fallbackResponse.description),
+    description_type: typeof fallbackResponse.description,
+    has_nutrients: Array.isArray(fallbackResponse.nutrients) && fallbackResponse.nutrients.length > 0,
+    nutrients_length: fallbackResponse.nutrients?.length || 0,
+    has_feedback: Array.isArray(fallbackResponse.feedback) && fallbackResponse.feedback.length > 0,
+    has_suggestions: Array.isArray(fallbackResponse.suggestions) && fallbackResponse.suggestions.length > 0,
+    has_detailedIngredients: Array.isArray(fallbackResponse.detailedIngredients) && fallbackResponse.detailedIngredients.length > 0
+  }));
+  
+  return fallbackResponse;
 }
 
 /**
@@ -447,14 +461,21 @@ export async function analyzeImageWithOCR(
     // Create a good fallback that will work in the UI
     const fallbackAnalysis = {
       description: "We couldn't analyze this meal properly. Please try again with a clearer photo.",
-      nutrients: [],
+      nutrients: [
+        { name: "Calories", value: 0, unit: "kcal", isHighlight: true },
+        { name: "Protein", value: 0, unit: "g", isHighlight: true },
+        { name: "Carbohydrates", value: 0, unit: "g", isHighlight: true },
+        { name: "Fat", value: 0, unit: "g", isHighlight: true }
+      ],
       feedback: ["Unable to analyze the image due to technical issues."],
       suggestions: [
         "Try taking the photo with better lighting",
         "Make sure the food is clearly visible",
         "Check that your image is not too dark or blurry"
       ],
-      detailedIngredients: [],
+      detailedIngredients: [
+        { name: "Unknown", category: "food", confidence: 0, confidenceEmoji: "❓" }
+      ],
       goalScore: {
         overall: 3,
         specific: {}
@@ -473,6 +494,15 @@ export async function analyzeImageWithOCR(
       lowConfidence: true,
       message: "Analysis couldn't be completed. Please try again with a clearer image."
     };
+    
+    // Debug log the error fallback structure
+    console.log(`[${requestId}] ERROR FALLBACK STRUCTURE:`, JSON.stringify({
+      has_description: Boolean(fallbackAnalysis.description),
+      has_nutrients: Array.isArray(fallbackAnalysis.nutrients) && fallbackAnalysis.nutrients.length > 0,
+      has_feedback: Array.isArray(fallbackAnalysis.feedback) && fallbackAnalysis.feedback.length > 0,
+      has_suggestions: Array.isArray(fallbackAnalysis.suggestions) && fallbackAnalysis.suggestions.length > 0,
+      nutrients_length: fallbackAnalysis.nutrients?.length || 0
+    }));
     
     console.timeEnd(`⏱️ [${requestId}] analyzeImageWithOCR`);
     
@@ -559,6 +589,12 @@ export function createFallbackResponse(
   const defaultFeedback = ["We couldn't analyze your meal properly."];
   const defaultSuggestions = ["Try taking a clearer photo with good lighting."];
   
+  // Always include these essential fields
+  fallback.description = "Could not analyze this meal properly.";
+  fallback.lowConfidence = true;
+  fallback.fallback = true;
+  fallback.source = "fallback_response";
+  
   // Add error metadata for debugging
   fallback.metadata = {
     requestId: reason,
@@ -636,6 +672,41 @@ export function createFallbackResponse(
     fallback.suggestions = defaultSuggestions;
   }
   
+  // Final check to ensure all required fields exist and are of the correct type
+  if (!fallback.description || typeof fallback.description !== 'string') {
+    fallback.description = "Could not analyze this meal properly.";
+  }
+  
+  if (!Array.isArray(fallback.nutrients) || fallback.nutrients.length === 0) {
+    fallback.nutrients = defaultNutrients;
+  }
+  
+  if (!Array.isArray(fallback.feedback) || fallback.feedback.length === 0) {
+    fallback.feedback = defaultFeedback;
+  }
+  
+  if (!Array.isArray(fallback.suggestions) || fallback.suggestions.length === 0) {
+    fallback.suggestions = defaultSuggestions;
+  }
+  
+  if (!Array.isArray(fallback.detailedIngredients) || fallback.detailedIngredients.length === 0) {
+    fallback.detailedIngredients = defaultDetailedIngredients;
+  }
+  
+  // Debug log the final fallback structure
+  console.log(`[FALLBACK_DEBUG] Final fallback structure:`, JSON.stringify({
+    has_description: Boolean(fallback.description),
+    description_type: typeof fallback.description,
+    has_nutrients: Array.isArray(fallback.nutrients) && fallback.nutrients.length > 0,
+    has_feedback: Array.isArray(fallback.feedback) && fallback.feedback.length > 0,
+    has_suggestions: Array.isArray(fallback.suggestions) && fallback.suggestions.length > 0,
+    has_detailedIngredients: Array.isArray(fallback.detailedIngredients) && fallback.detailedIngredients.length > 0,
+    nutrients_length: fallback.nutrients?.length || 0,
+    fallback: fallback.fallback,
+    lowConfidence: fallback.lowConfidence,
+    source: fallback.source
+  }));
+  
   return fallback;
 }
 
@@ -643,8 +714,8 @@ export function createFallbackResponse(
  * Create an emergency fallback response for unexpected errors
  */
 export function createEmergencyFallbackResponse(): any {
-  return {
-    description: "We're unable to analyze your meal at this time.",
+  const response = {
+    description: "Could not analyze this meal properly.",
     nutrients: [
       { name: "Calories", value: 0, unit: "kcal", isHighlight: true },
       { name: "Protein", value: 0, unit: "g", isHighlight: true },
@@ -664,6 +735,9 @@ export function createEmergencyFallbackResponse(): any {
       overall: 0,
       specific: {} as Record<string, number>
     },
+    lowConfidence: true,
+    fallback: true,
+    source: "emergency_fallback",
     metadata: {
       requestId: crypto.randomUUID(),
       modelUsed: "emergency_fallback",
@@ -674,6 +748,19 @@ export function createEmergencyFallbackResponse(): any {
       imageQuality: "unknown"
     }
   };
+  
+  // Debug log the emergency fallback structure
+  console.log(`[EMERGENCY_FALLBACK_DEBUG] Emergency fallback structure:`, JSON.stringify({
+    has_description: Boolean(response.description),
+    description_type: typeof response.description,
+    has_nutrients: Array.isArray(response.nutrients) && response.nutrients.length > 0,
+    nutrients_length: response.nutrients?.length || 0,
+    has_feedback: Array.isArray(response.feedback) && response.feedback.length > 0,
+    has_suggestions: Array.isArray(response.suggestions) && response.suggestions.length > 0,
+    has_detailedIngredients: Array.isArray(response.detailedIngredients) && response.detailedIngredients.length > 0
+  }));
+  
+  return response;
 }
 
 /**

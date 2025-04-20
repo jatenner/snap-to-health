@@ -104,12 +104,18 @@ interface AnalysisResult {
     usedFallback: boolean;
     ocrExtracted: boolean;
   };
+  lowConfidence?: boolean;
+  fallback?: boolean;
+  source?: string;
 }
 
 // Mock implementation for backward compatibility during migration
 function createFallbackResponse(reason: string, partialResult: any, reqId: string = 'unknown'): any {
-  return {
-    description: "Unable to analyze the image at this time.",
+  console.log(`[${reqId}] Creating fallback response due to: ${reason}`);
+  
+  // Always include these fields to ensure frontend compatibility
+  const fallbackResponse = {
+    description: "Could not analyze this meal properly.",
     nutrients: [
       { name: 'Calories', value: 0, unit: 'kcal', isHighlight: true },
       { name: 'Protein', value: 0, unit: 'g', isHighlight: true },
@@ -130,16 +136,28 @@ function createFallbackResponse(reason: string, partialResult: any, reqId: strin
       usedFallback: true,
       ocrExtracted: false
     },
-    metadata: {
-      requestId: reqId,
-      modelUsed: "text_extraction_fallback",
-      usedFallbackModel: true,
-      processingTime: 0,
-      confidence: 0,
-      error: reason,
-      imageQuality: "unknown"
-    }
+    lowConfidence: true,
+    fallback: true,
+    source: "error_fallback"
   };
+  
+  // Debug log the fallback structure
+  console.log(`[${reqId}] FALLBACK_RESPONSE_STRUCTURE:`, JSON.stringify({
+    has_description: Boolean(fallbackResponse.description),
+    description_type: typeof fallbackResponse.description,
+    has_nutrients: Array.isArray(fallbackResponse.nutrients) && fallbackResponse.nutrients.length > 0,
+    nutrients_length: fallbackResponse.nutrients?.length || 0,
+    has_feedback: Array.isArray(fallbackResponse.feedback) && fallbackResponse.feedback.length > 0,
+    has_suggestions: Array.isArray(fallbackResponse.suggestions) && fallbackResponse.suggestions.length > 0,
+    has_detailedIngredients: Array.isArray(fallbackResponse.detailedIngredients) && fallbackResponse.detailedIngredients.length > 0
+  }));
+  
+  return fallbackResponse;
+}
+
+// Function to create an MD5 hash
+function createMD5Hash(data: string): string {
+  return crypto.createHash('md5').update(data).digest('hex');
 }
 
 /**
@@ -159,6 +177,18 @@ async function fetchNutrition(text: string, requestId: string): Promise<Nutritio
   if (cache.has(key)) {
     const cachedData = cache.get<NutritionData>(key);
     console.log(`[analyzeImage] Using cached nutrition data for text (cached ${Date.now() - (cache.getTtl(key) || 0) - startTime}ms ago)`);
+    
+    // Debug log the cached data structure
+    console.log(`[NUTRITION_DEBUG] Cached data structure:`, JSON.stringify({
+      has_nutrients: Array.isArray(cachedData?.nutrients) && cachedData?.nutrients.length > 0,
+      has_foods: Array.isArray(cachedData?.foods) && cachedData?.foods.length > 0,
+      has_raw: Boolean(cachedData?.raw),
+      has_raw_description: Boolean(cachedData?.raw?.description),
+      nutrients_length: cachedData?.nutrients?.length || 0,
+      foods_length: cachedData?.foods?.length || 0,
+      source: (cachedData as any)?.source
+    }));
+    
     return cachedData!;
   }
   
@@ -246,12 +276,32 @@ async function fetchNutrition(text: string, requestId: string): Promise<Nutritio
       result = await Promise.race([nutritionixPromise, nutritionixTimeoutPromise]);
       source = 'nutritionix';
       console.log(`[analyzeImage] Successfully used Nutritionix API data in ${Date.now() - startTime}ms`);
+      
+      // Debug log the nutritionix result structure
+      console.log(`[NUTRITION_DEBUG] Nutritionix result structure:`, JSON.stringify({
+        has_nutrients: Array.isArray(result?.nutrients) && result?.nutrients.length > 0,
+        has_foods: Array.isArray(result?.foods) && result?.foods.length > 0,
+        has_raw: Boolean(result?.raw),
+        has_raw_description: Boolean(result?.raw?.description),
+        nutrients_length: result?.nutrients?.length || 0,
+        foods_length: result?.foods?.length || 0
+      }));
     } catch (nutritionixError: any) {
       // If Nutritionix fails or times out, use GPT immediately
       console.log(`[analyzeImage] Nutritionix failed (${nutritionixError.message}), falling back to GPT`);
       result = await gptPromise();
       source = 'gpt';
       console.log(`[analyzeImage] Successfully used GPT fallback data in ${Date.now() - startTime}ms`);
+      
+      // Debug log the GPT fallback result structure
+      console.log(`[NUTRITION_DEBUG] GPT fallback result structure:`, JSON.stringify({
+        has_nutrients: Array.isArray(result?.nutrients) && result?.nutrients.length > 0,
+        has_foods: Array.isArray(result?.foods) && result?.foods.length > 0,
+        has_raw: Boolean(result?.raw),
+        has_raw_description: Boolean(result?.raw?.description),
+        nutrients_length: result?.nutrients?.length || 0,
+        foods_length: result?.foods?.length || 0
+      }));
     }
   } catch (e: any) {
     // Both Nutritionix and GPT failed
@@ -301,6 +351,16 @@ async function fetchNutrition(text: string, requestId: string): Promise<Nutritio
       }
     };
     source = 'error_fallback';
+    
+    // Debug log the error fallback result structure
+    console.log(`[NUTRITION_DEBUG] Error fallback result structure:`, JSON.stringify({
+      has_nutrients: Array.isArray(result?.nutrients) && result?.nutrients.length > 0,
+      has_foods: Array.isArray(result?.foods) && result?.foods.length > 0,
+      has_raw: Boolean(result?.raw),
+      has_raw_description: Boolean(result?.raw?.description),
+      nutrients_length: result?.nutrients?.length || 0,
+      foods_length: result?.foods?.length || 0
+    }));
   }
   
   // Add source property to track which provider was used
@@ -309,6 +369,50 @@ async function fetchNutrition(text: string, requestId: string): Promise<Nutritio
   // Cache the result regardless of source
   cache.set(key, result);
   console.log(`[analyzeImage] Cached nutrition data from ${source} (TTL: 1 hour)`);
+  
+  // Final check to ensure result has all required fields
+  if (!result.nutrients || !Array.isArray(result.nutrients) || result.nutrients.length === 0) {
+    console.warn(`[analyzeImage] WARNING: Nutrition data has missing or empty nutrients array, adding defaults`);
+    result.nutrients = [
+      { name: 'Calories', value: 0, unit: 'kcal', isHighlight: true },
+      { name: 'Protein', value: 0, unit: 'g', isHighlight: true },
+      { name: 'Carbohydrates', value: 0, unit: 'g', isHighlight: true },
+      { name: 'Fat', value: 0, unit: 'g', isHighlight: true }
+    ];
+  }
+  
+  if (!result.foods || !Array.isArray(result.foods) || result.foods.length === 0) {
+    console.warn(`[analyzeImage] WARNING: Nutrition data has missing or empty foods array, adding default food`);
+    result.foods = [{
+      food_name: "Unknown meal",
+      serving_qty: 1,
+      serving_unit: "serving",
+      serving_weight_grams: 100,
+      nf_calories: 0,
+      nf_total_fat: 0,
+      nf_saturated_fat: 0,
+      nf_cholesterol: 0,
+      nf_sodium: 0,
+      nf_total_carbohydrate: 0,
+      nf_dietary_fiber: 0,
+      nf_sugars: 0,
+      nf_protein: 0,
+      nf_potassium: 0,
+      nf_p: 0,
+      full_nutrients: [],
+      photo: {
+        thumb: '',
+        highres: '',
+        is_user_uploaded: false
+      }
+    }];
+  }
+  
+  if (!result.raw || !result.raw.description) {
+    console.warn(`[analyzeImage] WARNING: Nutrition data has missing raw.description, adding default`);
+    result.raw = result.raw || {};
+    result.raw.description = "Unable to analyze this meal. Please try again.";
+  }
   
   return result;
 }
@@ -351,10 +455,24 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
           model: "timeout_fallback",
           usedFallback: true,
           ocrExtracted: false
-        }
+        },
+        lowConfidence: true,
+        fallback: true,
+        source: "timeout_fallback"
       };
       
-      resolve(NextResponse.json({
+      // Log the fallback structure
+      console.log(`[analyzeImage] TIMEOUT_FALLBACK_STRUCTURE:`, JSON.stringify({
+        has_description: Boolean(fallbackResult.description),
+        description_type: typeof fallbackResult.description,
+        has_nutrients: Array.isArray(fallbackResult.nutrients) && fallbackResult.nutrients.length > 0,
+        nutrients_length: fallbackResult.nutrients?.length || 0,
+        has_feedback: Array.isArray(fallbackResult.feedback) && fallbackResult.feedback.length > 0,
+        has_suggestions: Array.isArray(fallbackResult.suggestions) && fallbackResult.suggestions.length > 0,
+        has_detailedIngredients: Array.isArray(fallbackResult.detailedIngredients) && fallbackResult.detailedIngredients.length > 0
+      }));
+      
+      const timeoutResponse = {
         success: false,
         fallback: true,
         message: "Meal analysis timed out or failed. Please try again.",
@@ -362,7 +480,19 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
         error: "Global timeout reached",
         result: fallbackResult,
         elapsedTime: Date.now() - startTime
-      }, { status: 408 }));
+      };
+      
+      // Debug log the timeout response structure
+      console.log(`[TIMEOUT_RESPONSE_DEBUG] Timeout response structure:`, JSON.stringify({
+        success: timeoutResponse.success,
+        result_present: Boolean(timeoutResponse.result),
+        result_description_present: Boolean(timeoutResponse.result?.description),
+        result_nutrients_present: Array.isArray(timeoutResponse.result?.nutrients) && timeoutResponse.result?.nutrients.length > 0,
+        result_feedback_present: Array.isArray(timeoutResponse.result?.feedback) && timeoutResponse.result?.feedback.length > 0,
+        result_suggestions_present: Array.isArray(timeoutResponse.result?.suggestions) && timeoutResponse.result?.suggestions.length > 0
+      }));
+      
+      resolve(NextResponse.json(timeoutResponse, { status: 408 }));
     }, GLOBAL_TIMEOUT_MS);
   });
   
@@ -437,20 +567,37 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       }
       
       // Compute a cache key - we use a hash of the image data to avoid storing the whole image in the key
-      const imageHash = crypto.createHash('md5').update(imageBase64).digest('hex');
+      const imageHash = createMD5Hash(imageBase64);
       const cacheKey = `${healthGoal}_${imageHash}`;
       
       // Check if we have a cached result
       if (cache.has(cacheKey)) {
         console.log(`[analyzeImage] Cache hit for ${cacheKey}`);
-        const cachedResult = cache.get(cacheKey);
+        const cachedResult = cache.get(cacheKey) as any;
+        
+        // Validate the cached result to ensure it has the required fields
+        let validCachedResult = {...cachedResult};
+        if (!cachedResult.description || typeof cachedResult.description !== 'string') {
+          console.warn(`[analyzeImage] Cached result missing valid description, fixing...`);
+          validCachedResult.description = "Could not analyze this meal properly.";
+        }
+        
+        if (!Array.isArray(validCachedResult.nutrients) || validCachedResult.nutrients.length === 0) {
+          console.warn(`[analyzeImage] Cached result missing valid nutrients, fixing...`);
+          validCachedResult.nutrients = [
+            { name: 'Calories', value: 0, unit: 'kcal', isHighlight: true },
+            { name: 'Protein', value: 0, unit: 'g', isHighlight: true },
+            { name: 'Carbohydrates', value: 0, unit: 'g', isHighlight: true },
+            { name: 'Fat', value: 0, unit: 'g', isHighlight: true }
+          ];
+        }
         
         // Clear the timeout since we're returning early
         if (globalTimeoutId) clearTimeout(globalTimeoutId);
         
         return NextResponse.json({ 
           success: true, 
-          data: cachedResult,
+          data: validCachedResult,
           cached: true,
           elapsedTime: Date.now() - startTime,
           requestId
@@ -518,6 +665,18 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
         }
       };
       
+      // Debug log for analysis result structure
+      console.log(`[ANALYSIS_DEBUG] Initial analysis result structure:`, JSON.stringify({
+        has_description: Boolean(analysisResult.description),
+        has_nutrients: Array.isArray(analysisResult.nutrients) && analysisResult.nutrients.length > 0,
+        has_feedback: Array.isArray(analysisResult.feedback) && analysisResult.feedback.length > 0,
+        has_suggestions: Array.isArray(analysisResult.suggestions) && analysisResult.suggestions.length > 0,
+        has_detailedIngredients: Array.isArray(analysisResult.detailedIngredients) && analysisResult.detailedIngredients.length > 0,
+        nutrients_length: analysisResult.nutrients?.length || 0,
+        description_type: typeof analysisResult.description,
+        raw_description: nutritionData.raw?.description ? 'present' : 'missing'
+      }));
+      
       // Validate the analysis result - ensure it has the required fields
       // Add fallbacks for any missing required fields to prevent storage errors
       if (!analysisResult.description || typeof analysisResult.description !== 'string') {
@@ -543,6 +702,17 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       if (!Array.isArray(analysisResult.suggestions) || analysisResult.suggestions.length === 0) {
         analysisResult.suggestions = ["Try to include a variety of foods in your meals for balanced nutrition."];
       }
+      
+      // Debug log after validation
+      console.log(`[ANALYSIS_DEBUG] Final validated analysis result structure:`, JSON.stringify({
+        has_description: Boolean(analysisResult.description),
+        has_nutrients: Array.isArray(analysisResult.nutrients) && analysisResult.nutrients.length > 0,
+        has_feedback: Array.isArray(analysisResult.feedback) && analysisResult.feedback.length > 0,
+        has_suggestions: Array.isArray(analysisResult.suggestions) && analysisResult.suggestions.length > 0,
+        has_detailedIngredients: Array.isArray(analysisResult.detailedIngredients) && analysisResult.detailedIngredients.length > 0,
+        nutrients_length: analysisResult.nutrients?.length || 0,
+        description_type: typeof analysisResult.description
+      }));
       
       // If userId is provided, save the analysis result to Firestore
       let savedMealId: string | null = null;
@@ -575,7 +745,8 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       // Clear the timeout since we're returning successfully
       if (globalTimeoutId) clearTimeout(globalTimeoutId);
       
-      return NextResponse.json({
+      // Create the final response
+      const response = {
         success: true,
         fallback: (nutritionData as any).source !== 'nutritionix',
         requestId,
@@ -591,7 +762,19 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
           textLength: extractedText.length,
           processingTimeMs: elapsedTime
         }
-      });
+      };
+      
+      // Debug log the final response structure
+      console.log(`[RESPONSE_DEBUG] Final response structure:`, JSON.stringify({
+        success: response.success,
+        result_present: Boolean(response.result),
+        result_description_present: Boolean(response.result?.description),
+        result_nutrients_present: Array.isArray(response.result?.nutrients) && response.result?.nutrients.length > 0,
+        result_feedback_present: Array.isArray(response.result?.feedback) && response.result?.feedback.length > 0,
+        result_suggestions_present: Array.isArray(response.result?.suggestions) && response.result?.suggestions.length > 0
+      }));
+      
+      return NextResponse.json(response);
       
     } catch (error: any) {
       // Log the error details
@@ -605,7 +788,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       
       // Create a minimal valid result structure even for error responses
       const fallbackResult: AnalysisResult = {
-        description: "Unable to analyze this meal. Please try again with a clearer image.",
+        description: "Could not analyze this meal properly.",
         nutrients: [
           { name: "Calories", value: 0, unit: "kcal", isHighlight: true },
           { name: "Protein", value: 0, unit: "g", isHighlight: true },
@@ -622,11 +805,25 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
           model: "error_fallback",
           usedFallback: true,
           ocrExtracted: false
-        }
+        },
+        // Add these fields for frontend compatibility
+        lowConfidence: true,
+        fallback: true
       };
       
+      // Log the structure to help debug
+      console.log(`[analyzeImage] ERROR_FALLBACK_STRUCTURE:`, JSON.stringify({
+        has_description: Boolean(fallbackResult.description),
+        description_type: typeof fallbackResult.description,
+        has_nutrients: Array.isArray(fallbackResult.nutrients) && fallbackResult.nutrients.length > 0,
+        nutrients_length: fallbackResult.nutrients?.length || 0,
+        has_feedback: Array.isArray(fallbackResult.feedback) && fallbackResult.feedback.length > 0,
+        has_suggestions: Array.isArray(fallbackResult.suggestions) && fallbackResult.suggestions.length > 0,
+        has_detailedIngredients: Array.isArray(fallbackResult.detailedIngredients) && fallbackResult.detailedIngredients.length > 0
+      }));
+      
       // Return structured error response
-      return NextResponse.json({
+      const errorResponse = {
         success: false,
         fallback: true,
         requestId,
@@ -641,7 +838,20 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
           stack: process.env.NODE_ENV === 'development' ? error.stack : undefined,
           processingTimeMs: elapsedTime
         }
-      }, { status: 500 });
+      };
+      
+      // Debug log the error response structure
+      console.log(`[ERROR_RESPONSE_DEBUG] Error response structure:`, JSON.stringify({
+        success: errorResponse.success,
+        fallback: errorResponse.fallback,
+        result_present: Boolean(errorResponse.result),
+        result_description_present: Boolean(errorResponse.result?.description),
+        result_nutrients_present: Array.isArray(errorResponse.result?.nutrients) && errorResponse.result?.nutrients.length > 0,
+        result_feedback_present: Array.isArray(errorResponse.result?.feedback) && errorResponse.result?.feedback.length > 0,
+        result_suggestions_present: Array.isArray(errorResponse.result?.suggestions) && errorResponse.result?.suggestions.length > 0
+      }));
+      
+      return NextResponse.json(errorResponse, { status: 500 });
     }
   })();
   
