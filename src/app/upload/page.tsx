@@ -490,28 +490,33 @@ export default function UploadPage() {
         // Log the raw response for debugging
         console.log("📦 Analysis result received:", response.data);
         
+        // Add debug logging before validation
+        console.log("✅ Validating result:", response.data);
+        
         // Validate analysis structure one more time before storing
         if (!response.data || typeof response.data !== 'object') {
           console.warn('Invalid result structure before storing:', response.data);
           throw new Error('Invalid or corrupted analysis result');
         }
         
-        // Check if we need to access the result field (API structure change)
+        // First check response.data.result, then fall back to response.data for legacy behavior
         const analysisData = response.data.result || response.data;
         
         // Verify that critical fields exist and have the expected types
         const requiredFields = ['description', 'nutrients'];
-        const missingFields = requiredFields.filter(field => !(field in analysisData));
+        const missingFields = requiredFields.filter(field => {
+          // Check if the field exists and is not null/undefined/empty
+          if (field === 'description') {
+            return !analysisData.description || typeof analysisData.description !== 'string' || analysisData.description.trim() === '';
+          } else if (field === 'nutrients') {
+            return !Array.isArray(analysisData.nutrients) || analysisData.nutrients.length === 0;
+          }
+          return !(field in analysisData);
+        });
         
         if (missingFields.length > 0) {
-          console.error("Missing required fields in analysis:", missingFields);
+          console.error("Missing required fields in analysis:", missingFields, "Full data:", analysisData);
           throw new Error(`Invalid analysis data: missing ${missingFields.join(', ')}`);
-        }
-        
-        // Validate array fields
-        if (!Array.isArray(analysisData.nutrients)) {
-          console.error("nutrients is not an array:", analysisData.nutrients);
-          throw new Error('Invalid analysis data: nutrients must be an array');
         }
         
         let resultToStore = response.data;

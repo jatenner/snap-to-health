@@ -16,6 +16,7 @@ import { API_CONFIG } from '@/lib/constants';
 import { createAnalysisDiagnostics, checkOCRConfig, checkNutritionixCredentials } from '@/lib/diagnostics';
 import { GPT_MODEL } from '@/lib/constants';
 import { saveMealToFirestore } from '@/lib/mealUtils';
+import { isValidAnalysis, normalizeAnalysisResult } from '@/lib/utils/analysisValidator';
 
 const cache = new NodeCache({ stdTTL: 60 * 60 })  // 1 hour
 const oai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
@@ -568,10 +569,16 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
           !Array.isArray(timeoutResponse.result.feedback) ||
           !Array.isArray(timeoutResponse.result.suggestions)) {
         console.warn(`[${requestId}] CRITICAL: Timeout response has invalid structure, applying universal fallback`);
-        timeoutResponse.result = createUniversalErrorFallback();
+        // Create a fallback result and assign it
+        const fallbackResult = normalizeAnalysisResult({});
+        fallbackResult.source = "timeout_fallback";
+        timeoutResponse.result = fallbackResult;
+        
         console.log("💥 [UNIVERSAL FALLBACK APPLIED TO TIMEOUT]", {
-          description: timeoutResponse.result.description,
-          nutrients_count: timeoutResponse.result.nutrients.length
+          description: fallbackResult.description,
+          nutrients_count: typeof fallbackResult.nutrients === 'object' ? 
+              (Array.isArray(fallbackResult.nutrients) ? fallbackResult.nutrients.length : 'Object') : 
+              'None'
         });
       }
       
@@ -1063,7 +1070,10 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
           !Array.isArray(response.result.nutrients) || 
           response.result.nutrients.length === 0) {
         console.warn(`[${requestId}] Invalid response structure detected, applying universal fallback`);
-        response.result = createUniversalErrorFallback("final-validation-fix-main-success");
+        response.result = normalizeAnalysisResult({}); // Use the utility for consistency
+      } else {
+        // Ensure we have a fully valid structure even if some parts might be missing
+        response.result = normalizeAnalysisResult(response.result);
       }
 
       // Log the final response structure
@@ -1111,7 +1121,10 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
           !Array.isArray(errorResponse.result.nutrients) || 
           errorResponse.result.nutrients.length === 0) {
         console.warn(`[${requestId}] Invalid error response structure detected, applying universal fallback`);
-        errorResponse.result = createUniversalErrorFallback("final-validation-fix-error-response");
+        errorResponse.result = normalizeAnalysisResult({}); // Use the utility for consistency
+      } else {
+        // Ensure we have a fully valid structure even if some parts might be missing
+        errorResponse.result = normalizeAnalysisResult(errorResponse.result);
       }
       
       // Log the final response structure
@@ -1132,17 +1145,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
         errorResponse.result.nutrients.length === 0
       ) {
         console.warn(`[${requestId}] 💥 Final fallback triggered before error response`);
-        errorResponse.result = {
-          description: "Could not analyze this meal.",
-          nutrients: [{ name: "Calories", value: 0, unit: "kcal", isHighlight: true }],
-          feedback: ["Unable to analyze meal content."],
-          suggestions: ["Try uploading a clearer image."],
-          detailedIngredients: [],
-          goalScore: { overall: 0, specific: {} },
-          fallback: true,
-          lowConfidence: true,
-          source: "error_fallback"
-        };
+        errorResponse.result = normalizeAnalysisResult({}); // Use the utility for consistency
       }
       
       return NextResponse.json(errorResponse, { status: 500 });
@@ -1289,93 +1292,16 @@ function ensureValidResponseStructure(result: any): AnalysisResult {
  */
 function ensureCriticalFields(result: any): any {
   if (!result) {
-    console.error('Analysis result is null or undefined, returning emergency fallback');
-    return createUniversalErrorFallback("null-result-before-save");
+    console.error('CRITICAL: Result is null or undefined before save');
+    return normalizeAnalysisResult({}); // Create a complete fallback
   }
   
-  // Create a copy to avoid mutating the original
-  const validResult = { ...result };
-  
-  // Absolutely ensure description exists
-  if (!validResult.description || typeof validResult.description !== 'string' || validResult.description.trim() === '') {
-    console.error('CRITICAL: Missing description in analysis result before save, fixing...');
-    validResult.description = "Could not analyze this meal properly.";
+  // Use our dedicated analysis validator
+  if (!isValidAnalysis(result)) {
+    console.error('CRITICAL: Analysis validation failed before save, normalizing result');
+    return normalizeAnalysisResult(result);
   }
   
-  // Absolutely ensure nutrients exists as a non-empty array
-  if (!Array.isArray(validResult.nutrients) || validResult.nutrients.length === 0) {
-    console.error('CRITICAL: Missing nutrients array in analysis result before save, fixing...');
-    validResult.nutrients = [
-      { name: 'Calories', value: 0, unit: 'kcal', isHighlight: true },
-      { name: 'Protein', value: 0, unit: 'g', isHighlight: true },
-      { name: 'Carbohydrates', value: 0, unit: 'g', isHighlight: true },
-      { name: 'Fat', value: 0, unit: 'g', isHighlight: true }
-    ];
-  }
-  
-  // Ensure each nutrient has the required properties
-  if (Array.isArray(validResult.nutrients)) {
-    for (let i = 0; i < validResult.nutrients.length; i++) {
-      const nutrient = validResult.nutrients[i];
-      if (!nutrient || typeof nutrient !== 'object') {
-        console.error(`CRITICAL: Invalid nutrient at index ${i}, fixing...`);
-        validResult.nutrients[i] = { name: 'Calories', value: 0, unit: 'kcal', isHighlight: true };
-        continue;
-      }
-      
-      if (!nutrient.name) {
-        console.error(`CRITICAL: Missing name for nutrient at index ${i}, fixing...`);
-        nutrient.name = `Nutrient ${i + 1}`;
-      }
-      
-      if (nutrient.value === undefined) {
-        console.error(`CRITICAL: Missing value for nutrient at index ${i}, fixing...`);
-        nutrient.value = 0;
-      }
-      
-      if (!nutrient.unit) {
-        console.error(`CRITICAL: Missing unit for nutrient at index ${i}, fixing...`);
-        nutrient.unit = 'g';
-      }
-      
-      if (nutrient.isHighlight === undefined) {
-        nutrient.isHighlight = false;
-      }
-    }
-  }
-  
-  // Ensure feedback exists as an array
-  if (!Array.isArray(validResult.feedback) || validResult.feedback.length === 0) {
-    console.error('CRITICAL: Missing feedback in analysis result before save, fixing...');
-    validResult.feedback = ["Unable to analyze the image."];
-  }
-  
-  // Ensure suggestions exists as an array
-  if (!Array.isArray(validResult.suggestions) || validResult.suggestions.length === 0) {
-    console.error('CRITICAL: Missing suggestions in analysis result before save, fixing...');
-    validResult.suggestions = ["Try a clearer photo with more lighting."];
-  }
-  
-  // Ensure detailedIngredients exists as an array
-  if (!Array.isArray(validResult.detailedIngredients)) {
-    console.error('CRITICAL: Missing detailedIngredients in analysis result before save, fixing...');
-    validResult.detailedIngredients = [];
-  }
-  
-  // Ensure goalScore exists
-  if (!validResult.goalScore || typeof validResult.goalScore !== 'object') {
-    console.error('CRITICAL: Missing goalScore in analysis result before save, fixing...');
-    validResult.goalScore = { overall: 0, specific: {} };
-  }
-  
-  // Log the final structure for debugging
-  console.log('Final validated structure before save:', {
-    has_description: !!validResult.description,
-    description_length: validResult.description?.length || 0,
-    nutrients_count: validResult.nutrients?.length || 0,
-    feedback_count: validResult.feedback?.length || 0,
-    suggestions_count: validResult.suggestions?.length || 0
-  });
-  
-  return validResult;
+  // Valid analysis, but still ensure structure consistency
+  return normalizeAnalysisResult(result);
 }
