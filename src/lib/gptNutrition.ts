@@ -274,11 +274,13 @@ export async function callGptNutritionFallback(
       source: 'gpt_error',
       error: 'Error generating nutrition data',
       fallback: true
-    }
+    },
+    source: 'gpt_error'  // Add source at top level for frontend compatibility
   };
   
   // CRITICAL: Ensure nutrients are in the proper format (object with name, value, unit, isHighlight)
   if (!Array.isArray(fallbackResponse.nutrients) || fallbackResponse.nutrients.length === 0) {
+    console.warn(`[${requestId}] CRITICAL: Missing nutrients array in GPT fallback, adding default nutrients`);
     fallbackResponse.nutrients = [
       { name: 'Calories', value: 500, unit: 'kcal', isHighlight: true },
       { name: 'Protein', value: 15, unit: 'g', isHighlight: true },
@@ -303,23 +305,45 @@ export async function callGptNutritionFallback(
   
   // Ensure raw object has a description
   if (!fallbackResponse.raw.description || typeof fallbackResponse.raw.description !== 'string') {
+    console.warn(`[${requestId}] CRITICAL: Missing description in GPT fallback, adding default description`);
     fallbackResponse.raw.description = "Could not analyze this meal properly.";
+  }
+  
+  // Ensure raw object has feedback array
+  if (!Array.isArray(fallbackResponse.raw.feedback) || fallbackResponse.raw.feedback.length === 0) {
+    console.warn(`[${requestId}] CRITICAL: Missing feedback in GPT fallback, adding default feedback`);
+    fallbackResponse.raw.feedback = ["Unable to analyze the image."];
+  }
+  
+  // Ensure raw object has suggestions array
+  if (!Array.isArray(fallbackResponse.raw.suggestions) || fallbackResponse.raw.suggestions.length === 0) {
+    console.warn(`[${requestId}] CRITICAL: Missing suggestions in GPT fallback, adding default suggestions`);
+    fallbackResponse.raw.suggestions = ["Try a clearer photo with more lighting."];
   }
   
   // Debug log to verify fallback structure
   console.log(`[${requestId}] GPT_ERROR_FALLBACK_STRUCTURE:`, JSON.stringify({
     has_nutrients: Array.isArray(fallbackResponse.nutrients) && fallbackResponse.nutrients.length > 0,
     has_foods: Array.isArray(fallbackResponse.foods) && fallbackResponse.foods.length > 0,
+    has_raw: Boolean(fallbackResponse.raw),
     has_raw_description: Boolean(fallbackResponse.raw?.description),
     description_type: typeof fallbackResponse.raw?.description,
     has_raw_feedback: Array.isArray(fallbackResponse.raw?.feedback) && fallbackResponse.raw?.feedback.length > 0, 
     has_raw_suggestions: Array.isArray(fallbackResponse.raw?.suggestions) && fallbackResponse.raw?.suggestions.length > 0,
-    source: fallbackResponse.raw?.source,
+    has_source: Boolean(fallbackResponse.source),
+    source: fallbackResponse.source,
     nutrients_length: fallbackResponse.nutrients?.length || 0
   }));
   
   // Debug the FINAL structure being returned
-  console.log("FINAL FALLBACK", fallbackResponse);
+  console.log(`[${requestId}] FINAL_GPT_FALLBACK:`, JSON.stringify({
+    nutrients_length: fallbackResponse.nutrients.length,
+    foods_length: fallbackResponse.foods.length,
+    raw_description: Boolean(fallbackResponse.raw.description),
+    raw_feedback: Boolean(fallbackResponse.raw.feedback),
+    raw_suggestions: Boolean(fallbackResponse.raw.suggestions),
+    source: fallbackResponse.source
+  }));
   
   return fallbackResponse;
 } 

@@ -109,25 +109,49 @@ interface AnalysisResult {
   source?: string;
 }
 
-// Mock implementation for backward compatibility during migration
-function createFallbackResponse(reason: string, partialResult: any, reqId: string = 'unknown'): any {
-  console.log(`[${reqId}] Creating fallback response due to: ${reason}`);
+interface ExtendedNutritionData extends NutritionData {
+  source: string;
+}
+
+interface NutrientAnalysisResult {
+  success: boolean;
+  feedback: string[];
+  suggestions: string[];
+  goalScore: {
+    overall: number;
+    specific: Record<string, number>;
+  };
+}
+
+/**
+ * Creates a fallback response when analysis fails
+ * @param message Message indicating why the fallback was triggered
+ * @param error Error object or message
+ * @param requestId Request identifier for tracking
+ * @returns Structured fallback response
+ */
+function createFallbackResponse(
+  message: string,
+  error: Error | string | null,
+  requestId: string
+): AnalysisResult {
+  console.log(`[${requestId}] createFallbackResponse: ${message}, Error: ${error || 'none'}`);
   
-  // Always include these fields to ensure frontend compatibility
-  const fallbackResponse = {
+  // Create a hardcoded fallback response that matches expected structure
+  const fallbackResponse: AnalysisResult = {
     description: "Could not analyze this meal properly.",
     nutrients: [
       { name: 'Calories', value: 0, unit: 'kcal', isHighlight: true },
       { name: 'Protein', value: 0, unit: 'g', isHighlight: true },
-      { name: 'Carbohydrates', value: 0, unit: 'g', isHighlight: true },
+      { name: 'Carbs', value: 0, unit: 'g', isHighlight: true },
       { name: 'Fat', value: 0, unit: 'g', isHighlight: true }
     ],
     feedback: ["Unable to analyze the image."],
     suggestions: ["Try a clearer photo with more lighting."],
     detailedIngredients: [],
-    goalScore: {
-      overall: 0,
-      specific: {} as Record<string, number>,
+    goalScore: { 
+      overall: 5, 
+      specific: {} 
     },
     modelInfo: {
       model: "error_fallback",
@@ -139,24 +163,40 @@ function createFallbackResponse(reason: string, partialResult: any, reqId: strin
     source: "error_fallback"
   };
   
-  // Ensure the response structure is valid
-  const validatedResponse = ensureValidResponseStructure(fallbackResponse);
+  console.debug(`[${requestId}] Fallback response structure check:
+    - Description: ${fallbackResponse.description ? 'exists' : 'missing'}
+    - Nutrients count: ${fallbackResponse.nutrients?.length || 0}
+    - Feedback: ${fallbackResponse.feedback?.length || 0} items
+    - Suggestions: ${fallbackResponse.suggestions?.length || 0} items
+    - Model info: ${fallbackResponse.modelInfo ? 'exists' : 'missing'}
+    - Source: ${fallbackResponse.source || 'missing'}`);
+    
+  // Additional stringent validation to ensure no undefined values
+  if (!fallbackResponse.description) fallbackResponse.description = "Could not analyze this meal properly.";
+  if (!Array.isArray(fallbackResponse.nutrients) || fallbackResponse.nutrients.length === 0) {
+    fallbackResponse.nutrients = [
+      { name: 'Calories', value: 0, unit: 'kcal', isHighlight: true }
+    ];
+  }
+  if (!Array.isArray(fallbackResponse.feedback) || fallbackResponse.feedback.length === 0) {
+    fallbackResponse.feedback = ["Unable to analyze the image."];
+  }
+  if (!Array.isArray(fallbackResponse.suggestions) || fallbackResponse.suggestions.length === 0) {
+    fallbackResponse.suggestions = ["Try a clearer photo with more lighting."];
+  }
+  if (!Array.isArray(fallbackResponse.detailedIngredients)) {
+    fallbackResponse.detailedIngredients = [];
+  }
   
-  // Debug log the fallback structure
-  console.log(`[${reqId}] FALLBACK_RESPONSE_STRUCTURE:`, JSON.stringify({
-    has_description: Boolean(validatedResponse.description),
-    description_type: typeof validatedResponse.description,
-    has_nutrients: Array.isArray(validatedResponse.nutrients) && validatedResponse.nutrients.length > 0,
-    nutrients_length: validatedResponse.nutrients?.length || 0,
-    has_feedback: Array.isArray(validatedResponse.feedback) && validatedResponse.feedback.length > 0,
-    has_suggestions: Array.isArray(validatedResponse.suggestions) && validatedResponse.suggestions.length > 0,
-    has_detailedIngredients: Array.isArray(validatedResponse.detailedIngredients)
-  }));
+  console.log(`✅ [Returning fallback response]`, {
+    description: fallbackResponse.description,
+    nutrients_count: fallbackResponse.nutrients.length,
+    feedback_count: fallbackResponse.feedback.length,
+    suggestions_count: fallbackResponse.suggestions.length,
+    source: fallbackResponse.source
+  });
   
-  // Debug the FINAL structure being returned
-  console.log("FINAL FALLBACK", validatedResponse);
-  
-  return validatedResponse;
+  return fallbackResponse;
 }
 
 // Function to create an MD5 hash
@@ -170,153 +210,55 @@ function createMD5Hash(data: string): string {
  * @param requestId Request identifier for tracking
  * @returns Nutrition data from either Nutritionix or GPT fallback
  */
-async function fetchNutrition(text: string, requestId: string): Promise<NutritionData> {
-  console.log(`[analyzeImage] OCR text: ${text}`);
-  const startTime = Date.now();
-  
-  // Create a cache key from the text
-  const key = text.trim().toLowerCase();
-  
-  // Check cache first
-  if (cache.has(key)) {
-    const cachedData = cache.get<NutritionData>(key);
-    console.log(`[analyzeImage] Using cached nutrition data for text (cached ${Date.now() - (cache.getTtl(key) || 0) - startTime}ms ago)`);
-    
-    // Debug log the cached data structure
-    console.log(`[NUTRITION_DEBUG] Cached data structure:`, JSON.stringify({
-      has_nutrients: Array.isArray(cachedData?.nutrients) && cachedData?.nutrients.length > 0,
-      has_foods: Array.isArray(cachedData?.foods) && cachedData?.foods.length > 0,
-      has_raw: Boolean(cachedData?.raw),
-      has_raw_description: Boolean(cachedData?.raw?.description),
-      nutrients_length: cachedData?.nutrients?.length || 0,
-      foods_length: cachedData?.foods?.length || 0,
-      source: (cachedData as any)?.source
-    }));
-    
-    return cachedData!;
-  }
-  
-  // Set timeout values
-  const NUTRITIONIX_TIMEOUT_MS = 7000; // 7 seconds timeout for Nutritionix
-  const GPT_TIMEOUT_MS = 10000; // 10 seconds timeout for GPT
-
-  // Set up Nutritionix promise with explicit timeout
-  const nutritionixPromise = getNutritionData(text, requestId)
-    .then(result => {
-      if (!result.success || !result.data) {
-        throw new Error('NUTRITIONIX_FAILED');
-      }
-      console.log(`[analyzeImage] Successfully fetched data from Nutritionix API in ${Date.now() - startTime}ms`);
-      // Add source tag to identify which provider we used
-      return { ...result.data, source: 'nutritionix' };
-    })
-    .catch(err => {
-      // Handle various error types
-      if (err.response) {
-        // Server responded with error status code
-        const status = err.response.status;
-        console.error(`[analyzeImage] Nutritionix API failed with status ${status}: ${err.response.data?.message || 'No message'}`);
-        if ([400, 401, 403, 429, 500, 502, 503, 504].includes(status)) {
-          throw new Error(`NUTRITIONIX_FAILED_${status}`);
-        }
-      } else if (err.request) {
-        // Request made but no response received (timeout, network error)
-        console.error(`[analyzeImage] Nutritionix API request failed (no response): ${err.message}`);
-        throw new Error('NUTRITIONIX_NETWORK_ERROR');
-      } else if (err.message === 'NUTRITIONIX_FAILED') {
-        // Our own error from above
-        throw err;
-      } else if (err.message.includes('timeout')) {
-        // Explicit timeout handling
-        console.error(`[analyzeImage] Nutritionix API timed out after ${NUTRITIONIX_TIMEOUT_MS}ms`);
-        throw new Error('NUTRITIONIX_TIMEOUT');
-      } else {
-        // Other errors
-        console.error(`[analyzeImage] Nutritionix API unexpected error: ${err.message}`);
-        throw new Error('NUTRITIONIX_UNEXPECTED_ERROR');
-      }
-      throw err; // Propagate other errors
-    });
-  
-  // GPT fallback promise with explicit timeout
-  const gptPromise = async () => {
-    try {
-      // Apply timeout control for GPT fallback
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), GPT_TIMEOUT_MS);
-      
-      // Call GPT fallback with abort signal
-      const result = await Promise.race([
-        callGptNutritionFallback(text, requestId),
-        new Promise<never>((_, reject) => 
-          setTimeout(() => reject(new Error('GPT_TIMEOUT')), GPT_TIMEOUT_MS)
-        )
-      ]);
-      
-      clearTimeout(timeoutId);
-      console.log(`[analyzeImage] Successfully fetched data from GPT fallback in ${Date.now() - startTime}ms`);
-      return result;
-    } catch (error: any) {
-      if (error.name === 'AbortError' || error.message === 'GPT_TIMEOUT') {
-        console.error(`[analyzeImage] GPT fallback timed out after ${GPT_TIMEOUT_MS}ms`);
-        throw new Error('GPT_TIMEOUT');
-      }
-      console.error(`[analyzeImage] GPT fallback failed: ${error.message}`);
-      throw error;
-    }
-  };
-  
-  let result: NutritionData;
-  let source = 'unknown';
+async function fetchNutrition(
+  text: string,
+  requestId: string
+): Promise<NutritionData> {
+  console.log(`[${requestId}] fetchNutrition: Starting. Text: ${text}`);
   
   try {
-    // Create a timeout promise for Nutritionix
-    const nutritionixTimeoutPromise = new Promise<never>((_, reject) => {
-      setTimeout(() => reject(new Error('NUTRITIONIX_TIMEOUT')), NUTRITIONIX_TIMEOUT_MS);
-    });
+    // First, check if Nutritionix API keys are set
+    const hasNutritionixApiId = !!process.env.NUTRITIONIX_APP_ID;
+    const hasNutritionixApiKey = !!process.env.NUTRITIONIX_API_KEY;
+    
+    const useNutritionix = hasNutritionixApiId && hasNutritionixApiKey;
+    
+    if (!useNutritionix) {
+      console.log(`[${requestId}] fetchNutrition: Nutritionix credentials not found, using GPT fallback`);
+      const gptFallback = await callGptNutritionFallback(text, requestId);
+      return gptFallback;
+    }
     
     try {
-      // Race Nutritionix against timeout
-      result = await Promise.race([nutritionixPromise, nutritionixTimeoutPromise]);
-      source = 'nutritionix';
-      console.log(`[analyzeImage] Successfully used Nutritionix API data in ${Date.now() - startTime}ms`);
+      console.log(`[${requestId}] fetchNutrition: Trying Nutritionix API`);
+      const startTime = Date.now();
       
-      // Debug log the nutritionix result structure
-      console.log(`[NUTRITION_DEBUG] Nutritionix result structure:`, JSON.stringify({
-        has_nutrients: Array.isArray(result?.nutrients) && result?.nutrients.length > 0,
-        has_foods: Array.isArray(result?.foods) && result?.foods.length > 0,
-        has_raw: Boolean(result?.raw),
-        has_raw_description: Boolean(result?.raw?.description),
-        nutrients_length: result?.nutrients?.length || 0,
-        foods_length: result?.foods?.length || 0
-      }));
-    } catch (nutritionixError: any) {
-      // If Nutritionix fails or times out, use GPT immediately
-      console.log(`[analyzeImage] Nutritionix failed (${nutritionixError.message}), falling back to GPT`);
-      result = await gptPromise();
-      source = 'gpt';
-      console.log(`[analyzeImage] Successfully used GPT fallback data in ${Date.now() - startTime}ms`);
+      // Call the Nutritionix API
+      const nutritionixData = await getNutritionData(text, requestId);
       
-      // Debug log the GPT fallback result structure
-      console.log(`[NUTRITION_DEBUG] GPT fallback result structure:`, JSON.stringify({
-        has_nutrients: Array.isArray(result?.nutrients) && result?.nutrients.length > 0,
-        has_foods: Array.isArray(result?.foods) && result?.foods.length > 0,
-        has_raw: Boolean(result?.raw),
-        has_raw_description: Boolean(result?.raw?.description),
-        nutrients_length: result?.nutrients?.length || 0,
-        foods_length: result?.foods?.length || 0
-      }));
+      if (nutritionixData.success && nutritionixData.data) {
+        console.log(`[${requestId}] fetchNutrition: Nutritionix success in ${Date.now() - startTime}ms`);
+        return nutritionixData.data;
+      } else {
+        throw new Error(nutritionixData.error || 'Nutritionix returned unsuccessful response');
+      }
+    } catch (error) {
+      console.warn(`[${requestId}] fetchNutrition: Nutritionix failed: ${error}. Using GPT fallback`);
+      
+      // If Nutritionix fails, fall back to GPT
+      const gptFallback = await callGptNutritionFallback(text, requestId);
+      return gptFallback;
     }
-  } catch (e: any) {
-    // Both Nutritionix and GPT failed
-    console.error(`[analyzeImage] All nutrition data sources failed: ${e.message}`);
+  } catch (error) {
+    console.error(`[${requestId}] fetchNutrition: Both sources failed: ${error}`);
     
-    // Create a fallback response with valid structure
-    result = {
+    // Create a fallback response when both Nutritionix and GPT fail
+    // This must match the NutritionData interface exactly
+    const fallbackNutritionData: NutritionData = {
       nutrients: [
         { name: 'Calories', value: 0, unit: 'kcal', isHighlight: true },
         { name: 'Protein', value: 0, unit: 'g', isHighlight: true },
-        { name: 'Carbohydrates', value: 0, unit: 'g', isHighlight: true },
+        { name: 'Carbs', value: 0, unit: 'g', isHighlight: true },
         { name: 'Fat', value: 0, unit: 'g', isHighlight: true }
       ],
       foods: [{
@@ -347,132 +289,27 @@ async function fetchNutrition(text: string, requestId: string): Promise<Nutritio
         feedback: ["Unable to analyze the image."],
         suggestions: ["Try a clearer photo with more lighting."],
         goalScore: {
-          overall: 0,
+          overall: 5,
           specific: {} as Record<string, number>
         },
         fallback: true,
-        error: "All nutrition services failed"
+        error: "Both Nutritionix and GPT fallback failed"
       },
       source: "error_fallback"
     };
-    source = "error_fallback";
     
-    // Debug log the emergency fallback structure
-    console.log(`[EMERGENCY_NUTRITION_FALLBACK] Structure:`, JSON.stringify({
-      has_nutrients: Array.isArray(result.nutrients) && result.nutrients.length > 0,
-      has_foods: Array.isArray(result.foods) && result.foods.length > 0,
-      has_raw: Boolean(result.raw),
-      has_raw_description: Boolean(result.raw?.description),
-      nutrients_length: result.nutrients?.length || 0,
-      foods_length: result.foods?.length || 0,
-      source
-    }));
+    // Debug log the structure
+    console.log(`✅ [Returning emergency nutrition fallback]`, {
+      nutrients_count: fallbackNutritionData.nutrients.length,
+      foods_count: fallbackNutritionData.foods.length,
+      has_description: !!fallbackNutritionData.raw?.description,
+      has_feedback: Array.isArray(fallbackNutritionData.raw?.feedback),
+      has_suggestions: Array.isArray(fallbackNutritionData.raw?.suggestions),
+      source: fallbackNutritionData.source
+    });
+    
+    return fallbackNutritionData;
   }
-  
-  // Cache the result for future requests (if we have a valid result)
-  if (result && key) {
-    cache.set(key, result);
-  }
-  
-  // Final validation to ensure we're not returning undefined or null values
-  // which could break the client
-  if (!result) {
-    console.warn(`[analyzeImage] WARNING: Nutrition result is nullish, creating valid fallback`);
-    result = {
-      nutrients: [
-        { name: 'Calories', value: 0, unit: 'kcal', isHighlight: true },
-        { name: 'Protein', value: 0, unit: 'g', isHighlight: true },
-        { name: 'Carbohydrates', value: 0, unit: 'g', isHighlight: true },
-        { name: 'Fat', value: 0, unit: 'g', isHighlight: true }
-      ],
-      foods: [],
-      raw: {
-        description: "Unable to analyze this meal. Please try again.",
-        feedback: ["Unable to analyze the image."],
-        suggestions: ["Try a clearer photo with more lighting."],
-        goalScore: {
-          overall: 0,
-          specific: {} as Record<string, number>
-        },
-        fallback: true
-      },
-      source: "error_fallback"
-    };
-  }
-  
-  // Make sure nutrients is always an array with at least one item
-  if (!Array.isArray(result.nutrients) || result.nutrients.length === 0) {
-    console.warn(`[analyzeImage] WARNING: Nutrition data has missing nutrients array, adding default`);
-    result.nutrients = [
-      { name: 'Calories', value: 0, unit: 'kcal', isHighlight: true },
-      { name: 'Protein', value: 0, unit: 'g', isHighlight: true },
-      { name: 'Carbohydrates', value: 0, unit: 'g', isHighlight: true },
-      { name: 'Fat', value: 0, unit: 'g', isHighlight: true }
-    ];
-  }
-  
-  // Make sure foods is always an array (even if empty)
-  if (!Array.isArray(result.foods)) {
-    console.warn(`[analyzeImage] WARNING: Nutrition data has missing foods array, adding empty array`);
-    result.foods = [];
-  }
-  
-  // Make sure raw object and required fields exist
-  if (!result.raw) {
-    console.warn(`[analyzeImage] WARNING: Nutrition data has missing raw object, adding default`);
-    result.raw = {
-      description: "Unable to analyze this meal. Please try again.",
-      feedback: ["Unable to analyze the image."],
-      suggestions: ["Try a clearer photo with more lighting."],
-      goalScore: {
-        overall: 0,
-        specific: {} as Record<string, number>
-      },
-      fallback: true
-    };
-  }
-  
-  if (!result.raw.description) {
-    console.warn(`[analyzeImage] WARNING: Nutrition data has missing raw.description, adding default`);
-    result.raw.description = "Unable to analyze this meal. Please try again.";
-  }
-  
-  // Ensure feedback and suggestions are arrays
-  if (!Array.isArray(result.raw.feedback)) {
-    console.warn(`[analyzeImage] WARNING: Nutrition data has missing raw.feedback array, adding default`);
-    result.raw.feedback = ["Unable to analyze the image."];
-  }
-  
-  if (!Array.isArray(result.raw.suggestions)) {
-    console.warn(`[analyzeImage] WARNING: Nutrition data has missing raw.suggestions array, adding default`);
-    result.raw.suggestions = ["Try a clearer photo with more lighting."];
-  }
-  
-  // Add the source indicator if it's missing
-  if (!result.source) {
-    result.source = source;
-  }
-  
-  // Set fallback flag for proper frontend handling
-  if (!result.raw.fallback && (source === "error_fallback" || source === "gpt_error")) {
-    result.raw.fallback = true;
-  }
-  
-  // Final debug log of the structure we're returning
-  console.log(`[NUTRITION_FINAL] Final nutrition data structure:`, JSON.stringify({
-    has_nutrients: Array.isArray(result.nutrients) && result.nutrients.length > 0,
-    has_foods: Array.isArray(result.foods) && result.foods.length > 0,
-    has_raw: Boolean(result.raw),
-    has_raw_description: Boolean(result.raw?.description),
-    has_raw_feedback: Array.isArray(result.raw?.feedback) && result.raw?.feedback.length > 0,
-    has_raw_suggestions: Array.isArray(result.raw?.suggestions) && result.raw?.suggestions.length > 0,
-    nutrients_length: result.nutrients?.length || 0,
-    foods_length: result.foods?.length || 0,
-    source: result.source || source,
-    fallback: Boolean(result.raw?.fallback)
-  }));
-  
-  return result;
 }
 
 /**
@@ -520,7 +357,13 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       };
       
       // Debug the FINAL timeout fallback structure
-      console.log("FINAL TIMEOUT FALLBACK", fallbackResult);
+      console.log("✅ [Returning timeout fallback]", {
+        description: fallbackResult.description,
+        nutrients_count: fallbackResult.nutrients.length,
+        feedback_count: fallbackResult.feedback.length,
+        suggestions_count: fallbackResult.suggestions.length,
+        source: fallbackResult.source
+      });
       
       const timeoutResponse = {
         success: false,
@@ -536,40 +379,31 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       if (!timeoutResponse.result || !timeoutResponse.result.description || typeof timeoutResponse.result.description !== 'string') {
         console.error(`[analyzeImage] CRITICAL: Timeout response missing description, fixing...`);
         if (!timeoutResponse.result) {
-          timeoutResponse.result = createFallbackResponse("Missing result object in timeout response", null, requestId);
+          timeoutResponse.result = createFallbackResponse("Missing result object in timeout response", "Timeout error", requestId);
         } else {
           timeoutResponse.result.description = "Could not analyze this meal properly.";
         }
       }
       
-      if (!timeoutResponse.result || !Array.isArray(timeoutResponse.result.nutrients) || timeoutResponse.result.nutrients.length === 0) {
+      // Double-check nutrients array
+      if (!Array.isArray(timeoutResponse.result.nutrients) || timeoutResponse.result.nutrients.length === 0) {
         console.error(`[analyzeImage] CRITICAL: Timeout response missing nutrients, fixing...`);
-        if (!timeoutResponse.result) {
-          timeoutResponse.result = createFallbackResponse("Missing result object in timeout response", null, requestId);
-        } else {
-          timeoutResponse.result.nutrients = [
-            { name: "Calories", value: 0, unit: "kcal", isHighlight: true },
-            { name: "Protein", value: 0, unit: "g", isHighlight: true },
-            { name: "Carbohydrates", value: 0, unit: "g", isHighlight: true },
-            { name: "Fat", value: 0, unit: "g", isHighlight: true }
-          ];
-        }
+        timeoutResponse.result.nutrients = [
+          { name: "Calories", value: 0, unit: "kcal", isHighlight: true },
+          { name: "Protein", value: 0, unit: "g", isHighlight: true },
+          { name: "Carbohydrates", value: 0, unit: "g", isHighlight: true },
+          { name: "Fat", value: 0, unit: "g", isHighlight: true }
+        ];
       }
       
-      // Debug the FINAL TIMEOUT API response being returned to client
-      console.log("FINAL TIMEOUT API RESPONSE", timeoutResponse);
-      
-      // Debug log the timeout response structure
-      console.log(`[TIMEOUT_RESPONSE_DEBUG] Timeout response structure:`, JSON.stringify({
+      console.log("🚨 [TIMEOUT RESULT RETURNED TO FRONTEND]", {
         success: timeoutResponse.success,
-        result_present: Boolean(timeoutResponse.result),
-        result_description_present: Boolean(timeoutResponse.result?.description),
-        result_nutrients_present: Array.isArray(timeoutResponse.result?.nutrients) && timeoutResponse.result?.nutrients.length > 0,
-        result_feedback_present: Array.isArray(timeoutResponse.result?.feedback) && timeoutResponse.result?.feedback.length > 0,
-        result_suggestions_present: Array.isArray(timeoutResponse.result?.suggestions) && timeoutResponse.result?.suggestions.length > 0
-      }));
+        has_result: !!timeoutResponse.result,
+        result_description: timeoutResponse.result?.description?.substring(0, 30),
+        result_nutrients_count: timeoutResponse.result?.nutrients?.length || 0
+      });
       
-      resolve(NextResponse.json(timeoutResponse, { status: 408 }));
+      resolve(NextResponse.json(timeoutResponse));
     }, GLOBAL_TIMEOUT_MS);
   });
   
@@ -683,120 +517,176 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       
       console.log(`[analyzeImage] Cache miss for ${cacheKey}, processing...`);
       
-      // Extract text from image with OCR (with 10-second timeout)
-      console.log('[analyzeImage] Running OCR to extract text from image');
-      let ocrResult;
+      // Run OCR with error handling and timeout
+      console.log(`[${requestId}] Running OCR on image...`);
+      let ocrResult: OCRResult;
+      
       try {
-        const OCR_TIMEOUT_MS = 5000; // 5 seconds for OCR
-        const ocrPromise = runOCR(imageBase64, requestId);
-        const ocrTimeoutPromise = new Promise<never>((_, reject) => {
-          setTimeout(() => reject(new Error('OCR_TIMEOUT')), OCR_TIMEOUT_MS);
-        });
-        
-        ocrResult = await Promise.race([ocrPromise, ocrTimeoutPromise]);
-      } catch (ocrError) {
-        console.error(`[analyzeImage] OCR failed or timed out:`, ocrError);
-        // If OCR fails, create a generic food description for analysis
+        // Add explicit timeout for OCR to avoid hanging requests
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => {
+          console.warn(`[${requestId}] OCR timeout reached (10s), aborting`);
+          controller.abort();
+        }, 10000);
+
+        // Run OCR with the specified timeout
+        ocrResult = await Promise.race([
+          runOCR(imageBase64, requestId),
+          new Promise<never>((_, reject) => 
+            setTimeout(() => reject(new Error('OCR_TIMEOUT')), 10000)
+          )
+        ]);
+        clearTimeout(timeoutId);
+      } catch (ocrError: any) {
+        // Handle OCR timeout or other errors
+        console.error(`[${requestId}] OCR error:`, ocrError.message);
         ocrResult = {
-          success: true,
-          text: "A meal with protein, vegetables, and carbohydrates.",
-          confidence: 0.5,
-          processingTimeMs: 0,
-          error: ocrError instanceof Error ? ocrError.message : 'Unknown OCR error'
+          success: false,
+          text: "",
+          confidence: 0,
+          error: ocrError.message,
+          processingTimeMs: 0
         };
       }
       
-      const extractedText = ocrResult.text;
-      console.log(`[analyzeImage] OCR extracted text: "${extractedText.substring(0, 100)}${extractedText.length > 100 ? '...' : ''}"`);
+      // Extract text from OCR result
+      let extractedText = ocrResult.text || "";
       
-      // Fetch nutrition data with integrated fallback
-      const nutritionData = await fetchNutrition(extractedText, requestId);
-      console.log(`[analyzeImage] using path: ${(nutritionData as any).source || 'unknown'}`);
+      // Debug logs for OCR output
+      console.log(`[${requestId}] OCR complete: success=${ocrResult.success}, confidence=${ocrResult.confidence}`);
+      console.log(`[${requestId}] Extracted text (${extractedText.length} chars): ${extractedText.substring(0, 100)}`);
+      
+      // Process the extracted text only if we have something meaningful
+      // Otherwise, proceed with a fallback approach
+      let nutritionData: NutritionData;
+      let analysis: any = { 
+        success: false, 
+        feedback: ["Unable to analyze this image."], 
+        suggestions: ["Try uploading a photo of food."] 
+      };
+      
+      if (extractedText.length > 0 && ocrResult.success) {
+        // Get nutrition data from the extracted text
+        nutritionData = await fetchNutrition(extractedText, requestId);
+        
+        try {
+          // Analyze the extracted text to get feedback and suggestions
+          analysis = await createNutrientAnalysis(
+            nutritionData.nutrients,
+            [healthGoal],
+            requestId
+          );
+        } catch (analysisError: any) {
+          console.error(`[${requestId}] Error analyzing extracted text:`, analysisError.message);
+          // Provide fallback analysis
+          analysis = {
+            success: false,
+            feedback: ["Unable to analyze the text extracted from this image."],
+            suggestions: ["Try a clearer photo with better lighting."],
+            goalScore: { overall: 0, specific: {} }
+          };
+        }
+      } else {
+        // If OCR failed or returned no text, create a fallback response
+        console.warn(`[${requestId}] OCR failed or returned no text, using fallback response`);
+        nutritionData = {
+          nutrients: [
+            { name: 'Calories', value: 0, unit: 'kcal', isHighlight: true },
+            { name: 'Protein', value: 0, unit: 'g', isHighlight: true },
+            { name: 'Carbohydrates', value: 0, unit: 'g', isHighlight: true },
+            { name: 'Fat', value: 0, unit: 'g', isHighlight: true }
+          ],
+          foods: [{
+            food_name: "Unknown food",
+            serving_qty: 1,
+            serving_unit: "serving",
+            serving_weight_grams: 100,
+            nf_calories: 0,
+            nf_total_fat: 0,
+            nf_saturated_fat: 0,
+            nf_cholesterol: 0,
+            nf_sodium: 0,
+            nf_total_carbohydrate: 0,
+            nf_dietary_fiber: 0,
+            nf_sugars: 0,
+            nf_protein: 0,
+            nf_potassium: 0,
+            nf_p: 0,
+            full_nutrients: [],
+            photo: {
+              thumb: '',
+              highres: '',
+              is_user_uploaded: false
+            }
+          }],
+          raw: {
+            description: "Could not identify food in this image.",
+            feedback: ["This doesn't appear to be a food image."],
+            suggestions: ["Try uploading a photo that clearly shows a meal."],
+            goalScore: {
+              overall: 0,
+              specific: {} as Record<string, number>
+            },
+            fallback: true,
+            error: "No food detected in image"
+          },
+          source: "error_fallback"
+        };
+      }
       
       // Create analysis from the nutrition data
-      const analysis = createNutrientAnalysis(
-        nutritionData.nutrients, 
-        [healthGoal], 
-        requestId
-      );
-      
-      // Create the final analysis result
       const analysisResult: AnalysisResult = {
-        description: nutritionData.raw?.description || 
-          `This meal contains ${extractedText}. It provides approximately ${Math.round(nutritionData.nutrients.find(n => n.name === 'calories')?.value as number || 0)} calories.`,
-        nutrients: nutritionData.nutrients,
-        feedback: analysis.feedback,
-        suggestions: analysis.suggestions,
+        description: nutritionData.raw?.description || "Could not analyze this meal properly.",
+        nutrients: nutritionData.nutrients || [
+          { name: 'Calories', value: 0, unit: 'kcal', isHighlight: true },
+          { name: 'Protein', value: 0, unit: 'g', isHighlight: true },
+          { name: 'Carbohydrates', value: 0, unit: 'g', isHighlight: true },
+          { name: 'Fat', value: 0, unit: 'g', isHighlight: true }
+        ],
+        feedback: (nutritionData.raw?.feedback || analysis.feedback) as string[],
+        suggestions: (nutritionData.raw?.suggestions || analysis.suggestions) as string[],
         detailedIngredients: nutritionData.foods.map(food => ({
           name: food.food_name,
           category: 'food',
           confidence: 0.8,
           confidenceEmoji: '✅'
         })),
-        goalScore: analysis.goalScore,
+        goalScore: {
+          overall: nutritionData.raw?.goalScore?.overall || 0,
+          specific: nutritionData.raw?.goalScore?.specific || {}
+        },
         goalName: formatGoalName(healthGoal),
         modelInfo: {
-          model: (nutritionData as any).source === 'gpt' ? GPT_MODEL : 'nutritionix',
-          usedFallback: (nutritionData as any).source !== 'nutritionix',
-          ocrExtracted: true
-        }
+          model: nutritionData.source || "fallback",
+          usedFallback: nutritionData.raw?.fallback || false,
+          ocrExtracted: !!extractedText
+        },
+        lowConfidence: nutritionData.raw?.fallback || false,
+        fallback: nutritionData.raw?.fallback || false,
+        source: nutritionData.source || "fallback"
       };
       
       // Debug log for analysis result structure
-      console.log(`[ANALYSIS_DEBUG] Initial analysis result structure:`, JSON.stringify({
+      console.log(`[${requestId}] ANALYSIS_RESULT_STRUCTURE:`, JSON.stringify({
         has_description: Boolean(analysisResult.description),
         has_nutrients: Array.isArray(analysisResult.nutrients) && analysisResult.nutrients.length > 0,
+        nutrients_length: analysisResult.nutrients?.length || 0,
         has_feedback: Array.isArray(analysisResult.feedback) && analysisResult.feedback.length > 0,
         has_suggestions: Array.isArray(analysisResult.suggestions) && analysisResult.suggestions.length > 0,
-        has_detailedIngredients: Array.isArray(analysisResult.detailedIngredients) && analysisResult.detailedIngredients.length > 0,
-        nutrients_length: analysisResult.nutrients?.length || 0,
-        description_type: typeof analysisResult.description,
-        raw_description: nutritionData.raw?.description ? 'present' : 'missing'
+        has_detailedIngredients: Array.isArray(analysisResult.detailedIngredients),
+        has_modelInfo: !!analysisResult.modelInfo,
+        source: analysisResult.source
       }));
       
-      // Validate the analysis result - ensure it has the required fields
-      // Add fallbacks for any missing required fields to prevent storage errors
-      if (!analysisResult.description || typeof analysisResult.description !== 'string') {
-        console.warn(`[analyzeImage] Missing or invalid description in analysis result, using fallback`);
-        analysisResult.description = "No description available. Please try again with a clearer image.";
-      }
-      
-      if (!analysisResult.nutrients || !Array.isArray(analysisResult.nutrients) || analysisResult.nutrients.length === 0) {
-        console.warn(`[analyzeImage] Missing or invalid nutrients in analysis result, using fallback`);
-        analysisResult.nutrients = [
-          { name: "Calories", value: 0, unit: "kcal", isHighlight: true },
-          { name: "Protein", value: 0, unit: "g", isHighlight: true },
-          { name: "Carbohydrates", value: 0, unit: "g", isHighlight: true },
-          { name: "Fat", value: 0, unit: "g", isHighlight: true }
-        ];
-      }
-      
-      // Ensure feedback and suggestions exist
-      if (!Array.isArray(analysisResult.feedback) || analysisResult.feedback.length === 0) {
-        analysisResult.feedback = ["No specific feedback available for this meal."];
-      }
-      
-      if (!Array.isArray(analysisResult.suggestions) || analysisResult.suggestions.length === 0) {
-        analysisResult.suggestions = ["Try to include a variety of foods in your meals for balanced nutrition."];
-      }
-      
-      // Debug log after validation
-      console.log(`[ANALYSIS_DEBUG] Final validated analysis result structure:`, JSON.stringify({
-        has_description: Boolean(analysisResult.description),
-        has_nutrients: Array.isArray(analysisResult.nutrients) && analysisResult.nutrients.length > 0,
-        has_feedback: Array.isArray(analysisResult.feedback) && analysisResult.feedback.length > 0,
-        has_suggestions: Array.isArray(analysisResult.suggestions) && analysisResult.suggestions.length > 0,
-        has_detailedIngredients: Array.isArray(analysisResult.detailedIngredients) && analysisResult.detailedIngredients.length > 0,
-        nutrients_length: analysisResult.nutrients?.length || 0,
-        description_type: typeof analysisResult.description
-      }));
+      // Final validation to ensure frontend compatibility before returning
+      const validatedResult = ensureValidResponseStructure(analysisResult);
       
       // If userId is provided, save the analysis result to Firestore
       let savedMealId: string | null = null;
       if (userId && imageBase64) {
         try {
           // Try to save the meal to Firestore (with a 5-second timeout)
-          const savePromise = saveMealToFirestore(userId, imageBase64, analysisResult);
+          const savePromise = saveMealToFirestore(userId, imageBase64, validatedResult);
           const saveTimeoutPromise = new Promise<never>((_, reject) => {
             setTimeout(() => reject(new Error('SAVE_TIMEOUT')), 5000);
           });
@@ -811,7 +701,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       
       // Cache the result for future requests
       cache.set(cacheKey, {
-        ...analysisResult,
+        ...validatedResult,
         savedMealId
       });
       
@@ -828,7 +718,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
         fallback: (nutritionData as any).source !== 'nutritionix',
         requestId,
         message: "Analysis completed successfully" + (ocrResult.error ? " (with text extraction fallback)" : ""),
-        result: analysisResult,
+        result: validatedResult,
         elapsedTime,
         savedMealId,
         error: null,
@@ -851,11 +741,15 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
         result_suggestions_present: Array.isArray(response.result?.suggestions) && response.result?.suggestions.length > 0
       }));
       
-      // Use our validation function to ensure the result structure is valid
-      response.result = ensureValidResponseStructure(response.result);
-      
       // Debug the FINAL API response being returned to client
-      console.log("FINAL API RESPONSE", response);
+      console.log("🚨 [ANALYSIS RESULT RETURNED TO FRONTEND]", {
+        success: response.success,
+        has_result: !!response.result,
+        result_description: response.result?.description?.substring(0, 30),
+        result_nutrients_count: response.result?.nutrients?.length || 0,
+        result_feedback_count: response.result?.feedback?.length || 0,
+        result_suggestions_count: response.result?.suggestions?.length || 0
+      });
       
       return NextResponse.json(response);
       
@@ -878,7 +772,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       // Create a consistent fallback response
       const fallbackResult = createFallbackResponse(
         `Error during analysis: ${errorMessage}`, 
-        {}, 
+        error as Error || "Unknown error", 
         requestId
       );
       
@@ -926,51 +820,104 @@ function formatGoalName(healthGoal: string): string {
 
 // Function to ensure valid response structure
 function ensureValidResponseStructure(result: any): AnalysisResult {
+  const requestId = crypto.randomUUID().substring(0, 8);
+  
+  // Debug log at the start of validation
+  console.log(`[${requestId}] VALIDATING_RESPONSE_STRUCTURE: Starting validation check`);
+  
   if (!result) {
-    return createFallbackResponse("Missing result object", null, "structure_validation");
+    console.error(`[${requestId}] CRITICAL: Result is null or undefined, creating emergency fallback`);
+    return createFallbackResponse("Missing result object", null, requestId);
   }
+
+  // Debug validation steps
+  console.log(`[${requestId}] VALIDATION_CHECK:`, JSON.stringify({
+    has_description: typeof result.description === 'string',
+    has_nutrients: Array.isArray(result.nutrients),
+    has_feedback: Array.isArray(result.feedback),
+    has_suggestions: Array.isArray(result.suggestions),
+    has_detailedIngredients: Array.isArray(result.detailedIngredients),
+    has_goalScore: !!result.goalScore,
+    has_modelInfo: !!result.modelInfo,
+    has_lowConfidence: typeof result.lowConfidence === 'boolean',
+    has_fallback: typeof result.fallback === 'boolean',
+    has_source: typeof result.source === 'string'
+  }));
+
+  // Create a validated result with all required fields
+  const validatedResult: AnalysisResult = {
+    description: typeof result.description === 'string' ? result.description : "Could not analyze this meal properly.",
+    nutrients: Array.isArray(result.nutrients) && result.nutrients.length > 0 
+      ? result.nutrients 
+      : [
+          { name: 'Calories', value: 0, unit: 'kcal', isHighlight: true },
+          { name: 'Protein', value: 0, unit: 'g', isHighlight: true },
+          { name: 'Carbohydrates', value: 0, unit: 'g', isHighlight: true },
+          { name: 'Fat', value: 0, unit: 'g', isHighlight: true }
+        ],
+    feedback: Array.isArray(result.feedback) && result.feedback.length > 0
+      ? result.feedback
+      : ["Unable to analyze the image."],
+    suggestions: Array.isArray(result.suggestions) && result.suggestions.length > 0
+      ? result.suggestions
+      : ["Try a clearer photo with more lighting."],
+    detailedIngredients: Array.isArray(result.detailedIngredients)
+      ? result.detailedIngredients
+      : [],
+    goalScore: result.goalScore && typeof result.goalScore === 'object'
+      ? result.goalScore
+      : { overall: 0, specific: {} },
+    modelInfo: result.modelInfo && typeof result.modelInfo === 'object'
+      ? result.modelInfo
+      : {
+          model: "error_fallback",
+          usedFallback: true,
+          ocrExtracted: false
+        },
+    lowConfidence: typeof result.lowConfidence === 'boolean' ? result.lowConfidence : true,
+    fallback: typeof result.fallback === 'boolean' ? result.fallback : true
+  };
+
+  // Set source if it's missing
+  if (typeof result.source === 'string') {
+    (validatedResult as any).source = result.source;
+  } else {
+    (validatedResult as any).source = "error_fallback";
+  }
+
+  // Debug the final validated structure
+  console.log(`[${requestId}] FINAL_VALIDATED_STRUCTURE:`, JSON.stringify({
+    description_type: typeof validatedResult.description,
+    nutrients_length: validatedResult.nutrients?.length || 0,
+    feedback_length: validatedResult.feedback?.length || 0,
+    suggestions_length: validatedResult.suggestions?.length || 0,
+    source: (validatedResult as any).source,
+    lowConfidence: validatedResult.lowConfidence,
+    fallback: validatedResult.fallback
+  }));
   
-  // Create a copy to avoid modifying original
-  const validatedResult = { ...result };
-  
-  // Ensure description is valid
+  // Final critical check to ensure we have all required fields
   if (!validatedResult.description || typeof validatedResult.description !== 'string') {
+    console.error(`[${requestId}] CRITICAL: Missing description after validation, forcing default`);
     validatedResult.description = "Could not analyze this meal properly.";
   }
   
-  // Ensure nutrients is valid
   if (!Array.isArray(validatedResult.nutrients) || validatedResult.nutrients.length === 0) {
+    console.error(`[${requestId}] CRITICAL: Missing nutrients after validation, forcing defaults`);
     validatedResult.nutrients = [
-      { name: "Calories", value: 0, unit: "kcal", isHighlight: true },
-      { name: "Protein", value: 0, unit: "g", isHighlight: true },
-      { name: "Carbohydrates", value: 0, unit: "g", isHighlight: true },
-      { name: "Fat", value: 0, unit: "g", isHighlight: true }
+      { name: 'Calories', value: 0, unit: 'kcal', isHighlight: true },
+      { name: 'Protein', value: 0, unit: 'g', isHighlight: true },
+      { name: 'Carbs', value: 0, unit: 'g', isHighlight: true },
+      { name: 'Fat', value: 0, unit: 'g', isHighlight: true }
     ];
   }
   
-  // Ensure feedback is valid
-  if (!Array.isArray(validatedResult.feedback) || validatedResult.feedback.length === 0) {
-    validatedResult.feedback = ["Unable to analyze the image."];
-  }
-  
-  // Ensure suggestions is valid
-  if (!Array.isArray(validatedResult.suggestions) || validatedResult.suggestions.length === 0) {
-    validatedResult.suggestions = ["Try a clearer photo with more lighting."];
-  }
-  
-  // Ensure detailedIngredients is valid
-  if (!Array.isArray(validatedResult.detailedIngredients)) {
-    validatedResult.detailedIngredients = [];
-  }
-  
-  // Ensure goalScore is valid
-  if (!validatedResult.goalScore || typeof validatedResult.goalScore !== 'object') {
-    validatedResult.goalScore = { overall: 0, specific: {} };
-  }
-  
-  // Set fallback flags
-  validatedResult.lowConfidence = true;
-  validatedResult.fallback = true;
-  
-  return validatedResult as AnalysisResult;
+  console.log(`✅ [Returning validated structure]`, {
+    has_description: !!validatedResult.description,
+    description_length: validatedResult.description?.length || 0,
+    nutrients_count: validatedResult.nutrients?.length || 0,
+    source: (validatedResult as any).source
+  });
+
+  return validatedResult;
 }
