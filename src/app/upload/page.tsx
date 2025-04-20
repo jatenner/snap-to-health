@@ -488,7 +488,7 @@ export default function UploadPage() {
       // Final validation before storing the result
       try {
         // Log the raw response for debugging
-        console.log("Raw analysis result before storing:", response.data);
+        console.log("📦 Analysis result received:", response.data);
         
         // Validate analysis structure one more time before storing
         if (!response.data || typeof response.data !== 'object') {
@@ -496,10 +496,12 @@ export default function UploadPage() {
           throw new Error('Invalid or corrupted analysis result');
         }
         
-        // TODO: Add more comprehensive validation of specific fields
+        // Check if we need to access the result field (API structure change)
+        const analysisData = response.data.result || response.data;
+        
         // Verify that critical fields exist and have the expected types
         const requiredFields = ['description', 'nutrients'];
-        const missingFields = requiredFields.filter(field => !(field in response.data));
+        const missingFields = requiredFields.filter(field => !(field in analysisData));
         
         if (missingFields.length > 0) {
           console.error("Missing required fields in analysis:", missingFields);
@@ -507,8 +509,8 @@ export default function UploadPage() {
         }
         
         // Validate array fields
-        if (!Array.isArray(response.data.nutrients)) {
-          console.error("nutrients is not an array:", response.data.nutrients);
+        if (!Array.isArray(analysisData.nutrients)) {
+          console.error("nutrients is not an array:", analysisData.nutrients);
           throw new Error('Invalid analysis data: nutrients must be an array');
         }
         
