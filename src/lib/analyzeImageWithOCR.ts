@@ -240,9 +240,17 @@ export function createEmptyFallbackAnalysis(
   
   return {
     description: "We couldn't analyze this meal properly. Please try again with a clearer photo.",
-    nutrients: [],
+    nutrients: [
+      { name: "Calories", value: 0, unit: "kcal", isHighlight: true },
+      { name: "Protein", value: 0, unit: "g", isHighlight: true },
+      { name: "Carbohydrates", value: 0, unit: "g", isHighlight: true },
+      { name: "Fat", value: 0, unit: "g", isHighlight: true }
+    ],
     feedback: ["Unable to analyze the image."],
     suggestions: ["Try taking the photo with better lighting and make sure the food is clearly visible."],
+    detailedIngredients: [
+      { name: "Unknown", category: "food", confidence: 0, confidenceEmoji: "❓" }
+    ],
     fallback: true,
     lowConfidence: true,
     message: errorMessage || "Analysis failed",
@@ -384,14 +392,21 @@ export async function analyzeImageWithOCR(
       // Create a minimal analysis that won't break the UI
       const fallbackAnalysis = {
         description: "We couldn't analyze this meal properly. Please try again with a clearer photo.",
-        nutrients: [],
+        nutrients: [
+          { name: "Calories", value: 0, unit: "kcal", isHighlight: true },
+          { name: "Protein", value: 0, unit: "g", isHighlight: true },
+          { name: "Carbohydrates", value: 0, unit: "g", isHighlight: true },
+          { name: "Fat", value: 0, unit: "g", isHighlight: true }
+        ],
         feedback: ["Your meal couldn't be analyzed due to image quality issues."],
         suggestions: [
           "Take the photo in better lighting",
           "Make sure the food is clearly visible",
           "Try to include all food items in the frame"
         ],
-        detailedIngredients: [],
+        detailedIngredients: [
+          { name: "Unknown", category: "food", confidence: 0, confidenceEmoji: "❓" }
+        ],
         goalScore: {
           overall: 3,
           specific: {}
@@ -529,6 +544,21 @@ export function createFallbackResponse(
 ): any {
   const fallback = createEmptyFallbackAnalysis(reason, 'fallback', reason);
   
+  // Define default values for required fields
+  const defaultNutrients = [
+    { name: "Calories", value: 0, unit: "kcal", isHighlight: true },
+    { name: "Protein", value: 0, unit: "g", isHighlight: true },
+    { name: "Carbohydrates", value: 0, unit: "g", isHighlight: true },
+    { name: "Fat", value: 0, unit: "g", isHighlight: true }
+  ];
+  
+  const defaultDetailedIngredients = [
+    { name: "Unknown", category: "food", confidence: 0, confidenceEmoji: "❓" }
+  ];
+  
+  const defaultFeedback = ["We couldn't analyze your meal properly."];
+  const defaultSuggestions = ["Try taking a clearer photo with good lighting."];
+  
   // Add error metadata for debugging
   fallback.metadata = {
     requestId: reason,
@@ -558,33 +588,52 @@ export function createFallbackResponse(
         }
       });
       
-      fallback.nutrients = Object.entries(nutrientsObj).map(([name, value]) => ({
-        name,
-        value: value.toString(),
-        unit: name === 'calories' ? 'kcal' : 'g',
-        isHighlight: false
-      }));
+      if (Object.keys(nutrientsObj).length > 0) {
+        fallback.nutrients = Object.entries(nutrientsObj).map(([name, value]) => ({
+          name: name.charAt(0).toUpperCase() + name.slice(1), // Capitalize first letter
+          value: value.toString(),
+          unit: name === 'calories' ? 'kcal' : 'g',
+          isHighlight: ['calories', 'protein', 'carbs', 'fat'].includes(name)
+        }));
+      } else {
+        fallback.nutrients = defaultNutrients;
+      }
+    } else {
+      fallback.nutrients = defaultNutrients;
     }
     
     // Try to salvage any valid detailed ingredients
     if (Array.isArray(partialAnalysis.detailedIngredients) && 
         partialAnalysis.detailedIngredients.length > 0) {
       fallback.detailedIngredients = partialAnalysis.detailedIngredients;
+    } else {
+      fallback.detailedIngredients = defaultDetailedIngredients;
     }
     
     // Try to salvage any valid feedback
     if (Array.isArray(partialAnalysis.feedback) && 
         partialAnalysis.feedback.length > 0) {
-      // Convert string array to single string
-      fallback.feedback = partialAnalysis.feedback.join(". ");
+      fallback.feedback = partialAnalysis.feedback;
+    } else if (typeof partialAnalysis.feedback === 'string') {
+      // Convert string to array
+      fallback.feedback = [partialAnalysis.feedback];
+    } else {
+      fallback.feedback = defaultFeedback;
     }
     
     // Try to salvage any valid suggestions
     if (Array.isArray(partialAnalysis.suggestions) && 
         partialAnalysis.suggestions.length > 0) {
-      // Convert array of strings to array with single string
       fallback.suggestions = partialAnalysis.suggestions;
+    } else {
+      fallback.suggestions = defaultSuggestions;
     }
+  } else {
+    // Ensure we have default values for all required fields
+    fallback.nutrients = defaultNutrients;
+    fallback.detailedIngredients = defaultDetailedIngredients;
+    fallback.feedback = defaultFeedback;
+    fallback.suggestions = defaultSuggestions;
   }
   
   return fallback;
@@ -596,14 +645,21 @@ export function createFallbackResponse(
 export function createEmergencyFallbackResponse(): any {
   return {
     description: "We're unable to analyze your meal at this time.",
-    nutrients: [] as Nutrient[],
-    feedback: "Our systems are experiencing high load. Please try again in a few minutes.",
+    nutrients: [
+      { name: "Calories", value: 0, unit: "kcal", isHighlight: true },
+      { name: "Protein", value: 0, unit: "g", isHighlight: true },
+      { name: "Carbohydrates", value: 0, unit: "g", isHighlight: true },
+      { name: "Fat", value: 0, unit: "g", isHighlight: true }
+    ],
+    feedback: ["Our systems are experiencing high load. Please try again in a few minutes."],
     suggestions: [
       "Try again with a clearer photo",
       "Make sure the lighting is good",
       "Ensure your meal is visible in the frame"
     ],
-    detailedIngredients: [] as DetailedIngredient[],
+    detailedIngredients: [
+      { name: "Unknown", category: "food", confidence: 0, confidenceEmoji: "❓" }
+    ],
     goalScore: {
       overall: 0,
       specific: {} as Record<string, number>

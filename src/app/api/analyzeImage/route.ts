@@ -7,7 +7,7 @@ import { adminStorage } from '@/lib/firebaseAdmin';
 import { trySaveMealServer } from '@/lib/serverMealUtils';
 import { uploadImageToFirebase } from '@/lib/firebaseStorage';
 import { extractBase64Image } from '@/lib/imageProcessing';
-import { getNutritionData, createNutrientAnalysis, NutritionData } from '@/lib/nutritionixApi';
+import { getNutritionData, createNutrientAnalysis, NutritionData, NutritionixFood } from '@/lib/nutritionixApi';
 import { callGptNutritionFallback } from '@/lib/gptNutrition';
 import { createEmptyFallbackAnalysis } from '@/lib/analyzeImageWithOCR';
 import { runOCR, OCRResult } from '@/lib/runOCR';
@@ -110,13 +110,25 @@ interface AnalysisResult {
 function createFallbackResponse(reason: string, partialResult: any, reqId: string = 'unknown'): any {
   return {
     description: "Unable to analyze the image at this time.",
-    nutrients: [],
+    nutrients: [
+      { name: 'Calories', value: 0, unit: 'kcal', isHighlight: true },
+      { name: 'Protein', value: 0, unit: 'g', isHighlight: true },
+      { name: 'Carbohydrates', value: 0, unit: 'g', isHighlight: true },
+      { name: 'Fat', value: 0, unit: 'g', isHighlight: true }
+    ],
     feedback: ["We couldn't process your image. Please try again with a clearer photo of your meal."],
     suggestions: ["Try taking the photo in better lighting", "Make sure your meal is clearly visible"],
-    detailedIngredients: [],
+    detailedIngredients: [
+      { name: "Unknown", category: "food", confidence: 0, confidenceEmoji: "❓" }
+    ],
     goalScore: {
       overall: 0,
       specific: {} as Record<string, number>,
+    },
+    modelInfo: {
+      model: "error_fallback",
+      usedFallback: true,
+      ocrExtracted: false
     },
     metadata: {
       requestId: reqId,
@@ -245,7 +257,32 @@ async function fetchNutrition(text: string, requestId: string): Promise<Nutritio
     // Both Nutritionix and GPT failed
     console.error(`[analyzeImage] All nutrition data sources failed: ${e.message}`);
     
-    // Create minimal data structure to avoid breaking code
+    // Create a mock food item to ensure frontend compatibility
+    const mockFood: NutritionixFood = {
+      food_name: "Unknown meal",
+      serving_qty: 1,
+      serving_unit: "serving",
+      serving_weight_grams: 100,
+      nf_calories: 0,
+      nf_total_fat: 0,
+      nf_saturated_fat: 0,
+      nf_cholesterol: 0,
+      nf_sodium: 0,
+      nf_total_carbohydrate: 0,
+      nf_dietary_fiber: 0,
+      nf_sugars: 0,
+      nf_protein: 0,
+      nf_potassium: 0,
+      nf_p: 0,
+      full_nutrients: [],
+      photo: {
+        thumb: '',
+        highres: '',
+        is_user_uploaded: false
+      }
+    };
+    
+    // Create minimal data structure with all required fields to avoid breaking code
     result = {
       nutrients: [
         { name: 'Calories', value: 0, unit: 'kcal', isHighlight: true },
@@ -253,8 +290,15 @@ async function fetchNutrition(text: string, requestId: string): Promise<Nutritio
         { name: 'Carbohydrates', value: 0, unit: 'g', isHighlight: true },
         { name: 'Fat', value: 0, unit: 'g', isHighlight: true }
       ],
-      foods: [],
-      raw: { error: e.message }
+      foods: [mockFood],
+      raw: { 
+        description: "Unable to analyze this meal. Please try again.",
+        feedback: ["We couldn't analyze your meal properly. Try again with a clearer photo."],
+        suggestions: ["Make sure your meal is clearly visible in the image."],
+        goalScore: { overall: 0, specific: {} },
+        error: e.message,
+        fallback: true
+      }
     };
     source = 'error_fallback';
   }
@@ -287,12 +331,36 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
   const timeoutPromise = new Promise<NextResponse>((resolve) => {
     globalTimeoutId = setTimeout(() => {
       console.error(`[analyzeImage] Global timeout reached after ${GLOBAL_TIMEOUT_MS}ms`);
+      
+      // Create a valid fallback result structure for timeout
+      const fallbackResult: AnalysisResult = {
+        description: "Analysis timed out. Please try again.",
+        nutrients: [
+          { name: "Calories", value: 0, unit: "kcal", isHighlight: true },
+          { name: "Protein", value: 0, unit: "g", isHighlight: true },
+          { name: "Carbohydrates", value: 0, unit: "g", isHighlight: true },
+          { name: "Fat", value: 0, unit: "g", isHighlight: true }
+        ],
+        feedback: ["The analysis took too long to complete."],
+        suggestions: ["Try again with a clearer image", "Ensure you have a stable internet connection"],
+        detailedIngredients: [
+          { name: "Unknown", category: "food", confidence: 0, confidenceEmoji: "❓" }
+        ],
+        goalScore: { overall: 0, specific: {} },
+        modelInfo: {
+          model: "timeout_fallback",
+          usedFallback: true,
+          ocrExtracted: false
+        }
+      };
+      
       resolve(NextResponse.json({
         success: false,
         fallback: true,
         message: "Meal analysis timed out or failed. Please try again.",
         requestId,
         error: "Global timeout reached",
+        result: fallbackResult,
         elapsedTime: Date.now() - startTime
       }, { status: 408 }));
     }, GLOBAL_TIMEOUT_MS);
@@ -546,7 +614,9 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
         ],
         feedback: ["We couldn't analyze this image properly."],
         suggestions: ["Try taking a clearer photo with good lighting."],
-        detailedIngredients: [],
+        detailedIngredients: [
+          { name: "Unknown", category: "food", confidence: 0, confidenceEmoji: "❓" }
+        ],
         goalScore: { overall: 0, specific: {} },
         modelInfo: {
           model: "error_fallback",
