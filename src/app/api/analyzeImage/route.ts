@@ -944,117 +944,29 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
         result_suggestions_present: Array.isArray(response.result?.suggestions) && response.result?.suggestions.length > 0
       }));
       
-      // 💥 Fallback patch to enforce structure
-      if (
-        !response.result ||
-        !response.result.description ||
-        !Array.isArray(response.result.nutrients) ||
-        response.result.nutrients.length === 0 ||
-        !Array.isArray(response.result.feedback) ||
-        !Array.isArray(response.result.suggestions) ||
-        !Array.isArray(response.result.detailedIngredients)
-      ) {
-        console.warn("💥 [SUCCESS PATH] Applying universal fallback: result was invalid", response.result);
-        response.result = createUniversalErrorFallback();
-        response.fallback = true;
-        response.message = "Analysis completed with universal fallback";
-      }
-      
-      // Triple validation to ensure nothing slips through
-      if (
-        !response.result || 
-        !response.result.description || 
-        !Array.isArray(response.result.nutrients) || 
-        response.result.nutrients.length === 0
-      ) {
-        console.error("🚨 [SUCCESS PATH] EMERGENCY FALLBACK REQUIRED");
-        response.result = {
-          description: "Could not analyze meal.",
-          nutrients: [{ name: "Calories", value: 0, unit: "kcal", isHighlight: true }],
-          feedback: ["No nutritional data was found."],
-          suggestions: ["Try a clearer image with more visible food."],
-          detailedIngredients: [],
-          source: "error_fallback",
-          fallback: true,
-          lowConfidence: true,
-          goalScore: { overall: 0, specific: {} },
-          modelInfo: {
-            model: "emergency_success_fallback",
-            usedFallback: true,
-            ocrExtracted: false
-          }
-        };
-        response.fallback = true;
-        response.message = "Analysis completed with emergency fallback";
-      }
-      
-      // Ensure all required properties exist in the response
-      if (!response.requestId) response.requestId = requestId;
-      if (response.imageUrl === undefined) response.imageUrl = null;
-      if (!response.elapsedTime) response.elapsedTime = Date.now() - startTime;
-      if (!response.error) response.error = null;
+      // Validate the response structure before returning
+      console.log(`[${requestId}] Final response validation to ensure valid structure`);
 
-      console.log("💥 Final returned result:", JSON.stringify({
-        has_result: !!response.result,
-        result_description: response.result?.description || "MISSING",
-        result_nutrients: Array.isArray(response.result?.nutrients) ? response.result.nutrients.length : "NOT_ARRAY",
-        result_feedback: Array.isArray(response.result?.feedback) ? response.result.feedback.length : "NOT_ARRAY",
-        result_suggestions: Array.isArray(response.result?.suggestions) ? response.result.suggestions.length : "NOT_ARRAY",
-        result_source: response.result?.source || "MISSING"
-      }, null, 2));
-      
-      // 🔒 ABSOLUTE FINAL VALIDATION GATE - Nothing should pass this point without proper structure
-      if (!response.result?.description || !Array.isArray(response.result?.nutrients)) {
-        console.error("🚨 [CRITICAL] Final validation gate caught invalid result structure", { 
-          has_description: !!response.result?.description,
-          has_nutrients_array: Array.isArray(response.result?.nutrients),
-          nutrients_length: Array.isArray(response.result?.nutrients) ? response.result.nutrients.length : 0
-        });
-        
-        // Apply guaranteed fallback that will ALWAYS have the right structure
-        response.result = createUniversalErrorFallback("final_validation_gate");
-        response.fallback = true;
-        response.message = "Analysis completed with final failsafe fallback";
-        
-        console.log("💥 FINAL FAILSAFE FALLBACK APPLIED");
+      // Validate the result structure 
+      if (!response.result || 
+          !response.result.description || 
+          !Array.isArray(response.result.nutrients) || 
+          response.result.nutrients.length === 0) {
+        console.warn(`[${requestId}] Invalid response structure detected, applying universal fallback`);
+        response.result = createUniversalErrorFallback("final-validation-fix-main-success");
       }
-      
-      // Log the complete response for debugging - will help track down the exact issue
-      console.log("🔍 COMPLETE_RESULT_OBJECT:", JSON.stringify({
+
+      // Log the final response structure
+      console.log(`[${requestId}] Final response:`, {
         success: response.success,
-        fallback: response.fallback,
-        requestId: response.requestId,
-        result: {
-          description: response.result?.description,
-          nutrients_count: Array.isArray(response.result?.nutrients) ? response.result.nutrients.length : 0,
-          feedback_count: Array.isArray(response.result?.feedback) ? response.result.feedback.length : 0,
-          suggestions_count: Array.isArray(response.result?.suggestions) ? response.result.suggestions.length : 0,
-          source: response.result?.source
-        }
-      }));
-      
-      // Final validation to enforce required fields exist
-      if (
-        !response.result?.description ||
-        !Array.isArray(response.result?.nutrients) ||
-        response.result.nutrients.length === 0
-      ) {
-        console.warn(`[${requestId}] 💥 Final fallback triggered before response`);
-        response.result = {
-          description: "Could not analyze this meal.",
-          nutrients: [{ name: "Calories", value: 0, unit: "kcal", isHighlight: true }],
-          feedback: ["Unable to analyze meal content."],
-          suggestions: ["Try uploading a clearer image."],
-          detailedIngredients: [],
-          goalScore: { overall: 0, specific: {} },
-          fallback: true,
-          lowConfidence: true,
-          source: "error_fallback"
-        };
-        response.fallback = true;
-        response.message = "Analysis completed with final forced fallback";
-      }
-      
+        fallback: response.fallback, 
+        resultExists: !!response.result,
+        descriptionExists: !!response.result?.description,
+        nutrientsLength: response.result?.nutrients?.length || 0,
+        feedbackLength: response.result?.feedback?.length || 0,
+        suggestionsLength: response.result?.suggestions?.length || 0
+      });
+
       return NextResponse.json(response);
       
     } catch (error: any) {
