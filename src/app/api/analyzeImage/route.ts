@@ -145,6 +145,9 @@ interface AnalysisResult {
   lowConfidence?: boolean;
   fallback?: boolean;
   source?: string;
+  saved?: boolean;
+  savedMealId?: string;
+  saveError?: string;
 }
 
 interface ExtendedNutritionData extends NutritionData {
@@ -243,6 +246,183 @@ function createMD5Hash(data: string): string {
 }
 
 /**
+ * Validates nutrition data to ensure it has all required fields
+ * @param data The nutrition data to validate
+ * @param requestId Request identifier for logging
+ * @returns Validated nutrition data with all required fields
+ */
+function validateNutritionData(data: any, requestId: string): ExtendedNutritionData {
+  console.log(`[${requestId}] Validating nutrition data`);
+  
+  if (!data || typeof data !== 'object') {
+    console.error(`[${requestId}] Invalid nutrition data: data is not an object`);
+    return createFallbackNutritionData(requestId);
+  }
+  
+  const validated: ExtendedNutritionData = {
+    nutrients: [],
+    foods: [],
+    raw: {},
+    source: data.source || 'fallback'
+  };
+  
+  // Validate nutrients
+  if (!Array.isArray(data.nutrients) || data.nutrients.length === 0) {
+    console.warn(`[${requestId}] Missing or invalid nutrients array, creating default nutrients`);
+    validated.nutrients = [
+      { name: 'Calories', value: 0, unit: 'kcal', isHighlight: true },
+      { name: 'Protein', value: 0, unit: 'g', isHighlight: true },
+      { name: 'Carbohydrates', value: 0, unit: 'g', isHighlight: true },
+      { name: 'Fat', value: 0, unit: 'g', isHighlight: true }
+    ];
+  } else {
+    // Copy existing nutrients but ensure they have all required properties
+    validated.nutrients = data.nutrients.map((nutrient: any, index: number) => {
+      if (!nutrient || typeof nutrient !== 'object') {
+        console.warn(`[${requestId}] Invalid nutrient at index ${index}, creating default nutrient`);
+        return { name: 'Calories', value: 0, unit: 'kcal', isHighlight: true };
+      }
+      
+      return {
+        name: nutrient.name || `Nutrient ${index + 1}`,
+        value: nutrient.value !== undefined ? nutrient.value : 0,
+        unit: nutrient.unit || 'g',
+        isHighlight: nutrient.isHighlight !== undefined ? nutrient.isHighlight : false,
+        percentOfDailyValue: nutrient.percentOfDailyValue,
+        amount: nutrient.amount
+      };
+    });
+  }
+  
+  // Validate foods
+  if (!Array.isArray(data.foods) || data.foods.length === 0) {
+    console.warn(`[${requestId}] Missing or invalid foods array, creating default food`);
+    validated.foods = [{
+      food_name: "Unknown food",
+      serving_qty: 1,
+      serving_unit: "serving",
+      serving_weight_grams: 100,
+      nf_calories: 0,
+      nf_total_fat: 0,
+      nf_saturated_fat: 0,
+      nf_cholesterol: 0,
+      nf_sodium: 0,
+      nf_total_carbohydrate: 0,
+      nf_dietary_fiber: 0,
+      nf_sugars: 0,
+      nf_protein: 0,
+      nf_potassium: 0,
+      nf_p: 0,
+      full_nutrients: [],
+      photo: {
+        thumb: '',
+        highres: '',
+        is_user_uploaded: false
+      }
+    }];
+  } else {
+    validated.foods = data.foods;
+  }
+  
+  // Validate raw data
+  if (!data.raw || typeof data.raw !== 'object') {
+    console.warn(`[${requestId}] Missing or invalid raw data, creating default raw data`);
+    validated.raw = {
+      description: "Could not analyze this meal properly.",
+      feedback: ["Unable to analyze the image."],
+      suggestions: ["Try a clearer photo with more lighting."],
+      goalScore: {
+        overall: 0,
+        specific: {}
+      }
+    };
+  } else {
+    validated.raw = { ...data.raw };
+    
+    // Ensure raw.description exists
+    if (!validated.raw.description || typeof validated.raw.description !== 'string') {
+      console.warn(`[${requestId}] Missing or invalid description in raw data, setting default`);
+      validated.raw.description = "Could not analyze this meal properly.";
+    }
+    
+    // Ensure raw.feedback exists as an array
+    if (!Array.isArray(validated.raw.feedback)) {
+      console.warn(`[${requestId}] Missing or invalid feedback in raw data, setting default`);
+      validated.raw.feedback = ["Unable to analyze the image."];
+    }
+    
+    // Ensure raw.suggestions exists as an array
+    if (!Array.isArray(validated.raw.suggestions)) {
+      console.warn(`[${requestId}] Missing or invalid suggestions in raw data, setting default`);
+      validated.raw.suggestions = ["Try a clearer photo with more lighting."];
+    }
+    
+    // Ensure raw.goalScore exists
+    if (!validated.raw.goalScore || typeof validated.raw.goalScore !== 'object') {
+      console.warn(`[${requestId}] Missing or invalid goalScore in raw data, setting default`);
+      validated.raw.goalScore = {
+        overall: 0,
+        specific: {}
+      };
+    }
+  }
+  
+  console.log(`[${requestId}] Nutrition data validation complete`);
+  return validated;
+}
+
+/**
+ * Creates a fallback nutrition data structure with valid defaults
+ * @param requestId Request identifier for logging
+ * @returns A valid fallback nutrition data object
+ */
+function createFallbackNutritionData(requestId: string): ExtendedNutritionData {
+  console.log(`[${requestId}] Creating fallback nutrition data`);
+  
+  return {
+    nutrients: [
+      { name: 'Calories', value: 0, unit: 'kcal', isHighlight: true },
+      { name: 'Protein', value: 0, unit: 'g', isHighlight: true },
+      { name: 'Carbohydrates', value: 0, unit: 'g', isHighlight: true },
+      { name: 'Fat', value: 0, unit: 'g', isHighlight: true }
+    ],
+    foods: [{
+      food_name: "Unknown food",
+      serving_qty: 1,
+      serving_unit: "serving",
+      serving_weight_grams: 100,
+      nf_calories: 0,
+      nf_total_fat: 0,
+      nf_saturated_fat: 0,
+      nf_cholesterol: 0,
+      nf_sodium: 0,
+      nf_total_carbohydrate: 0,
+      nf_dietary_fiber: 0,
+      nf_sugars: 0,
+      nf_protein: 0,
+      nf_potassium: 0,
+      nf_p: 0,
+      full_nutrients: [],
+      photo: {
+        thumb: '',
+        highres: '',
+        is_user_uploaded: false
+      }
+    }],
+    raw: {
+      description: "Could not analyze this meal properly.",
+      feedback: ["Unable to analyze the image."],
+      suggestions: ["Try a clearer photo with more lighting."],
+      goalScore: {
+        overall: 0,
+        specific: {}
+      }
+    },
+    source: 'fallback'
+  };
+}
+
+/**
  * Fetch nutrition data with caching and fallback
  * @param text OCR text to analyze
  * @param requestId Request identifier for tracking
@@ -252,8 +432,8 @@ async function fetchNutrition(
   text: string,
   requestId: string
 ): Promise<NutritionData> {
-  console.log(`[${requestId}] fetchNutrition: Starting. Text: ${text}`);
-  
+  console.log(`[${requestId}] fetchNutrition: Starting. Text: ${text.substring(0, 30)}...`);
+
   try {
     // First, check if Nutritionix API keys are set
     const hasNutritionixApiId = !!process.env.NUTRITIONIX_APP_ID;
@@ -264,7 +444,9 @@ async function fetchNutrition(
     if (!useNutritionix) {
       console.log(`[${requestId}] fetchNutrition: Nutritionix credentials not found, using GPT fallback`);
       const gptFallback = await callGptNutritionFallback(text, requestId);
-      return gptFallback;
+      
+      // Validate GPT fallback data
+      return validateNutritionData(gptFallback, requestId);
     }
     
     try {
@@ -276,7 +458,14 @@ async function fetchNutrition(
       
       if (nutritionixData.success && nutritionixData.data) {
         console.log(`[${requestId}] fetchNutrition: Nutritionix success in ${Date.now() - startTime}ms`);
-        return nutritionixData.data;
+        
+        // Add source information and validate
+        const extendedData: ExtendedNutritionData = {
+          ...nutritionixData.data,
+          source: 'nutritionix'
+        };
+        
+        return validateNutritionData(extendedData, requestId);
       } else {
         throw new Error(nutritionixData.error || 'Nutritionix returned unsuccessful response');
       }
@@ -285,134 +474,15 @@ async function fetchNutrition(
       
       // If Nutritionix fails, fall back to GPT
       const gptFallback = await callGptNutritionFallback(text, requestId);
-      return gptFallback;
+      
+      // Validate GPT fallback data
+      return validateNutritionData(gptFallback, requestId);
     }
-  } catch (error) {
-    console.error(`[${requestId}] fetchNutrition: Both sources failed: ${error}`);
+  } catch (error: any) {
+    console.error(`[${requestId}] fetchNutrition: Both sources failed: ${error.message}`);
     
-    // Create a fallback response when both Nutritionix and GPT fail
-    // This must match the NutritionData interface exactly
-    const fallbackNutritionData: NutritionData = {
-      nutrients: [
-        { name: 'Calories', value: 0, unit: 'kcal', isHighlight: true },
-        { name: 'Protein', value: 0, unit: 'g', isHighlight: true },
-        { name: 'Carbs', value: 0, unit: 'g', isHighlight: true },
-        { name: 'Fat', value: 0, unit: 'g', isHighlight: true }
-      ],
-      foods: [{
-        food_name: "Unknown food",
-        serving_qty: 1,
-        serving_unit: "serving",
-        serving_weight_grams: 100,
-        nf_calories: 0,
-        nf_total_fat: 0,
-        nf_saturated_fat: 0,
-        nf_cholesterol: 0,
-        nf_sodium: 0,
-        nf_total_carbohydrate: 0,
-        nf_dietary_fiber: 0,
-        nf_sugars: 0,
-        nf_protein: 0,
-        nf_potassium: 0,
-        nf_p: 0,
-        full_nutrients: [],
-        photo: {
-          thumb: '',
-          highres: '',
-          is_user_uploaded: false
-        }
-      }],
-      raw: {
-        description: "Could not analyze meal.",
-        feedback: ["No nutritional data was found."],
-        suggestions: ["Try a clearer image with more visible food."],
-        goalScore: {
-          overall: 0,
-          specific: {} as Record<string, number>
-        },
-        fallback: true,
-        error: "Both Nutritionix and GPT fallback failed"
-      },
-      source: "error_fallback"
-    };
-    
-    // Stringent validation to ensure the fallback response has all required fields
-    if (!Array.isArray(fallbackNutritionData.nutrients) || fallbackNutritionData.nutrients.length === 0) {
-      console.error(`[${requestId}] CRITICAL: Missing nutrients in fallback response, adding default nutrients`);
-      fallbackNutritionData.nutrients = [
-        { name: 'Calories', value: 0, unit: 'kcal', isHighlight: true },
-        { name: 'Protein', value: 0, unit: 'g', isHighlight: true }
-      ];
-    }
-    
-    if (!Array.isArray(fallbackNutritionData.foods) || fallbackNutritionData.foods.length === 0) {
-      console.error(`[${requestId}] CRITICAL: Missing foods in fallback response, adding default food`);
-      fallbackNutritionData.foods = [{
-        food_name: "Unknown food",
-        serving_qty: 1,
-        serving_unit: "serving",
-        serving_weight_grams: 100,
-        nf_calories: 0,
-        nf_total_fat: 0,
-        nf_saturated_fat: 0,
-        nf_cholesterol: 0,
-        nf_sodium: 0,
-        nf_total_carbohydrate: 0,
-        nf_dietary_fiber: 0,
-        nf_sugars: 0,
-        nf_protein: 0,
-        nf_potassium: 0,
-        nf_p: 0,
-        full_nutrients: [],
-        photo: {
-          thumb: '',
-          highres: '',
-          is_user_uploaded: false
-        }
-      }];
-    }
-    
-    if (!fallbackNutritionData.raw) {
-      console.error(`[${requestId}] CRITICAL: Missing raw object in fallback response, adding default raw data`);
-      fallbackNutritionData.raw = {
-        description: "Could not analyze this meal properly.",
-        feedback: ["Unable to analyze the image."],
-        suggestions: ["Try a clearer photo with more lighting."],
-        goalScore: {
-          overall: 5,
-          specific: {} as Record<string, number>
-        }
-      };
-    }
-    
-    if (!fallbackNutritionData.raw.description || typeof fallbackNutritionData.raw.description !== 'string') {
-      console.error(`[${requestId}] CRITICAL: Missing description in fallback response, adding default description`);
-      fallbackNutritionData.raw.description = "Could not analyze this meal properly.";
-    }
-    
-    // Debug log the structure
-    console.log(`✅ [Returning emergency nutrition fallback]`, {
-      nutrients_count: fallbackNutritionData.nutrients.length,
-      foods_count: fallbackNutritionData.foods.length,
-      has_description: !!fallbackNutritionData.raw?.description,
-      has_feedback: Array.isArray(fallbackNutritionData.raw?.feedback),
-      has_suggestions: Array.isArray(fallbackNutritionData.raw?.suggestions),
-      source: fallbackNutritionData.source
-    });
-    
-    // Log the complete structure for debugging
-    console.log(`💥 Final fallback nutrition data:`, JSON.stringify({
-      has_nutrients: Array.isArray(fallbackNutritionData.nutrients) && fallbackNutritionData.nutrients.length > 0,
-      nutrients_count: fallbackNutritionData.nutrients.length,
-      has_foods: Array.isArray(fallbackNutritionData.foods) && fallbackNutritionData.foods.length > 0,
-      foods_count: fallbackNutritionData.foods.length,
-      has_raw: !!fallbackNutritionData.raw,
-      has_raw_description: !!fallbackNutritionData.raw?.description,
-      raw_description: fallbackNutritionData.raw?.description?.substring(0, 30),
-      source: fallbackNutritionData.source
-    }, null, 2));
-    
-    return fallbackNutritionData;
+    // Return validated fallback nutrition data
+    return createFallbackNutritionData(requestId);
   }
 }
 
@@ -664,7 +734,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
         console.log(`[analyzeImage] Cache hit for ${cacheKey}`);
         const cachedResult = cache.get(cacheKey) as any;
         
-        // Validate the cached result to ensure it has the required fields
+        // Validate the cached result to ensure it has all required fields
         let validCachedResult = {...cachedResult};
         if (!cachedResult.description || typeof cachedResult.description !== 'string') {
           console.warn(`[analyzeImage] Cached result missing valid description, fixing...`);
@@ -681,6 +751,30 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
           ];
         }
         
+        // Ensure feedback array exists
+        if (!Array.isArray(validCachedResult.feedback) || validCachedResult.feedback.length === 0) {
+          console.warn(`[analyzeImage] Cached result missing valid feedback, fixing...`);
+          validCachedResult.feedback = ["We couldn't properly analyze this meal."];
+        }
+        
+        // Ensure suggestions array exists
+        if (!Array.isArray(validCachedResult.suggestions) || validCachedResult.suggestions.length === 0) {
+          console.warn(`[analyzeImage] Cached result missing valid suggestions, fixing...`);
+          validCachedResult.suggestions = ["Try a clearer photo with more lighting."];
+        }
+        
+        // Ensure detailedIngredients array exists
+        if (!Array.isArray(validCachedResult.detailedIngredients)) {
+          console.warn(`[analyzeImage] Cached result missing detailedIngredients, fixing...`);
+          validCachedResult.detailedIngredients = [];
+        }
+        
+        // Ensure goalScore exists
+        if (!validCachedResult.goalScore || typeof validCachedResult.goalScore !== 'object') {
+          console.warn(`[analyzeImage] Cached result missing goalScore, fixing...`);
+          validCachedResult.goalScore = { overall: 0, specific: {} };
+        }
+        
         // Clear the timeout since we're returning early
         if (globalTimeoutId) clearTimeout(globalTimeoutId);
         
@@ -688,29 +782,35 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
         if (
           !validCachedResult?.description ||
           !Array.isArray(validCachedResult?.nutrients) ||
-          validCachedResult.nutrients.length === 0
+          validCachedResult.nutrients.length === 0 ||
+          !Array.isArray(validCachedResult?.feedback) ||
+          !Array.isArray(validCachedResult?.suggestions) ||
+          !Array.isArray(validCachedResult?.detailedIngredients)
         ) {
           console.warn(`[${requestId}] 💥 Final fallback triggered before cached response`);
-          validCachedResult = {
-            description: "Could not analyze this meal.",
-            nutrients: [{ name: "Calories", value: 0, unit: "kcal", isHighlight: true }],
-            feedback: ["Unable to analyze meal content."],
-            suggestions: ["Try uploading a clearer image."],
-            detailedIngredients: [],
-            goalScore: { overall: 0, specific: {} },
-            fallback: true,
-            lowConfidence: true,
-            source: "error_fallback"
-          };
+          validCachedResult = createUniversalErrorFallback("cached-result-validation-failure");
         }
         
-        return NextResponse.json({ 
-          success: true, 
+        // Log a debug message with the validated structure
+        console.log(`[${requestId}] Validated cached result:`, {
+          has_description: !!validCachedResult.description,
+          nutrients_length: validCachedResult.nutrients?.length,
+          feedback_length: validCachedResult.feedback?.length,
+          suggestions_length: validCachedResult.suggestions?.length,
+          detailedIngredients_length: validCachedResult.detailedIngredients?.length,
+          has_goalScore: !!validCachedResult.goalScore
+        });
+        
+        // Create the response
+        const response = { 
+          success: true,
           data: validCachedResult,
           cached: true,
           elapsedTime: Date.now() - startTime,
           requestId
-        });
+        };
+        
+        return NextResponse.json(response);
       }
       
       console.log(`[analyzeImage] Cache miss for ${cacheKey}, processing...`);
