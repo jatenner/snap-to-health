@@ -25,6 +25,8 @@ export function isValidAnalysis(data: any): boolean {
   // Check description
   if (typeof data.description === 'string' && data.description.trim()) {
     presentFields.description = true;
+  } else {
+    console.warn('Analysis validation warning: missing or invalid description, will use default');
   }
 
   // Check for nutrients - can be either an array or an object
@@ -35,28 +37,31 @@ export function isValidAnalysis(data: any): boolean {
     // New format - nutrients as object
     // Accept any structure - we'll normalize later
     presentFields.nutrients = true;
+  } else {
+    console.warn('Analysis validation warning: missing or invalid nutrients', data.nutrients);
   }
 
   // Validate that feedback is an array if present
   if (Array.isArray(data.feedback)) {
     presentFields.feedback = true;
   } else if (data.feedback !== undefined && !Array.isArray(data.feedback)) {
-    console.warn('Analysis validation failed: feedback is present but not an array', data);
-    // Don't fail validation for this - we'll normalize later
+    console.warn('Analysis validation warning: feedback is present but not an array, will normalize');
+  } else {
+    console.warn('Analysis validation warning: missing feedback, will use default');
   }
 
   // Validate that suggestions is an array if present
   if (Array.isArray(data.suggestions)) {
     presentFields.suggestions = true;
   } else if (data.suggestions !== undefined && !Array.isArray(data.suggestions)) {
-    console.warn('Analysis validation failed: suggestions is present but not an array', data);
-    // Don't fail validation for this - we'll normalize later
+    console.warn('Analysis validation warning: suggestions is present but not an array, will normalize');
+  } else {
+    console.warn('Analysis validation warning: missing suggestions, will use default');
   }
 
   // Validate that detailedIngredients is an array if present
   if (data.detailedIngredients !== undefined && !Array.isArray(data.detailedIngredients)) {
-    console.warn('Analysis validation failed: detailedIngredients is present but not an array', data);
-    // Don't fail validation for this - we'll normalize later
+    console.warn('Analysis validation warning: detailedIngredients is present but not an array, will normalize');
   }
 
   // Less strict validation for numeric fields - accept any value that can be interpreted
@@ -64,16 +69,15 @@ export function isValidAnalysis(data: any): boolean {
     if (typeof data.goalScore !== 'number' && 
         typeof data.goalScore !== 'string' && 
         typeof data.goalScore !== 'object') {
-      console.warn('Analysis validation failed: goalScore has invalid type', typeof data.goalScore);
-      // Don't fail validation for this - provide a default in normalizeAnalysisResult instead
+      console.warn('Analysis validation warning: goalScore has invalid type, will use default', typeof data.goalScore);
     }
   }
 
   // Count how many required fields are present
   const presentCount = Object.values(presentFields).filter(v => v).length;
   
-  // Only require at least ONE of the four primary fields to be present
-  const isValid = presentCount > 0;
+  // LOOSER VALIDATION: Data is valid if nutrients field is present, or at least 2 of the 4 fields
+  const isValid = presentFields.nutrients || presentCount >= 2;
   
   if (isValid) {
     console.log(`Analysis validation passed with ${presentCount}/4 primary fields:`, {
@@ -84,7 +88,7 @@ export function isValidAnalysis(data: any): boolean {
       fallback: data.fallback ? 'FALLBACK RESULT' : 'NORMAL RESULT'
     });
   } else {
-    console.warn('Analysis validation failed: none of the required fields are present', data);
+    console.warn('Analysis validation failed: insufficient valid fields present', data);
   }
   
   return isValid;

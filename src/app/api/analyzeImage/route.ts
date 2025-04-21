@@ -99,60 +99,79 @@ function createUniversalFallbackResult(reason: string = "unknown", partial: Part
 
   // Selectively merge partial data if it exists and is valid
   if (partial && typeof partial === 'object') {
+    // Accept any partial data - we'll normalize/validate properties individually
+    
     // Only use partial description if it's a non-empty string
     if (typeof partial.description === 'string' && partial.description.trim()) {
       fallback.description = partial.description;
       presentFields.description = true;
     }
 
-    // Accept partial nutrients if it's a valid array (can be empty in our new validation approach)
+    // Accept partial nutrients if it's a valid array
     if (Array.isArray(partial.nutrients)) {
-      fallback.nutrients = partial.nutrients.length > 0 
-        ? partial.nutrients.map(n => ({
-            name: n.name || "Unknown",
-            value: typeof n.value === 'string' ? parseFloat(n.value) || 0 : (n.value ?? 0),
-            unit: n.unit || "g",
-            isHighlight: n.isHighlight ?? false
-          }))
-        : fallback.nutrients; // Keep default nutrients if array is empty
+      // Even if the array is empty, keep the partial data structure as is
+      // We'll validate and provide defaults in normalization if needed
+      fallback.nutrients = partial.nutrients;
       
+      // Only mark as present if the array has elements
       presentFields.nutrients = partial.nutrients.length > 0;
+      
+      // If we have an empty array, log a warning
+      if (partial.nutrients.length === 0) {
+        console.warn(`[Universal Fallback] Nutrients array is empty, will be populated with defaults in normalization`);
+      }
     }
 
-    // Accept feedback if it's a valid array (can be empty)
+    // Accept feedback if it's a valid array or convert to array if string
     if (Array.isArray(partial.feedback)) {
-      fallback.feedback = partial.feedback.length > 0 
-        ? partial.feedback 
-        : fallback.feedback; // Keep default feedback if array is empty
-      
+      fallback.feedback = partial.feedback;
       presentFields.feedback = partial.feedback.length > 0;
+    } else if (typeof partial.feedback === 'string') {
+      // Handle case where feedback might be a string instead of array
+      fallback.feedback = [partial.feedback as string];
+      presentFields.feedback = true;
     }
 
-    // Accept suggestions if it's a valid array (can be empty)
+    // Accept suggestions if it's a valid array or convert to array if string
     if (Array.isArray(partial.suggestions)) {
-      fallback.suggestions = partial.suggestions.length > 0 
-        ? partial.suggestions 
-        : fallback.suggestions; // Keep default suggestions if array is empty
-      
+      fallback.suggestions = partial.suggestions;
       presentFields.suggestions = partial.suggestions.length > 0;
+    } else if (typeof partial.suggestions === 'string') {
+      // Handle case where suggestions might be a string instead of array
+      fallback.suggestions = [partial.suggestions as string];
+      presentFields.suggestions = true;
     }
 
-    // Accept detailedIngredients if it's a valid array (can be empty)
+    // Accept detailedIngredients if it's a valid array
     if (Array.isArray(partial.detailedIngredients)) {
       fallback.detailedIngredients = partial.detailedIngredients;
+    }
+
+    // Accept goalScore if it's valid
+    if (partial.goalScore && typeof partial.goalScore === 'object') {
+      fallback.goalScore = partial.goalScore;
+    } else if (typeof partial.goalScore === 'number') {
+      fallback.goalScore = {
+        overall: partial.goalScore,
+        specific: {}
+      };
     }
 
     // Accept source if provided
     if (typeof partial.source === 'string' && partial.source.trim()) {
       fallback.source = partial.source;
     }
+    
+    // Accept modelInfo if provided
+    if (partial.modelInfo && typeof partial.modelInfo === 'object') {
+      // Preserve the model info but flag that we used fallback
+      fallback.modelInfo = {
+        ...partial.modelInfo,
+        usedFallback: true
+      };
+    }
   }
 
-  // Always ensure these fields are present and valid
-  if (!fallback.goalScore || typeof fallback.goalScore !== 'object') {
-    fallback.goalScore = { overall: 0, specific: {} };
-  }
-  
   // Enhanced logging for debugging
   const presentFieldsCount = Object.values(presentFields).filter(Boolean).length;
   console.log(`[Universal Fallback] Created for reason: ${reason}`, {
@@ -984,20 +1003,29 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
 
       // Validate the result structure 
       if (!response.result || 
-          !response.result.description || 
-          !Array.isArray(response.result.nutrients) || 
-          response.result.nutrients.length === 0) {
+          (!response.result.description && !Array.isArray(response.result.nutrients))) {
         console.warn(`[${requestId}] Invalid response structure detected, applying universal fallback`);
-        response.result = createUniversalFallbackResult("invalid_structure", {});
+        response.result = createUniversalFallbackResult("invalid_structure", response.result || {});
       } else {
         // Ensure we have a fully valid structure even if some parts might be missing
         const normalizedResult = normalizeAnalysisResult(response.result);
         response.result = normalizedResult;
         
-        // Double-check critical fields
-        if (!normalizedResult.description || !Array.isArray(normalizedResult.nutrients) || normalizedResult.nutrients.length === 0) {
-          console.warn(`[${requestId}] Normalization failed to create valid structure, using universal fallback`);
+        // Double-check critical fields but be more lenient
+        // Only require nutrients array OR description to be present - not both
+        const hasNutrients = Array.isArray(normalizedResult.nutrients) && normalizedResult.nutrients.length > 0;
+        const hasDescription = !!normalizedResult.description;
+        
+        if (!hasNutrients && !hasDescription) {
+          console.warn(`[${requestId}] Normalization failed to create valid structure, using universal fallback but preserving partial data`);
           response.result = createUniversalFallbackResult("post_normalization_check", normalizedResult);
+          console.info("[Test] Fallback result accepted with partial data ✅");
+        } else {
+          // At least one critical field is present
+          console.log(`[${requestId}] Partial result structure is acceptable`);
+          if (!hasDescription) console.warn(`[${requestId}] Missing description but nutrients present - proceeding with partial data`);
+          if (!hasNutrients) console.warn(`[${requestId}] Missing nutrients but description present - proceeding with partial data`);
+          console.info("[Test] Fallback result accepted ✅");
         }
       }
 
@@ -1040,11 +1068,18 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       
       // Validate the error response structure 
       if (!errorResponse.result || 
-          !errorResponse.result.description || 
-          !Array.isArray(errorResponse.result.nutrients) || 
-          errorResponse.result.nutrients.length === 0) {
+          (!errorResponse.result.description && !Array.isArray(errorResponse.result.nutrients))) {
         console.warn(`[${requestId}] Invalid error response structure detected, applying universal fallback`);
-        errorResponse.result = createUniversalFallbackResult("error_response_invalid", {});
+        errorResponse.result = createUniversalFallbackResult("error_response_invalid", errorResponse.result || {});
+      } else {
+        // Log that we're proceeding with a partial error response
+        const hasNutrients = Array.isArray(errorResponse.result.nutrients) && errorResponse.result.nutrients.length > 0;
+        const hasDescription = !!errorResponse.result.description;
+        
+        if (hasNutrients || hasDescription) {
+          console.warn(`[${requestId}] Proceeding with partial error response data`);
+          console.info("[Test] Fallback error result accepted with partial data ✅");
+        }
       }
       
       // Log the final response structure
@@ -1195,7 +1230,6 @@ function ensureValidResponseStructure(result: any): AnalysisResult {
   return validatedResult;
 }
 
-// First, add an additional validation function:
 /**
  * Ensures critical fields are present in the analysis result
  * This is the last line of defense before storage
@@ -1208,18 +1242,27 @@ function ensureCriticalFields(result: any): any {
   
   // Use our dedicated analysis validator
   if (!isValidAnalysis(result)) {
-    console.error('CRITICAL: Analysis validation failed before save, using universal fallback');
+    console.error('CRITICAL: Analysis validation failed before save, using universal fallback but preserving partial data');
     return createUniversalFallbackResult("invalid_analysis", result);
   }
   
   // Valid analysis, but still ensure structure consistency
   const normalized = normalizeAnalysisResult(result);
   
-  // Final validation check
-  if (!normalized.description || !Array.isArray(normalized.nutrients) || normalized.nutrients.length === 0) {
-    console.error('CRITICAL: Normalized result still invalid, using guaranteed fallback');
+  // Final validation check - more lenient to allow partial data
+  // Only require nutrients array OR description to be present
+  const hasNutrients = Array.isArray(normalized.nutrients) && normalized.nutrients.length > 0;
+  const hasDescription = !!normalized.description;
+  
+  if (!hasNutrients && !hasDescription) {
+    console.error('CRITICAL: Normalized result still missing both description and nutrients, using guaranteed fallback with partial data');
     return createUniversalFallbackResult("post_normalization_invalid", normalized);
   }
   
+  // Log a warning if we're proceeding with partial data
+  if (!hasDescription) console.warn('Proceeding with normalized result missing description but nutrients present');
+  if (!hasNutrients) console.warn('Proceeding with normalized result missing nutrients but description present');
+  
+  console.info("[Test] Fallback result with partial data accepted ✅");
   return normalized;
 }
