@@ -6,7 +6,7 @@ import Image from 'next/image';
 import Link from 'next/link';
 import { useAuth } from '@/contexts/AuthContext';
 import { trySaveMeal } from '@/lib/mealUtils';
-import { isValidAnalysis, createFallbackAnalysis } from '@/lib/utils/analysisValidator';
+import { isValidAnalysis, createFallbackAnalysis, normalizeAnalysisResult } from '@/lib/utils/analysisValidator';
 import ErrorCard from '@/components/ErrorCard';
 import FallbackAlert from '@/components/FallbackAlert';
 
@@ -347,10 +347,13 @@ export default function MealAnalysisPage() {
           setPreviewUrl(storedPreviewUrl);
         }
         
+        // Normalize the result to ensure all required fields exist
+        const normalizedResult = normalizeAnalysisResult(parsedResult);
+        
         // Slight delay before showing results to allow for animation
         setTimeout(() => {
           setLoadingStage('rendering');
-          setAnalysisResult(parsedResult);
+          setAnalysisResult(normalizedResult);
           
           // Complete loading after a small delay to allow for rendering
           setTimeout(() => {

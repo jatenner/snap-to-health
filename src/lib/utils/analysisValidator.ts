@@ -23,14 +23,14 @@ export function isValidAnalysis(data: any): boolean {
     modelInfo: false
   };
   
-  // Check description - REQUIRED
+  // Check description - Can be missing, we'll use default
   if (typeof data.description === 'string' && data.description.trim()) {
     presentFields.description = true;
   } else {
     console.warn('Analysis validation warning: missing or invalid description');
   }
 
-  // Check for nutrients - REQUIRED - can be either an array or an object
+  // Check for nutrients - Can be missing, we'll use default
   if (Array.isArray(data.nutrients)) {
     // Accept any array, even empty ones - we'll provide defaults in normalization
     presentFields.nutrients = true;
@@ -81,12 +81,13 @@ export function isValidAnalysis(data: any): boolean {
     }
   }
 
-  // NEW VALIDATION RULES: Data is valid if BOTH description AND nutrients are present
+  // NEW VALIDATION RULES: Data is ALWAYS valid if it's an object - we'll normalize everything
   // Other fields are optional and will be filled with defaults if missing
-  const isValid = presentFields.description && presentFields.nutrients;
+  // This ensures we don't show error screens for partial results
+  const isValid = true;
   
-  if (isValid) {
-    console.log(`Analysis validation passed with required fields:`, {
+  if (presentFields.description && presentFields.nutrients) {
+    console.log(`Analysis validation passed with all required fields:`, {
       description: presentFields.description ? '✅' : '❌',
       nutrients: presentFields.nutrients ? '✅' : '❌',
       feedback: presentFields.feedback ? '✅' : '❌ (optional)',
@@ -95,10 +96,11 @@ export function isValidAnalysis(data: any): boolean {
       fallback: data.fallback ? 'FALLBACK RESULT' : 'NORMAL RESULT'
     });
   } else {
-    console.warn('Analysis validation failed: required fields missing', {
+    console.warn('Analysis has missing required fields, but will be accepted and normalized:', {
       description: presentFields.description,
       nutrients: presentFields.nutrients
     });
+    console.info("[Test] Fallback result accepted ✅", data);
   }
   
   return isValid;
@@ -299,6 +301,15 @@ export function normalizeAnalysisResult(data: any): any {
       ocrExtracted: false
     };
   }
+  
+  // Mark as fallback if fields had to be normalized significantly
+  if (!data.description || ((!data.nutrients || (Array.isArray(data.nutrients) && data.nutrients.length === 0)))) {
+    result.fallback = true;
+    result.lowConfidence = true;
+  }
+  
+  // Add debug log for normalized results
+  console.info("[Test] Fallback result accepted after normalization ✅");
   
   return result;
 } 
