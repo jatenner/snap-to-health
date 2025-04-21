@@ -458,13 +458,38 @@ const formatConfidence = (confidence: number): string => {
 
 // Tooltip explaining what confidence means
 const getConfidenceTooltip = (confidence: number): string => {
-  if (confidence >= 8) {
-    return 'High confidence: This ingredient is clearly visible in the image.';
-  } else if (confidence >= 5) {
-    return 'Medium confidence: This ingredient is likely present based on visible characteristics.';
-  } else {
-    return 'Low confidence: This is our best guess based on limited visual information.';
+  if (confidence >= 0.8) return "This ingredient was identified with high confidence";
+  if (confidence >= 0.5) return "This ingredient was identified with medium confidence";
+  return "This ingredient was identified with low confidence. It might not be accurate.";
+};
+
+// Function to render nutrient values with fallback indicators
+const renderNutrient = (nutrient: Nutrient | undefined, fallback: boolean = false): React.ReactNode => {
+  if (!nutrient || (nutrient.value === undefined && nutrient.amount === undefined)) {
+    return 'N/A';
   }
+  
+  // Use amount if it exists and is a number, otherwise use value
+  const displayValue = 
+    nutrient.amount !== undefined && !isNaN(Number(nutrient.amount)) 
+      ? nutrient.amount 
+      : nutrient.value || 'N/A';
+  
+  // Format the base nutrient display string
+  const baseText = `${nutrient?.name || 'Nutrient'}: ${displayValue}${nutrient?.unit || 'g'}`;
+  
+  // If fallback, return with (est.) indicator with different styling
+  if (fallback) {
+    return (
+      <>
+        {baseText}
+        <span className="text-amber-600 font-medium"> (est.)</span>
+      </>
+    );
+  }
+  
+  // Otherwise return plain text
+  return baseText;
 };
 
 // Ingredient component with confidence visualization
@@ -712,9 +737,9 @@ const AnalysisCard: React.FC<AnalysisCardProps> = ({ result, previewUrl, isLoadi
                     {macros.map((nutrient, index) => (
                       <span 
                         key={index}
-                        className={`px-2 py-1 rounded-full text-xs ${getNutrientBadgeStyle(nutrient, rawGoal || '')}`}
+                        className={`px-2 py-1 rounded-full text-xs ${getNutrientBadgeStyle(nutrient, rawGoal || '')} ${fallback ? 'border border-yellow-400' : ''}`}
                       >
-                        {nutrient?.name || 'Nutrient'}: {nutrient?.value || 0}{nutrient?.unit || 'g'}
+                        {renderNutrient(nutrient, fallback)}
                       </span>
                     ))}
                   </div>
@@ -729,9 +754,9 @@ const AnalysisCard: React.FC<AnalysisCardProps> = ({ result, previewUrl, isLoadi
                     {beneficialMicros.map((nutrient, index) => (
                       <span 
                         key={index}
-                        className={`px-2 py-1 rounded-full text-xs ${getNutrientBadgeStyle(nutrient, rawGoal || '')}`}
+                        className={`px-2 py-1 rounded-full text-xs ${getNutrientBadgeStyle(nutrient, rawGoal || '')} ${fallback ? 'border border-yellow-400' : ''}`}
                       >
-                        {nutrient?.name || 'Nutrient'}: {nutrient?.value || 0}{nutrient?.unit || 'g'}
+                        {renderNutrient(nutrient, fallback)}
                       </span>
                     ))}
                   </div>
@@ -746,9 +771,9 @@ const AnalysisCard: React.FC<AnalysisCardProps> = ({ result, previewUrl, isLoadi
                     {others.map((nutrient, index) => (
                       <span 
                         key={index}
-                        className={`px-2 py-1 rounded-full text-xs ${getNutrientBadgeStyle(nutrient, rawGoal || '')}`}
+                        className={`px-2 py-1 rounded-full text-xs ${getNutrientBadgeStyle(nutrient, rawGoal || '')} ${fallback ? 'border border-yellow-400' : ''}`}
                       >
-                        {nutrient?.name || 'Nutrient'}: {nutrient?.value || 0}{nutrient?.unit || 'g'}
+                        {renderNutrient(nutrient, fallback)}
                       </span>
                     ))}
                   </div>
@@ -780,14 +805,14 @@ const AnalysisCard: React.FC<AnalysisCardProps> = ({ result, previewUrl, isLoadi
         
         {/* Fallback message */}
         {fallback && (
-          <div className="px-4 py-3 bg-red-50 border-t border-red-100 text-red-800 text-sm">
+          <div className="px-4 py-3 bg-indigo-50 border-t border-indigo-100 text-indigo-800 text-sm">
             <div className="flex items-start">
-              <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 mr-2 text-red-500 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+              <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 mr-2 text-indigo-500 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
               </svg>
               <div>
-                <p className="font-medium">Analysis issue</p>
-                <p>{message || "We had trouble analyzing your meal. Please try again with a clearer photo."}</p>
+                <p className="font-medium">Estimated Nutritional Data</p>
+                <p>{message || "We've provided estimated nutritional values based on OCR text extraction. Values marked with (est.) are our best approximation."}</p>
               </div>
             </div>
           </div>
