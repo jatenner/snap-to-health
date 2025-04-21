@@ -8,6 +8,7 @@ import { useAuth } from '@/contexts/AuthContext';
 import { trySaveMeal } from '@/lib/mealUtils';
 import { isValidAnalysis, createFallbackAnalysis } from '@/lib/utils/analysisValidator';
 import ErrorCard from '@/components/ErrorCard';
+import FallbackAlert from '@/components/FallbackAlert';
 
 interface Nutrient {
   name: string;
@@ -49,6 +50,9 @@ interface AnalysisResult {
     model: string;
     usedFallback: boolean;
     ocrExtracted: boolean;
+  };
+  _meta?: {
+    fallback: boolean;
   };
 }
 
@@ -590,6 +594,9 @@ export default function MealAnalysisPage() {
           saveError={saveError}
           userId={currentUser?.uid || null}
         />
+        
+        {/* Show fallback alert when _meta.fallback is true, but we have valid data for display */}
+        <FallbackAlert show={Boolean(analysisResult._meta?.fallback)} />
         
         {/* Show fallback warning banner for fallback results */}
         <FallbackWarningBanner fallback={analysisResult.fallback} />
