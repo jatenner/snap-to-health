@@ -38,27 +38,26 @@ if (!apps.length) {
         throw error; // Re-throw to prevent initialization
       }
       
-      // Decode the base64 encoded private key
-      const decodedPrivateKey = Buffer.from(privateKeyBase64!, 'base64').toString('utf8');
+      // Decode the base64 encoded service account JSON
+      const decodedServiceAccount = Buffer.from(privateKeyBase64!, 'base64').toString('utf8');
+      
+      // Parse the JSON string into an object
+      const serviceAccount = JSON.parse(decodedServiceAccount);
       
       // Add diagnostic logging for the base64 key (without revealing the full key)
       const keyLength = privateKeyBase64?.length || 0;
-      console.log(`Processing Firebase private key (base64 length: ${keyLength} chars)`);
+      console.log(`Processing Firebase service account (base64 length: ${keyLength} chars)`);
       
       // Simple logging (without revealing sensitive key information)
       console.log(`Initializing Firebase Admin with: 
-        - Project ID: ${projectId}
-        - Client Email: ${clientEmail ? clientEmail.substring(0, 5) + '...' : 'missing'}
-        - Private Key: Successfully decoded (PEM format)
+        - Project ID: ${serviceAccount.project_id || projectId}
+        - Client Email: ${serviceAccount.client_email ? serviceAccount.client_email.substring(0, 5) + '...' : 'missing'}
+        - Service Account Type: ${serviceAccount.type || 'unknown'}
         - Storage Bucket: ${storageBucket || 'not specified'}`);
 
-      // Initialize Firebase Admin with the decoded private key
+      // Initialize Firebase Admin with the service account
       initializeApp({
-        credential: cert({
-          projectId,
-          clientEmail,
-          privateKey: decodedPrivateKey,
-        }),
+        credential: cert(serviceAccount),
         storageBucket,
       });
       
@@ -72,11 +71,11 @@ if (!apps.length) {
       console.error('❌ Firebase Admin initialization error:', error?.message || error);
       
       // Provide specific guidance for base64 key issues
-      if (error.message?.includes('private key') || error.message?.includes('Firebase')) {
+      if (error.message?.includes('private key') || error.message?.includes('Firebase') || error.message?.includes('JSON')) {
         console.error('Please check that your FIREBASE_PRIVATE_KEY_BASE64 environment variable:');
-        console.error('1. Contains a valid base64-encoded Firebase service account private key');
+        console.error('1. Contains a valid base64-encoded Firebase service account JSON');
         console.error('2. Is complete (not truncated)');
-        console.error('3. Was generated with: node scripts/generate-firebase-key.js');
+        console.error('3. Was generated with: cat firebase-service-account.json | base64');
       }
     }
   }

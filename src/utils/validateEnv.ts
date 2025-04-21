@@ -4,10 +4,10 @@
  */
 
 /**
- * Validates that the Firebase private key is properly set and can be decoded
+ * Validates that the Firebase service account is properly set and can be decoded
  * 
- * @throws Error if the private key is missing or invalid
- * @returns boolean true if the private key is valid
+ * @throws Error if the service account is missing or invalid
+ * @returns boolean true if the service account is valid
  */
 export function assertFirebasePrivateKey(): boolean {
   const privateKeyBase64 = process.env.FIREBASE_PRIVATE_KEY_BASE64;
@@ -16,32 +16,54 @@ export function assertFirebasePrivateKey(): boolean {
   if (!privateKeyBase64) {
     throw new Error(
       'Missing FIREBASE_PRIVATE_KEY_BASE64 environment variable. ' +
-      'Please set this value using the Base-64 encoded private key from your Firebase service account.'
+      'Please set this value using the Base-64 encoded Firebase service account JSON.'
     );
   }
   
   try {
     // Attempt to decode the Base-64 string
-    const decodedKey = Buffer.from(privateKeyBase64, 'base64').toString('utf8');
+    const decodedServiceAccount = Buffer.from(privateKeyBase64, 'base64').toString('utf8');
     
-    // Validate the decoded key format
-    const hasPemHeader = decodedKey.includes('-----BEGIN PRIVATE KEY-----');
-    const hasPemFooter = decodedKey.includes('-----END PRIVATE KEY-----');
-    
-    if (!hasPemHeader || !hasPemFooter) {
-      throw new Error(
-        'The decoded FIREBASE_PRIVATE_KEY_BASE64 is not in valid PEM format. ' +
-        'It should be a Base-64 encoded string of a PEM private key.'
-      );
-    }
-    
-    // Check the key length as a basic sanity check
-    // A typical Firebase private key should be over 1000 characters
-    if (decodedKey.length < 1000) {
-      throw new Error(
-        'The decoded FIREBASE_PRIVATE_KEY_BASE64 appears to be too short. ' +
-        'Please verify that the full private key was encoded correctly.'
-      );
+    // Try to parse as JSON
+    try {
+      const serviceAccount = JSON.parse(decodedServiceAccount);
+      
+      // Validate required service account fields
+      if (!serviceAccount.type || serviceAccount.type !== 'service_account') {
+        throw new Error('Invalid service account: missing or incorrect "type" field');
+      }
+      
+      if (!serviceAccount.project_id) {
+        throw new Error('Invalid service account: missing "project_id" field');
+      }
+      
+      if (!serviceAccount.private_key) {
+        throw new Error('Invalid service account: missing "private_key" field');
+      }
+      
+      if (!serviceAccount.client_email) {
+        throw new Error('Invalid service account: missing "client_email" field');
+      }
+      
+      // Validate the private key format
+      const hasPemHeader = serviceAccount.private_key.includes('-----BEGIN PRIVATE KEY-----');
+      const hasPemFooter = serviceAccount.private_key.includes('-----END PRIVATE KEY-----');
+      
+      if (!hasPemHeader || !hasPemFooter) {
+        throw new Error(
+          'The service account contains an invalid private key. ' +
+          'It should be in PEM format.'
+        );
+      }
+      
+    } catch (error) {
+      if (error instanceof SyntaxError) {
+        throw new Error(
+          'Failed to parse FIREBASE_PRIVATE_KEY_BASE64 as JSON. ' +
+          'Please ensure it is a valid Base-64 encoded Firebase service account JSON file.'
+        );
+      }
+      throw error;
     }
     
     return true;
