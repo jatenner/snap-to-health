@@ -144,7 +144,9 @@ export function createFallbackAnalysis(): any {
  * @returns The normalized analysis result
  */
 export function normalizeAnalysisResult(data: any): any {
+  // If data is completely missing or not an object, return a complete fallback
   if (!data || typeof data !== 'object') {
+    console.warn('Analysis data is invalid - creating complete fallback', data);
     return createFallbackAnalysis();
   }
   
@@ -152,11 +154,13 @@ export function normalizeAnalysisResult(data: any): any {
   
   // Ensure description exists - REQUIRED
   if (!result.description || typeof result.description !== 'string' || !result.description.trim()) {
+    console.warn('Normalizing missing or invalid description');
     result.description = "No description provided.";
   }
   
   // Convert nutrients object if needed - REQUIRED
   if (!result.nutrients) {
+    console.warn('Normalizing missing nutrients');
     result.nutrients = [
       { name: 'Calories', value: 0, unit: 'kcal', isHighlight: true },
       { name: 'Protein', value: 0, unit: 'g', isHighlight: true },
@@ -166,15 +170,31 @@ export function normalizeAnalysisResult(data: any): any {
   } else if (Array.isArray(result.nutrients)) {
     // If nutrients array is empty, provide defaults
     if (result.nutrients.length === 0) {
+      console.warn('Normalizing empty nutrients array');
       result.nutrients = [
         { name: 'Calories', value: 0, unit: 'kcal', isHighlight: true },
         { name: 'Protein', value: 0, unit: 'g', isHighlight: true },
         { name: 'Carbohydrates', value: 0, unit: 'g', isHighlight: true },
         { name: 'Fat', value: 0, unit: 'g', isHighlight: true }
       ];
+    } else {
+      // Ensure all nutrients have required properties
+      result.nutrients = result.nutrients.map((nutrient: any) => {
+        if (!nutrient || typeof nutrient !== 'object') {
+          return { name: 'Unknown', value: 0, unit: 'g', isHighlight: false };
+        }
+        
+        return {
+          name: nutrient.name || 'Unknown',
+          value: nutrient.value !== undefined ? nutrient.value : 0,
+          unit: nutrient.unit || 'g',
+          isHighlight: !!nutrient.isHighlight
+        };
+      });
     }
   } else if (typeof result.nutrients === 'object') {
     // Convert object format to array format for frontend compatibility
+    console.warn('Normalizing nutrients object to array');
     const nutrientsArray = [];
     const nutrients = result.nutrients;
     
@@ -182,7 +202,7 @@ export function normalizeAnalysisResult(data: any): any {
     if ('calories' in nutrients) {
       nutrientsArray.push({
         name: 'Calories',
-        value: nutrients.calories || 0,
+        value: nutrients.calories ?? 0,
         unit: 'kcal',
         isHighlight: true
       });
@@ -199,7 +219,7 @@ export function normalizeAnalysisResult(data: any): any {
     if ('protein' in nutrients) {
       nutrientsArray.push({
         name: 'Protein',
-        value: nutrients.protein || 0,
+        value: nutrients.protein ?? 0,
         unit: 'g',
         isHighlight: true
       });
@@ -216,7 +236,7 @@ export function normalizeAnalysisResult(data: any): any {
     if ('carbs' in nutrients) {
       nutrientsArray.push({
         name: 'Carbohydrates',
-        value: nutrients.carbs || 0,
+        value: nutrients.carbs ?? 0,
         unit: 'g',
         isHighlight: true
       });
@@ -233,7 +253,7 @@ export function normalizeAnalysisResult(data: any): any {
     if ('fat' in nutrients) {
       nutrientsArray.push({
         name: 'Fat',
-        value: nutrients.fat || 0,
+        value: nutrients.fat ?? 0,
         unit: 'g',
         isHighlight: true
       });
@@ -269,11 +289,27 @@ export function normalizeAnalysisResult(data: any): any {
   
   // Ensure detailedIngredients array exists
   if (!result.detailedIngredients || !Array.isArray(result.detailedIngredients)) {
+    console.warn('Normalizing missing or invalid detailedIngredients');
     result.detailedIngredients = [];
+  } else {
+    // Normalize each ingredient to ensure it has all required properties
+    result.detailedIngredients = result.detailedIngredients.map((ingredient: any) => {
+      if (!ingredient || typeof ingredient !== 'object') {
+        return { name: 'Unknown', category: 'unknown', confidence: 0, confidenceEmoji: '🔴' };
+      }
+      
+      return {
+        name: ingredient.name || 'Unknown',
+        category: ingredient.category || 'unknown',
+        confidence: typeof ingredient.confidence === 'number' ? ingredient.confidence : 0,
+        confidenceEmoji: ingredient.confidenceEmoji || '🔴'
+      };
+    });
   }
   
   // Ensure goalScore structure exists
   if (!result.goalScore || typeof result.goalScore !== 'object') {
+    console.warn('Normalizing missing or invalid goalScore');
     result.goalScore = { overall: 5, specific: {} };
   } else if (typeof result.goalScore === 'number') {
     const scoreValue = result.goalScore;
@@ -283,19 +319,23 @@ export function normalizeAnalysisResult(data: any): any {
   // Convert goalScore.overall to number if it's a string that can be parsed
   if (typeof result.goalScore.overall === 'string' && !isNaN(parseFloat(result.goalScore.overall))) {
     result.goalScore.overall = parseFloat(result.goalScore.overall);
-  } else if (typeof result.goalScore.overall !== 'number') {
+  } else if (typeof result.goalScore.overall !== 'number' || isNaN(result.goalScore.overall)) {
+    console.warn('Normalizing invalid goalScore.overall', result.goalScore.overall);
     result.goalScore.overall = 5; // Default to neutral 5 for invalid scores
   }
   
   // Ensure goalScore.specific exists and is an object
   if (!result.goalScore.specific || typeof result.goalScore.specific !== 'object') {
+    console.warn('Normalizing missing or invalid goalScore.specific');
     result.goalScore.specific = {};
   }
   
   // Ensure goalName is a string if present
   if (result.goalName !== undefined && typeof result.goalName !== 'string') {
+    console.warn('Normalizing invalid goalName', result.goalName);
     result.goalName = 'Health Impact';
   } else if (result.goalName === undefined) {
+    console.warn('Normalizing missing goalName');
     result.goalName = 'Health Impact';
   }
   
@@ -311,17 +351,26 @@ export function normalizeAnalysisResult(data: any): any {
   
   // Ensure positiveFoodFactors and negativeFoodFactors arrays exist
   if (!Array.isArray(result.positiveFoodFactors)) {
+    console.warn('Normalizing missing or invalid positiveFoodFactors');
     result.positiveFoodFactors = [];
   }
   
   if (!Array.isArray(result.negativeFoodFactors)) {
+    console.warn('Normalizing missing or invalid negativeFoodFactors');
     result.negativeFoodFactors = [];
   }
   
   // Mark as fallback if fields had to be normalized significantly
   if (!data.description || ((!data.nutrients || (Array.isArray(data.nutrients) && data.nutrients.length === 0)))) {
+    console.warn('Setting fallback=true due to missing critical data');
     result.fallback = true;
     result.lowConfidence = true;
+    
+    // Add meta object for easier detection
+    result._meta = {
+      fallback: true,
+      reason: 'Missing critical data'
+    };
   }
   
   // Add debug log for normalized results

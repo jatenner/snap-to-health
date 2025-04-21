@@ -425,17 +425,16 @@ const getScoreExplanation = (score: number, goalName?: string) => {
 };
 
 const getGoalIcon = (goalName?: string) => {
-  if (!goalName) return "🌿";
-  
-  const goal = goalName.toLowerCase();
-  if (goal.includes('sleep')) return "🌙";
-  if (goal.includes('weight')) return "⚖️";
-  if (goal.includes('muscle')) return "💪";
-  if (goal.includes('energy')) return "⚡";
-  if (goal.includes('heart')) return "❤️";
-  if (goal.includes('recovery')) return "🔄";
-  if (goal.includes('mind-body')) return "☯️";
-  return "🌿";
+  const name = (goalName || '').toLowerCase();
+  if (name.includes('sleep')) return '💤';
+  if (name.includes('weight')) return '⚖️';
+  if (name.includes('muscle')) return '💪';
+  if (name.includes('energy')) return '⚡';
+  if (name.includes('heart')) return '❤️';
+  if (name.includes('recovery')) return '🔄';
+  if (name.includes('run')) return '🏃';
+  if (name.includes('performance')) return '🏆';
+  return '🎯';
 };
 
 // Helper function to get confidence emoji based on confidence score
@@ -573,8 +572,13 @@ const AnalysisCard: React.FC<AnalysisCardProps> = ({ result, previewUrl, isLoadi
     }
   }
   
-  const finalGoalScore = goalScoreValue !== undefined ? goalScoreValue : (!displaySleepScore && sleepScore) || calculateScore(nutrients, goalName);
-  const finalSleepScore = sleepScore || calculateScore(nutrients, 'sleep');
+  const finalGoalScore = typeof goalScoreValue === 'number' && !isNaN(goalScoreValue) ? 
+    goalScoreValue : 
+    (!displaySleepScore && typeof sleepScore === 'number') ? sleepScore : 5;
+    
+  const finalSleepScore = typeof sleepScore === 'number' && !isNaN(sleepScore) ? 
+    sleepScore : 
+    calculateScore(Array.isArray(nutrients) ? nutrients : [], 'sleep');
   
   // Animate the score progress bars
   useEffect(() => {
@@ -591,8 +595,10 @@ const AnalysisCard: React.FC<AnalysisCardProps> = ({ result, previewUrl, isLoadi
   
   // Generate score color based on value
   const getScoreColor = (value: number) => {
-    if (value >= 8) return 'bg-green-500';
-    if (value >= 5) return 'bg-yellow-400';
+    // Ensure value is a valid number
+    const scoreValue = typeof value === 'number' && !isNaN(value) ? value : 5;
+    if (scoreValue >= 8) return 'bg-green-500';
+    if (scoreValue >= 5) return 'bg-yellow-400';
     return 'bg-red-500';
   };
 
@@ -706,9 +712,9 @@ const AnalysisCard: React.FC<AnalysisCardProps> = ({ result, previewUrl, isLoadi
                     {macros.map((nutrient, index) => (
                       <span 
                         key={index}
-                        className={`px-2 py-1 rounded-full text-xs ${getNutrientBadgeStyle(nutrient, rawGoal)}`}
+                        className={`px-2 py-1 rounded-full text-xs ${getNutrientBadgeStyle(nutrient, rawGoal || '')}`}
                       >
-                        {nutrient.name}: {nutrient.value}{nutrient.unit}
+                        {nutrient?.name || 'Nutrient'}: {nutrient?.value || 0}{nutrient?.unit || 'g'}
                       </span>
                     ))}
                   </div>
@@ -723,9 +729,9 @@ const AnalysisCard: React.FC<AnalysisCardProps> = ({ result, previewUrl, isLoadi
                     {beneficialMicros.map((nutrient, index) => (
                       <span 
                         key={index}
-                        className={`px-2 py-1 rounded-full text-xs ${getNutrientBadgeStyle(nutrient, rawGoal)}`}
+                        className={`px-2 py-1 rounded-full text-xs ${getNutrientBadgeStyle(nutrient, rawGoal || '')}`}
                       >
-                        {nutrient.name}: {nutrient.value}{nutrient.unit}
+                        {nutrient?.name || 'Nutrient'}: {nutrient?.value || 0}{nutrient?.unit || 'g'}
                       </span>
                     ))}
                   </div>
@@ -740,9 +746,9 @@ const AnalysisCard: React.FC<AnalysisCardProps> = ({ result, previewUrl, isLoadi
                     {others.map((nutrient, index) => (
                       <span 
                         key={index}
-                        className={`px-2 py-1 rounded-full text-xs ${getNutrientBadgeStyle(nutrient, rawGoal)}`}
+                        className={`px-2 py-1 rounded-full text-xs ${getNutrientBadgeStyle(nutrient, rawGoal || '')}`}
                       >
-                        {nutrient.name}: {nutrient.value}{nutrient.unit}
+                        {nutrient?.name || 'Nutrient'}: {nutrient?.value || 0}{nutrient?.unit || 'g'}
                       </span>
                     ))}
                   </div>

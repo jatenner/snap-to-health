@@ -507,13 +507,16 @@ export default function MealAnalysisPage() {
     scoreExplanation = 'This meal has been analyzed for its nutritional content.',
     positiveFoodFactors = [],
     negativeFoodFactors = [],
-    rawGoal = 'Improve overall health'
-  } = analysisResult;
+    rawGoal = 'Improve overall health',
+    detailedIngredients = [],
+    fallback = false,
+    lowConfidence = false
+  } = analysisResult || {}; // Handle case where analysisResult is null or undefined
 
   // Group nutrients into categories - with validation to prevent errors
   const macros = Array.isArray(nutrients) ? nutrients.filter(n => 
-    ['protein', 'carbs', 'fat', 'calories'].some(
-      macro => n && n.name && n.name.toLowerCase().includes(macro)
+    n && n.name && ['protein', 'carbs', 'fat', 'calories'].some(
+      macro => n.name.toLowerCase().includes(macro)
     )
   ) : [];
   
@@ -531,14 +534,16 @@ export default function MealAnalysisPage() {
 
   // Generate score color based on value
   const getScoreColor = (value: number) => {
-    if (value >= 8) return 'bg-green-500';
-    if (value >= 5) return 'bg-yellow-400';
+    // Ensure value is a valid number
+    const scoreValue = Number.isFinite(value) ? value : 5;
+    if (scoreValue >= 8) return 'bg-green-500';
+    if (scoreValue >= 5) return 'bg-yellow-400';
     return 'bg-red-500';
   };
 
   // Get goal icon based on goal name
-  const getGoalIcon = (goalName: string) => {
-    const name = goalName.toLowerCase();
+  const getGoalIcon = (goalName: string = '') => {
+    const name = (goalName || '').toLowerCase();
     if (name.includes('sleep')) return '💤';
     if (name.includes('weight')) return '⚖️';
     if (name.includes('muscle')) return '💪';
@@ -552,10 +557,12 @@ export default function MealAnalysisPage() {
 
   // Get score label
   const getScoreLabel = (score: number) => {
-    if (score >= 9) return "Excellent";
-    if (score >= 7) return "Very Good";
-    if (score >= 5) return "Good";
-    if (score >= 3) return "Fair";
+    // Ensure score is a valid number
+    const safeScore = Number.isFinite(score) ? score : 5;
+    if (safeScore >= 9) return "Excellent";
+    if (safeScore >= 7) return "Very Good";
+    if (safeScore >= 5) return "Good";
+    if (safeScore >= 3) return "Fair";
     return "Needs Improvement";
   };
 
@@ -592,20 +599,20 @@ export default function MealAnalysisPage() {
 
         <SaveStatusBanner 
           mealSaved={mealSaved} 
-          fallback={Boolean(analysisResult.fallback)}
-          lowConfidence={Boolean(analysisResult.lowConfidence)}
+          fallback={Boolean(analysisResult?.fallback)}
+          lowConfidence={Boolean(analysisResult?.lowConfidence)}
           saveError={saveError}
           userId={currentUser?.uid || null}
         />
         
         {/* Show fallback alert when _meta.fallback is true, but we have valid data for display */}
-        <FallbackAlert show={Boolean(analysisResult._meta?.fallback)} />
+        <FallbackAlert show={Boolean(analysisResult?._meta?.fallback)} />
         
         {/* Show fallback warning banner for fallback results */}
-        <FallbackWarningBanner fallback={analysisResult.fallback} />
+        <FallbackWarningBanner fallback={fallback} />
         
         {/* Show model warning banner for fallback models */}
-        <ModelWarningBanner modelInfo={analysisResult.modelInfo} />
+        <ModelWarningBanner modelInfo={analysisResult?.modelInfo} />
 
         {/* Main analysis section */}
         <div className="bg-white rounded-lg shadow-md overflow-hidden mb-6">
@@ -627,11 +634,11 @@ export default function MealAnalysisPage() {
                     <div 
                       className={`w-12 h-12 rounded-full flex items-center justify-center text-white text-xl font-bold ${getScoreColor(goalScore)}`}
                     >
-                      {goalScore}
+                      {typeof goalScore === 'number' ? goalScore : 5}
                     </div>
                     <div className="ml-2">
                       <span className="text-xs font-medium uppercase text-gray-500">Score</span>
-                      <p className="text-sm font-medium">{getScoreLabel(goalScore)}</p>
+                      <p className="text-sm font-medium">{getScoreLabel(typeof goalScore === 'number' ? goalScore : 5)}</p>
                     </div>
                   </div>
                 </div>
@@ -645,31 +652,31 @@ export default function MealAnalysisPage() {
               <div className="flex items-center mb-2">
                 <span className="text-3xl mr-3">{getGoalIcon(goalName)}</span>
                 <div>
-                  <h1 className="text-2xl font-bold text-navy">{goalName} Analysis</h1>
-                  <p className="text-slate text-sm">Goal: {rawGoal}</p>
+                  <h1 className="text-2xl font-bold text-navy">{goalName || 'Health'} Analysis</h1>
+                  <p className="text-slate text-sm">Goal: {rawGoal || 'Improve overall health'}</p>
                 </div>
               </div>
             </div>
 
             {/* Score Card with Score Explanation */}
             <div className="mb-8 bg-white rounded-xl border border-slate/20 shadow-sm p-5">
-              <h2 className="font-bold text-navy text-lg mb-3">Goal Impact Score: {goalScore}/10</h2>
+              <h2 className="font-bold text-navy text-lg mb-3">Goal Impact Score: {typeof goalScore === 'number' ? goalScore : 5}/10</h2>
               
               <div className="w-full bg-gray-200 rounded-full h-3 mb-3">
                 <div 
-                  className={`h-3 rounded-full transition-all duration-1000 ease-out ${getScoreColor(goalScore)}`}
-                  style={{ width: animationComplete ? `${goalScore * 10}%` : '0%' }}
+                  className={`h-3 rounded-full transition-all duration-1000 ease-out ${getScoreColor(typeof goalScore === 'number' ? goalScore : 5)}`}
+                  style={{ width: animationComplete ? `${(typeof goalScore === 'number' ? goalScore : 5) * 10}%` : '0%' }}
                 ></div>
               </div>
               
-              <p className="text-slate mb-4">{scoreExplanation}</p>
+              <p className="text-slate mb-4">{scoreExplanation || 'This meal has been analyzed based on your health goals.'}</p>
               
               {/* Meal Description */}
-              <p className="text-navy text-sm italic border-t border-slate/10 pt-3 mt-2">{description}</p>
+              <p className="text-navy text-sm italic border-t border-slate/10 pt-3 mt-2">{description || 'Meal analysis completed.'}</p>
             </div>
 
             {/* How It Helps Your Goal Section */}
-            {positiveFoodFactors.length > 0 && (
+            {Array.isArray(positiveFoodFactors) && positiveFoodFactors.length > 0 && (
               <div className="mb-6">
                 <h2 className="font-bold text-navy text-lg mb-3 flex items-center">
                   <span className="text-green-600 mr-2">✓</span>
@@ -689,7 +696,7 @@ export default function MealAnalysisPage() {
             )}
 
             {/* What May Hold You Back Section */}
-            {negativeFoodFactors.length > 0 && (
+            {Array.isArray(negativeFoodFactors) && negativeFoodFactors.length > 0 && (
               <div className="mb-6">
                 <h2 className="font-bold text-navy text-lg mb-3 flex items-center">
                   <span className="text-amber-600 mr-2">⚠️</span>
@@ -709,7 +716,7 @@ export default function MealAnalysisPage() {
             )}
 
             {/* Expert Suggestions Section */}
-            {suggestions && suggestions.length > 0 && (
+            {Array.isArray(suggestions) && suggestions.length > 0 && (
               <div className="mb-6">
                 <h2 className="font-bold text-navy text-lg mb-3 flex items-center">
                   <span className="text-indigo mr-2">💡</span>
@@ -745,11 +752,20 @@ export default function MealAnalysisPage() {
                         key={`macro-${index}`}
                         className="bg-gray-50 rounded-lg p-3 transition-all hover:shadow-sm"
                       >
-                        <p className="text-xs font-medium text-slate uppercase">{nutrient.name}</p>
-                        <p className="text-lg font-bold text-navy">{nutrient.value}<span className="text-xs ml-1">{nutrient.unit}</span></p>
+                        <p className="text-xs font-medium text-slate uppercase">{nutrient?.name || 'Nutrient'}</p>
+                        <p className="text-lg font-bold text-navy">{nutrient?.value || 0}<span className="text-xs ml-1">{nutrient?.unit || 'g'}</span></p>
                       </div>
                     ))}
                   </div>
+                </div>
+              )}
+              
+              {/* If no nutrients are available at all, show a message */}
+              {!macros.length && !micronutrients.length && !otherNutrients.length && (
+                <div className="bg-white border border-slate/20 rounded-xl p-4 mb-4">
+                  <p className="text-center text-slate py-4">
+                    We couldn't get a full analysis of this image, but here's what we could extract.
+                  </p>
                 </div>
               )}
               
@@ -766,8 +782,8 @@ export default function MealAnalysisPage() {
                         key={`micro-${index}`}
                         className="bg-green-50 rounded-lg p-3 border border-green-100"
                       >
-                        <p className="text-xs font-medium text-slate uppercase">{nutrient.name}</p>
-                        <p className="text-md font-bold text-navy">{nutrient.value}<span className="text-xs ml-1">{nutrient.unit}</span></p>
+                        <p className="text-xs font-medium text-slate uppercase">{nutrient?.name || 'Nutrient'}</p>
+                        <p className="text-md font-bold text-navy">{nutrient?.value || 0}<span className="text-xs ml-1">{nutrient?.unit || 'g'}</span></p>
                       </div>
                     ))}
                   </div>
@@ -781,8 +797,9 @@ export default function MealAnalysisPage() {
                   <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
                     {otherNutrients.map((nutrient, index) => {
                       // Determine if this is a negative nutrient (like sugar, sodium, etc.)
+                      const nutrientName = nutrient?.name?.toLowerCase() || '';
                       const isNegative = ['sugar', 'sodium', 'caffeine', 'saturated', 'cholesterol'].some(
-                        neg => nutrient.name.toLowerCase().includes(neg)
+                        neg => nutrientName.includes(neg)
                       );
                       
                       return (
@@ -791,10 +808,10 @@ export default function MealAnalysisPage() {
                           className={`rounded-lg p-3 ${isNegative ? 'bg-amber-50 border border-amber-100' : 'bg-gray-50 border border-gray-100'}`}
                         >
                           <div className="flex justify-between items-center">
-                            <p className="text-xs font-medium text-slate uppercase">{nutrient.name}</p>
+                            <p className="text-xs font-medium text-slate uppercase">{nutrient?.name || 'Nutrient'}</p>
                             {isNegative && <span className="w-2 h-2 rounded-full bg-amber-500"></span>}
                           </div>
-                          <p className="text-md font-bold text-navy">{nutrient.value}<span className="text-xs ml-1">{nutrient.unit}</span></p>
+                          <p className="text-md font-bold text-navy">{nutrient?.value || 0}<span className="text-xs ml-1">{nutrient?.unit || 'g'}</span></p>
                         </div>
                       );
                     })}
@@ -804,14 +821,33 @@ export default function MealAnalysisPage() {
             </div>
             
             {/* Ingredients List */}
-            {analysisResult?.detailedIngredients && analysisResult.detailedIngredients.length > 0 && (
+            {Array.isArray(detailedIngredients) && detailedIngredients.length > 0 && (
               <div className="mb-6">
                 <h2 className="font-bold text-navy text-lg mb-3 flex items-center">
                   <span className="text-teal-600 mr-2">🧪</span>
                   Identified Ingredients
                 </h2>
                 <div className="bg-white border border-slate/20 rounded-xl p-4">
-                  <IngredientsList ingredients={analysisResult.detailedIngredients} />
+                  <IngredientsList ingredients={detailedIngredients} />
+                </div>
+              </div>
+            )}
+
+            {/* Fallback message for incomplete analysis */}
+            {(fallback || lowConfidence) && (
+              <div className="mb-6 p-4 bg-amber-50 border border-amber-200 rounded-lg">
+                <div className="flex items-start">
+                  <div className="shrink-0 pt-0.5">
+                    <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 text-amber-600" viewBox="0 0 20 20" fill="currentColor">
+                      <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clipRule="evenodd" />
+                    </svg>
+                  </div>
+                  <div className="ml-3">
+                    <h3 className="text-sm font-medium text-amber-800">Limited Analysis Available</h3>
+                    <p className="mt-1 text-sm text-amber-700">
+                      We couldn't get a full analysis of this image, but here's what we could extract.
+                    </p>
+                  </div>
                 </div>
               </div>
             )}
