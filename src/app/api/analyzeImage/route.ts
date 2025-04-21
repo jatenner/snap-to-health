@@ -905,9 +905,9 @@ Even with 20% confidence, provide your best assessment of what food items are li
         'OpenAI-Beta': 'assistants=v1'  // Use latest API features
       };
       
-      // Improved JSON response format with detailed ingredients and confidence scores
+      // Generate request payload with the appropriate system prompt based on attempt
       const requestPayload = {
-        model: "gpt-4o",  // Using GPT-4o for faster response
+        model: "gpt-4o",  // Updated from gpt-4-vision-preview to gpt-4o
         messages: [
           {
             role: "user",
@@ -1038,9 +1038,73 @@ Do not return any explanation or text outside the JSON block. Your entire respon
         const analysisText = responseData.choices[0].message.content;
         
         try {
-          // Parse the JSON response
-          const analysisJson = JSON.parse(analysisText.trim());
-          console.log(`[${requestId}] Analysis JSON parsed successfully`);
+          // First, try parsing the response content
+          let analysisJson;
+          
+          // Check if it's already a JSON object - for compatibility with different API responses
+          if (typeof analysisText === 'object' && analysisText !== null) {
+            analysisJson = analysisText;
+          } else {
+            // Otherwise try to parse it as a JSON string
+            try {
+              analysisJson = JSON.parse(analysisText.trim());
+            } catch (parseError) {
+              console.error(`[${requestId}] Failed to parse JSON from OpenAI response:`, parseError);
+              console.error(`[${requestId}] Raw response text: ${analysisText.substring(0, 200)}...`);
+              
+              // Try to extract JSON using regex if parsing fails
+              const jsonMatch = analysisText.match(/({[\s\S]*})/);
+              if (jsonMatch && jsonMatch[0]) {
+                try {
+                  analysisJson = JSON.parse(jsonMatch[0]);
+                  console.log(`[${requestId}] Extracted JSON using regex on attempt ${attempt}`);
+                } catch (extractError) {
+                  console.error(`[${requestId}] Failed to extract JSON with regex (attempt ${attempt}):`, extractError);
+                  // If both parse attempts fail, create a fallback JSON
+                  analysisJson = {
+                    description: analysisText.substring(0, 200),
+                    detailedIngredients: [],
+                    confidence: 2,
+                    basicNutrition: {
+                      calories: "0",
+                      protein: "0g",
+                      carbs: "0g",
+                      fat: "0g"
+                    },
+                    goalImpactScore: 5,
+                    feedback: ["Could not parse structured data from the model response"],
+                    suggestions: ["Try with a clearer image"],
+                    imageChallenges: ["Response parsing failed"]
+                  };
+                  
+                  // Add a notice about the text response
+                  analysisJson.rawTextResponse = analysisText;
+                  console.log(`[${requestId}] Created fallback JSON object from text response`);
+                }
+              } else {
+                // If regex doesn't work either, create a simple fallback
+                analysisJson = {
+                  description: analysisText.substring(0, 200),
+                  detailedIngredients: [],
+                  confidence: 2,
+                  basicNutrition: {
+                    calories: "0",
+                    protein: "0g",
+                    carbs: "0g",
+                    fat: "0g"
+                  },
+                  goalImpactScore: 5,
+                  feedback: ["Could not parse structured data from the model response"],
+                  suggestions: ["Try with a clearer image"],
+                  imageChallenges: ["Response parsing failed"],
+                  rawTextResponse: analysisText
+                };
+                console.log(`[${requestId}] Created fallback JSON object from text response`);
+              }
+            }
+          }
+          
+          console.log(`[${requestId}] Analysis JSON processed successfully`);
           
           // Store the raw result in reasoningLogs for debugging
           reasoningLogs.push({
@@ -1120,14 +1184,14 @@ Do not return any explanation or text outside the JSON block. Your entire respon
           attempt++;
           continue;
         } else {
-          throw new Error(`Failed to complete analysis after ${attempt} attempts: ${lastError.message}`);
+          throw new Error(`Failed to complete analysis after ${attempt} attempts: ${lastError?.message || 'Unknown error'}`);
         }
       }
     } catch (attemptError) {
       console.error(`[${requestId}] Error during analysis attempt ${attempt}:`, attemptError);
       
       // Store the error and try again if it's our first attempt
-      lastError = attemptError;
+      lastError = attemptError instanceof Error ? attemptError : new Error(String(attemptError));
       if (attempt === 1) {
         attempt++;
         continue;
@@ -1231,7 +1295,7 @@ function convertVisionResultToAnalysisResult(
     },
     goalName: formatGoalName(healthGoal),
     modelInfo: {
-      model: "gpt-4-vision",
+      model: "gpt-4o",
       usedFallback: false,
       ocrExtracted: false
     },
@@ -1587,7 +1651,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
               imageUrl: null,
               diagnostics: {
                 visionConfidence: visionResult.confidence,
-                modelUsed: "gpt-4-vision",
+                modelUsed: "gpt-4o",
                 processingTimeMs: elapsedTime
               }
             };
