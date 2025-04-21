@@ -1,0 +1,31 @@
+{
+  "total": 2,
+  "success": 2,
+  "failed": 0,
+  "details": [
+    {
+      "file": "test-image-2.png",
+      "elapsedTime": 0.036,
+      "success": true,
+      "status": 200,
+      "httpStatus": 200,
+      "apiSuccess": true,
+      "fallback": false,
+      "extractedText": null,
+      "analysisResult": null,
+      "error": null
+    },
+    {
+      "file": "test-image.png",
+      "elapsedTime": 0.007,
+      "success": true,
+      "status": 200,
+      "httpStatus": 200,
+      "apiSuccess": true,
+      "fallback": false,
+      "extractedText": null,
+      "analysisResult": null,
+      "error": null
+    }
+  ]
+}
