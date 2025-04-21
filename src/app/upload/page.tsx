@@ -359,121 +359,54 @@ export default function UploadPage() {
         return;
       }
       
-      // Check if response is successful or contains valid data
-      if (!response.data || response.data.success === false) {
-        // Check if this is a fallback response for unclear images
-        if (response.data?.fallback === true) {
-          console.log('Received fallback response:', response.data.message || 'unknown reason');
-          
-          // Cancel any pending toast to avoid confusion
-          toast.dismiss(analyzeToast);
-          
-          // Structured logging for debugging
-          console.warn("📊 FALLBACK DETECTED:", {
-            message: response.data.message,
-            success: response.data.success,
-            fallback: response.data.fallback,
-            mealSaved: response.data.mealSaved || false,
-            error: response.data.error || 'No specific error message',
-            missingFields: response.data.payload?.missingFields || ['unknown'],
-            requestId: response.data.payload?.requestId || 'unknown',
-            trigger: response.data.payload?.trigger || 'unknown'
-          });
-          
-          // Show prominent error toast to user with more detailed information
-          toast.error(
-            response.data.message || "AI could not analyze this image. Try again with better lighting or clearer food items.", 
-            { duration: 7000, position: 'top-center' }
-          );
-          
-          // Store fallback data for display on meal-analysis page
-          const fallbackResult = {
-            ...response.data,
-            fallback: true,
-            failureReason: response.data.message || response.data.error || "Unable to analyze image properly",
-            timestamp: new Date().toISOString()
-          };
-          
-          sessionStorage.setItem('fallbackResult', JSON.stringify(fallbackResult));
-          
-          // Show helpful message to the user with specific details if available
-          let fallbackMessage = "We couldn't clearly identify your meal.";
-          
-          if (response.data.payload?.missingFields?.length > 0) {
-            fallbackMessage = `We couldn't properly analyze your meal: missing information (${
-              response.data.payload.missingFields.slice(0, 2).join(', ')
-            }${response.data.payload.missingFields.length > 2 ? '...' : ''}).`;
-          } else if (response.data.error) {
-            fallbackMessage = response.data.error;
-          }
-          
-          // Add helpful tips
-          fallbackMessage += " Try a photo with better lighting and clearer food separation.";
-          
-          toast.error(fallbackMessage, { duration: 5000 });
-          setError(fallbackMessage);
-          setIsAnalyzing(false);
-          setAnalysisStage('fallback');
-          
-          // Small delay before redirecting to meal-analysis page
-          setTimeout(() => {
-            // Redirect to meal-analysis page where the ErrorCard will be displayed
-            router.push('/meal-analysis');
-          }, 500);
-          
-          return; // do not proceed to any save attempt
-        }
+      // Handle API responses that include fallback data
+      if (response?.data?.fallback) {
+        console.log('Fallback result from server:', response.data);
         
-        // Handle low confidence results differently from errors
-        if (response.data?.lowConfidence) {
-          console.log('Low confidence result:', response.data);
-          
-          toast.custom((t) => (
-            <div className={`${t.visible ? 'animate-enter' : 'animate-leave'} max-w-md w-full bg-white shadow-lg rounded-lg pointer-events-auto flex ring-1 ring-black ring-opacity-5`}>
-              <div className="flex-1 w-0 p-4">
-                <div className="flex items-start">
-                  <div className="flex-shrink-0 pt-0.5">
-                    <svg xmlns="http://www.w3.org/2000/svg" className="h-10 w-10 text-yellow-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
-                    </svg>
-                  </div>
-                  <div className="ml-3 flex-1">
-                    <p className="text-sm font-medium text-gray-900">
-                      Low Confidence Analysis
-                    </p>
-                    <p className="mt-1 text-sm text-gray-500">
-                      We've done our best with this image, but results may be limited. {response.data.message}
-                    </p>
-                  </div>
+        toast.custom((t) => (
+          <div className={`${t.visible ? 'animate-enter' : 'animate-leave'} max-w-md w-full bg-white shadow-lg rounded-lg pointer-events-auto flex ring-1 ring-black ring-opacity-5`}>
+            <div className="flex-1 w-0 p-4">
+              <div className="flex items-start">
+                <div className="flex-shrink-0 pt-0.5">
+                  <svg xmlns="http://www.w3.org/2000/svg" className="h-10 w-10 text-yellow-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                  </svg>
+                </div>
+                <div className="ml-3 flex-1">
+                  <p className="text-sm font-medium text-gray-900">
+                    Limited Analysis Results
+                  </p>
+                  <p className="mt-1 text-sm text-gray-500">
+                    We'll show you our best analysis with the available information.
+                  </p>
                 </div>
               </div>
-              <div className="flex border-l border-gray-200">
-                <button
-                  onClick={() => toast.dismiss(t.id)}
-                  className="w-full border border-transparent rounded-none rounded-r-lg p-4 flex items-center justify-center text-sm font-medium text-indigo-600 hover:text-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                >
-                  Close
-                </button>
-              </div>
             </div>
-          ), { duration: 6000 });
-          
-          // Continue with the low confidence result, but mark it as such
-          setAnalysisResult({
-            ...response.data,
-            lowConfidence: true
-          });
-        } else {
-          // General error handling
-          const errorMessage = response.data?.message || response.data?.error || 'Analysis failed. Please try again.';
-          console.error('Analysis failed:', errorMessage, response.data);
-          
-          toast.error(errorMessage, { id: analyzeToast });
-          setError(errorMessage);
-          setIsAnalyzing(false);
-          setAnalysisStage('error');
-          return;
-        }
+            <div className="flex border-l border-gray-200">
+              <button
+                onClick={() => toast.dismiss(t.id)}
+                className="w-full border border-transparent rounded-none rounded-r-lg p-4 flex items-center justify-center text-sm font-medium text-indigo-600 hover:text-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+              >
+                Continue
+              </button>
+            </div>
+          </div>
+        ), { duration: 4000 });
+        
+        // Continue with fallback results - don't treat as error
+        setAnalysisResult(response.data);
+      } 
+      // Check for error response (non-fallback)
+      else if (response.data?.error || !response.data?.success) {
+        // General error handling
+        const errorMessage = response.data?.message || response.data?.error || 'Analysis failed. Please try again.';
+        console.error('Analysis failed:', errorMessage, response.data);
+        
+        toast.error(errorMessage, { id: analyzeToast });
+        setError(errorMessage);
+        setIsAnalyzing(false);
+        setAnalysisStage('error');
+        return;
       } else {
         console.log('Analysis completed successfully', response.data);
         // Log the upload ID for debugging

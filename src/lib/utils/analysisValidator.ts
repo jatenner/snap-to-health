@@ -27,6 +27,9 @@ export function isValidAnalysis(data: any): boolean {
       console.warn('Analysis validation failed: nutrients array is empty', data);
       return false;
     }
+    
+    // Don't validate nutrient values strictly - allow 0, empty strings, etc.
+    // This enables fallback results to pass validation
   } else if (typeof data.nutrients === 'object' && data.nutrients !== null) {
     // New format - nutrients as object with specific fields
     const requiredFields = ['calories', 'protein', 'carbs', 'fat'];
@@ -59,20 +62,18 @@ export function isValidAnalysis(data: any): boolean {
     return false;
   }
 
-  // Check for specific number fields if they exist
-  if (data.goalScore !== undefined && typeof data.goalScore !== 'number' && 
-      !(typeof data.goalScore === 'string' && !isNaN(parseFloat(data.goalScore)))) {
-    console.warn('Analysis validation failed: goalScore is not a number or numeric string', data);
-    return false;
-  }
-
-  if (data.sleepScore !== undefined && typeof data.sleepScore !== 'number' && 
-      !(typeof data.sleepScore === 'string' && !isNaN(parseFloat(data.sleepScore)))) {
-    console.warn('Analysis validation failed: sleepScore is not a number or numeric string', data);
-    return false;
+  // Less strict validation for numeric fields - accept any value that can be interpreted
+  if (data.goalScore !== undefined) {
+    if (typeof data.goalScore !== 'number' && 
+        typeof data.goalScore !== 'string' && 
+        typeof data.goalScore !== 'object') {
+      console.warn('Analysis validation failed: goalScore has invalid type', typeof data.goalScore);
+      // Don't fail validation for this - provide a default in normalizeAnalysisResult instead
+    }
   }
 
   // All validation checks passed
+  console.log('Analysis validation passed for result:', data.fallback ? 'FALLBACK RESULT' : 'NORMAL RESULT');
   return true;
 }
 

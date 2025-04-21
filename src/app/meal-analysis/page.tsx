@@ -229,6 +229,30 @@ const ModelWarningBanner = ({ modelInfo }: { modelInfo?: AnalysisResult['modelIn
   );
 };
 
+// FallbackWarningBanner component to show when displaying fallback results
+const FallbackWarningBanner = ({ fallback }: { fallback?: boolean }) => {
+  if (!fallback) return null;
+  
+  return (
+    <div className="mb-4 p-3 bg-amber-50 border border-amber-200 rounded-md">
+      <div className="flex items-start">
+        <div className="flex-shrink-0 pt-0.5">
+          <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 text-amber-500" viewBox="0 0 20 20" fill="currentColor">
+            <path fillRule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
+          </svg>
+        </div>
+        <div className="ml-3">
+          <h3 className="text-sm font-medium text-amber-800">Fallback Analysis</h3>
+          <div className="mt-1 text-xs text-amber-700">
+            <p>We couldn't analyze this meal in detail. These are default values and generic suggestions.</p>
+            <p className="mt-1">For better results, try uploading a clearer photo with good lighting.</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
 export default function MealAnalysisPage() {
   const [analysisResult, setAnalysisResult] = useState<AnalysisResult | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
@@ -302,20 +326,8 @@ export default function MealAnalysisPage() {
           throw new Error('Invalid analysis data: failed to parse JSON');
         }
         
-        // Check if the result indicates a fallback (now set reliably by the backend guard)
-        if (parsedResult.fallback === true) {
-          console.warn("Fallback response detected in frontend:", parsedResult);
-          setFallbackInfo(parsedResult); // Store the fallback info
-          setError("Analysis Fallback"); // Set generic error flag to trigger error UI
-          setLoading(false);
-          setLoadingStage('error');
-          // Clear session storage for next attempt
-          sessionStorage.removeItem('analysisResult');
-          sessionStorage.removeItem('previewUrl');
-          return; // Stop processing
-        }
-        
-        // If not fallback, validate the main structure needed for display
+        // Check if the result has basic structure needed for display
+        // We now accept fallback results as long as they have the minimum required fields
         if (!isValidAnalysis(parsedResult)) {
           console.warn("Invalid analysis data (structure validation failed):", parsedResult);
           setError("Received incomplete analysis data.");
@@ -579,7 +591,10 @@ export default function MealAnalysisPage() {
           userId={currentUser?.uid || null}
         />
         
-        {/* Add the model warning banner */}
+        {/* Show fallback warning banner for fallback results */}
+        <FallbackWarningBanner fallback={analysisResult.fallback} />
+        
+        {/* Show model warning banner for fallback models */}
         <ModelWarningBanner modelInfo={analysisResult.modelInfo} />
 
         {/* Main analysis section */}
