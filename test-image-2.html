@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Nutrition Label OCR Test</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 40px;
+            background-color: white;
+        }
+        .nutrition-label {
+            width: 280px;
+            border: 1px solid black;
+            padding: 10px;
+            font-size: 12px;
+            background-color: white;
+        }
+        .nutrition-label h2 {
+            font-size: 24px;
+            margin: 0;
+            padding: 0;
+        }
+        .nutrition-label h3 {
+            font-size: 16px;
+            margin: 8px 0;
+            padding: 0;
+        }
+        .border-bottom {
+            border-bottom: 1px solid black;
+            padding-bottom: 5px;
+            margin-bottom: 5px;
+        }
+        .nutrient {
+            display: flex;
+            justify-content: space-between;
+            margin: 2px 0;
+        }
+        .bold {
+            font-weight: bold;
+        }
+        .indent {
+            margin-left: 20px;
+        }
+    </style>
+</head>
+<body>
+    <div class="nutrition-label">
+        <h2>Nutrition Facts</h2>
+        <div class="border-bottom">Serving Size 1 container (150g)</div>
+        <div class="border-bottom">Servings Per Container 1</div>
+        
+        <div class="nutrient bold">
+            <div>Calories</div>
+            <div>280</div>
+        </div>
+        <div class="nutrient bold border-bottom">
+            <div>Calories from Fat</div>
+            <div>120</div>
+        </div>
+        
+        <div class="nutrient">
+            <div>Total Fat</div>
+            <div>13g (20%)</div>
+        </div>
+        <div class="nutrient indent">
+            <div>Saturated Fat</div>
+            <div>5g (25%)</div>
+        </div>
+        <div class="nutrient indent">
+            <div>Trans Fat</div>
+            <div>0g</div>
+        </div>
+        <div class="nutrient">
+            <div>Cholesterol</div>
+            <div>65mg (22%)</div>
+        </div>
+        <div class="nutrient">
+            <div>Sodium</div>
+            <div>180mg (8%)</div>
+        </div>
+        <div class="nutrient">
+            <div>Total Carbohydrate</div>
+            <div>31g (10%)</div>
+        </div>
+        <div class="nutrient indent">
+            <div>Dietary Fiber</div>
+            <div>0g (0%)</div>
+        </div>
+        <div class="nutrient indent">
+            <div>Sugars</div>
+            <div>18g</div>
+        </div>
+        <div class="nutrient border-bottom">
+            <div>Protein</div>
+            <div>5g</div>
+        </div>
+        
+        <div class="nutrient">
+            <div>Vitamin A</div>
+            <div>4%</div>
+        </div>
+        <div class="nutrient">
+            <div>Vitamin C</div>
+            <div>2%</div>
+        </div>
+        <div class="nutrient">
+            <div>Calcium</div>
+            <div>15%</div>
+        </div>
+        <div class="nutrient">
+            <div>Iron</div>
+            <div>4%</div>
+        </div>
+    </div>
+</body>
+</html> 
