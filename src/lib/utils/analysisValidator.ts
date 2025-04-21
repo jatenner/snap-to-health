@@ -188,17 +188,37 @@ export function normalizeAnalysisResult(data: any): any {
   
   const result = { ...data };
   
+  // Check if this is a result with label detection
+  const hasLabelDetection = result._meta?.usedLabelDetection === true && 
+                          result._meta?.detectedLabel && 
+                          result._meta?.labelConfidence > 0.65;
+  
   // Check if this is a fallback result
   const isFallbackResult = result.fallback === true || 
                           result.lowConfidence === true || 
                           (result.modelInfo?.usedFallback === true) || 
                           (result.modelInfo?.model === "fallback" || result.modelInfo?.model === "gpt_error");
   
+  // Special cases for results with missing parts but valid label detection
+  const hasValidLabelDetection = hasLabelDetection && !isFallbackResult;
+  
+  // If we have successful label detection, consider it as non-fallback
+  // even if some fields are missing
+  const useAsNormalResult = hasValidLabelDetection || !isFallbackResult;
+  
+  // Determine description based on label detection, if available
+  let defaultDescription = "This meal was analyzed with limited information";
+  if (hasLabelDetection) {
+    defaultDescription = `Detected ${result._meta.detectedLabel} with ${Math.round(result._meta.labelConfidence * 100)}% confidence`;
+  } else if (result._meta?.knownFoodWords?.length > 0) {
+    defaultDescription = `This appears to be ${result._meta.knownFoodWords.join(', ')}`;
+  }
+  
   // Ensure description exists - REQUIRED
   if (!result.description || typeof result.description !== 'string' || !result.description.trim()) {
     console.warn('Normalizing missing or invalid description');
     result.description = isFallbackResult 
-      ? "This meal was analyzed with limited information" 
+      ? defaultDescription 
       : "No description provided.";
   }
   
@@ -248,218 +268,151 @@ export function normalizeAnalysisResult(data: any): any {
     }
   } else if (typeof result.nutrients === 'object') {
     // Convert object format to array format for frontend compatibility
-    console.warn('Normalizing nutrients object to array');
-    const nutrientsArray = [];
-    const nutrients = result.nutrients;
+    const nutrientArray = [];
     
-    // Add calories
-    if ('calories' in nutrients) {
-      nutrientsArray.push({
-        name: 'Calories',
-        value: nutrients.calories ?? 0,
-        unit: 'kcal',
-        isHighlight: true
-      });
-    } else {
-      nutrientsArray.push({
-        name: 'Calories',
-        value: 0,
-        unit: 'kcal',
-        isHighlight: true
+    // Handle various object formats
+    if (result.nutrients.calories !== undefined) {
+      nutrientArray.push({ 
+        name: 'Calories', 
+        value: parseFloat(result.nutrients.calories) || 0, 
+        unit: 'kcal', 
+        isHighlight: true 
       });
     }
     
-    // Add protein
-    if ('protein' in nutrients) {
-      nutrientsArray.push({
-        name: 'Protein',
-        value: nutrients.protein ?? 0,
-        unit: 'g',
-        isHighlight: true
-      });
-    } else {
-      nutrientsArray.push({
-        name: 'Protein',
-        value: 0,
-        unit: 'g',
-        isHighlight: true
+    if (result.nutrients.protein !== undefined) {
+      nutrientArray.push({ 
+        name: 'Protein', 
+        value: parseFloat(result.nutrients.protein) || 0, 
+        unit: 'g', 
+        isHighlight: true 
       });
     }
     
-    // Add carbs
-    if ('carbs' in nutrients) {
-      nutrientsArray.push({
-        name: 'Carbohydrates',
-        value: nutrients.carbs ?? 0,
-        unit: 'g',
-        isHighlight: true
-      });
-    } else {
-      nutrientsArray.push({
-        name: 'Carbohydrates',
-        value: 0,
-        unit: 'g',
-        isHighlight: true
+    if (result.nutrients.carbs !== undefined || result.nutrients.carbohydrates !== undefined) {
+      nutrientArray.push({ 
+        name: 'Carbohydrates', 
+        value: parseFloat(result.nutrients.carbs || result.nutrients.carbohydrates) || 0, 
+        unit: 'g', 
+        isHighlight: true 
       });
     }
     
-    // Add fat
-    if ('fat' in nutrients) {
-      nutrientsArray.push({
-        name: 'Fat',
-        value: nutrients.fat ?? 0,
-        unit: 'g',
-        isHighlight: true
-      });
-    } else {
-      nutrientsArray.push({
-        name: 'Fat',
-        value: 0,
-        unit: 'g',
-        isHighlight: true
+    if (result.nutrients.fat !== undefined) {
+      nutrientArray.push({ 
+        name: 'Fat', 
+        value: parseFloat(result.nutrients.fat) || 0, 
+        unit: 'g', 
+        isHighlight: true 
       });
     }
     
-    result.nutrients = nutrientsArray;
+    // If no nutrients were extracted, create default ones
+    if (nutrientArray.length === 0) {
+      nutrientArray.push(
+        { name: 'Calories', value: 0, unit: 'kcal', isHighlight: true },
+        { name: 'Protein', value: 0, unit: 'g', isHighlight: true },
+        { name: 'Carbohydrates', value: 0, unit: 'g', isHighlight: true },
+        { name: 'Fat', value: 0, unit: 'g', isHighlight: true }
+      );
+    }
+    
+    result.nutrients = nutrientArray;
   }
   
   // Ensure feedback array exists - OPTIONAL
   if (!result.feedback || !Array.isArray(result.feedback)) {
     console.warn('Normalizing missing or invalid feedback');
-    result.feedback = isFallbackResult 
-      ? ["Analysis based on extracted text. Results may be limited."] 
-      : ["No feedback generated."];
+    if (hasValidLabelDetection) {
+      result.feedback = [`Detected food item: ${result._meta.detectedLabel} with ${Math.round(result._meta.labelConfidence * 100)}% confidence.`];
+    } else {
+      result.feedback = isFallbackResult 
+        ? ["Analysis based on extracted text. Results may be limited."] 
+        : ["No feedback generated."];
+    }
   } else if (result.feedback.length === 0) {
     console.warn('Normalizing empty feedback array');
-    result.feedback = isFallbackResult 
-      ? ["Analysis based on extracted text. Results may be limited."] 
-      : ["No feedback generated."];
+    if (hasValidLabelDetection) {
+      result.feedback = [`Detected food item: ${result._meta.detectedLabel} with ${Math.round(result._meta.labelConfidence * 100)}% confidence.`];
+    } else {
+      result.feedback = isFallbackResult 
+        ? ["Analysis based on extracted text. Results may be limited."] 
+        : ["No feedback generated."];
+    }
   }
   
   // Ensure suggestions array exists - OPTIONAL
   if (!result.suggestions || !Array.isArray(result.suggestions)) {
     console.warn('Normalizing missing or invalid suggestions');
-    result.suggestions = isFallbackResult 
-      ? ["Try uploading a clearer image for more detailed analysis."] 
-      : ["No suggestions available."];
+    if (hasValidLabelDetection) {
+      result.suggestions = ["Complete nutritional information based on detected food."];
+    } else {
+      result.suggestions = isFallbackResult 
+        ? ["Try uploading a clearer image for more detailed analysis."] 
+        : ["No suggestions available."];
+    }
   } else if (result.suggestions.length === 0) {
     console.warn('Normalizing empty suggestions array');
-    result.suggestions = isFallbackResult 
-      ? ["Try uploading a clearer image for more detailed analysis."] 
-      : ["No suggestions available."];
+    if (hasValidLabelDetection) {
+      result.suggestions = ["Complete nutritional information based on detected food."];
+    } else {
+      result.suggestions = isFallbackResult 
+        ? ["Try uploading a clearer image for more detailed analysis."] 
+        : ["No suggestions available."];
+    }
   }
   
   // Ensure detailedIngredients array exists
   if (!result.detailedIngredients || !Array.isArray(result.detailedIngredients)) {
     console.warn('Normalizing missing or invalid detailedIngredients');
-    result.detailedIngredients = [];
-  } else {
-    // Normalize each ingredient to ensure it has all required properties
-    result.detailedIngredients = result.detailedIngredients.map((ingredient: any) => {
-      if (!ingredient || typeof ingredient !== 'object') {
-        return { name: 'Unknown', category: 'unknown', confidence: 0, confidenceEmoji: '🔴' };
-      }
+    if (hasValidLabelDetection) {
+      // If we have successful label detection, add the detected item as the main ingredient
+      result.detailedIngredients = [{
+        name: result._meta.detectedLabel,
+        category: 'food',
+        confidence: result._meta.labelConfidence,
+        confidenceEmoji: result._meta.labelConfidence > 0.8 ? '✅' : '⚠️'
+      }];
+    } else {
+      result.detailedIngredients = [];
+    }
+  }
+  
+  // Check if we should set fallback=true based on result characteristics
+  if (!isFallbackResult) {
+    // If we don't have enough data to be useful, mark as fallback
+    const hasNoNutrients = !result.nutrients || (Array.isArray(result.nutrients) && result.nutrients.length === 0);
+    const hasNoDescription = !result.description || typeof result.description !== 'string' || !result.description.trim();
+    const hasNoIngredients = !result.detailedIngredients || !Array.isArray(result.detailedIngredients) || result.detailedIngredients.length === 0;
+    
+    // Set fallback if we're missing critical components, UNLESS we have label detection success
+    if ((hasNoNutrients || hasNoDescription || hasNoIngredients) && !hasValidLabelDetection) {
+      console.log('Setting fallback=true due to detected fallback characteristics');
+      result.fallback = true;
       
-      return {
-        name: ingredient.name || 'Unknown',
-        category: ingredient.category || 'unknown',
-        confidence: typeof ingredient.confidence === 'number' ? ingredient.confidence : 0,
-        confidenceEmoji: ingredient.confidenceEmoji || '🔴'
-      };
-    });
+      // Also update modelInfo
+      if (result.modelInfo) {
+        result.modelInfo.usedFallback = true;
+      }
+    }
   }
   
   // Ensure goalScore structure exists
   if (!result.goalScore || typeof result.goalScore !== 'object') {
     console.warn('Normalizing missing or invalid goalScore');
+    
+    // Adapt score based on label detection confidence
+    let score = isFallbackResult ? 3 : 5;
+    if (hasValidLabelDetection) {
+      // Scale score based on detection confidence (0.65-1.0) → (3-8)
+      score = Math.round(3 + (result._meta.labelConfidence - 0.65) * (8 - 3) / (1 - 0.65));
+      score = Math.min(8, Math.max(3, score)); // Clamp between 3-8
+    }
+    
     result.goalScore = { 
-      overall: isFallbackResult ? 3 : 5, 
+      overall: score, 
       specific: {} 
     };
-  } else if (typeof result.goalScore === 'number') {
-    const scoreValue = result.goalScore;
-    result.goalScore = { overall: scoreValue, specific: {} };
-  }
-  
-  // Convert goalScore.overall to number if it's a string that can be parsed
-  if (typeof result.goalScore.overall === 'string' && !isNaN(parseFloat(result.goalScore.overall))) {
-    result.goalScore.overall = parseFloat(result.goalScore.overall);
-  } else if (typeof result.goalScore.overall !== 'number' || isNaN(result.goalScore.overall)) {
-    console.warn('Normalizing invalid goalScore.overall', result.goalScore.overall);
-    result.goalScore.overall = isFallbackResult ? 3 : 5; // Lower default for fallback results
-  }
-  
-  // Ensure goalScore.specific exists and is an object
-  if (!result.goalScore.specific || typeof result.goalScore.specific !== 'object') {
-    console.warn('Normalizing missing or invalid goalScore.specific');
-    result.goalScore.specific = {};
-  }
-  
-  // Ensure goalName is a string if present
-  if (result.goalName !== undefined && typeof result.goalName !== 'string') {
-    console.warn('Normalizing invalid goalName', result.goalName);
-    result.goalName = 'Health Impact';
-  } else if (result.goalName === undefined) {
-    console.warn('Normalizing missing goalName');
-    result.goalName = 'Health Impact';
-  }
-  
-  // Ensure modelInfo exists - OPTIONAL
-  if (!result.modelInfo || typeof result.modelInfo !== 'object') {
-    console.warn('Normalizing missing or invalid modelInfo');
-    result.modelInfo = {
-      model: isFallbackResult ? "fallback" : "unknown",
-      usedFallback: isFallbackResult,
-      ocrExtracted: true // Assume OCR extraction for fallback results
-    };
-  } else {
-    // Make sure modelInfo has all required fields
-    if (result.modelInfo.model === undefined) {
-      result.modelInfo.model = isFallbackResult ? "fallback" : "unknown";
-    }
-    if (result.modelInfo.usedFallback === undefined) {
-      result.modelInfo.usedFallback = isFallbackResult;
-    }
-    if (result.modelInfo.ocrExtracted === undefined) {
-      result.modelInfo.ocrExtracted = true; // Default to true as most use OCR now
-    }
-  }
-  
-  // Ensure positiveFoodFactors and negativeFoodFactors arrays exist
-  if (!Array.isArray(result.positiveFoodFactors)) {
-    console.warn('Normalizing missing or invalid positiveFoodFactors');
-    result.positiveFoodFactors = [];
-  }
-  
-  if (!Array.isArray(result.negativeFoodFactors)) {
-    console.warn('Normalizing missing or invalid negativeFoodFactors');
-    result.negativeFoodFactors = [];
-  }
-  
-  // Mark as fallback explicitly if it's not already set
-  if (!result.fallback && (
-      !data.description || 
-      ((!data.nutrients || (Array.isArray(data.nutrients) && data.nutrients.length === 0))) ||
-      result.modelInfo?.usedFallback === true ||
-      result.modelInfo?.model === "fallback" ||
-      result.modelInfo?.model === "gpt_error"
-    )) {
-    console.warn('Setting fallback=true due to detected fallback characteristics');
-    result.fallback = true;
-    
-    // Don't automatically set lowConfidence - this can be separate from fallback
-    if (result.lowConfidence === undefined && 
-        (!data.description || (!data.nutrients || (Array.isArray(data.nutrients) && data.nutrients.length === 0)))) {
-      result.lowConfidence = true;
-    }
-    
-    // Add meta object for easier detection if not already present
-    if (!result._meta) {
-      result._meta = {
-        fallback: true,
-        reason: 'Fallback result detected'
-      };
-    }
   }
   
   // Add debug log for normalized results

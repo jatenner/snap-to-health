@@ -143,14 +143,34 @@ async function getVisionClient(): Promise<ImageAnnotatorClient | null> {
     
     // Check for Base64 encoded credentials first (preferred for Vercel)
     const base64Credentials = process.env.GOOGLE_VISION_PRIVATE_KEY_BASE64;
+    const credentialsFilePath = process.env.GOOGLE_APPLICATION_CREDENTIALS || '';
     
     // Log credential presence (without revealing actual credentials)
-    console.log(`Credential status: Base64=${Boolean(base64Credentials)}, File=${Boolean(process.env.GOOGLE_APPLICATION_CREDENTIALS)}`);
+    console.log(`Credential status: Base64=${Boolean(base64Credentials)}, File=${Boolean(credentialsFilePath)}`);
     
-    // Priority 1: Base64 credentials (preferred, especially for Vercel)
+    // CRITICAL ERROR: No credentials at all
+    if (!base64Credentials && !credentialsFilePath) {
+      console.error('❌ CRITICAL: No Google Cloud Vision credentials provided. Both GOOGLE_VISION_PRIVATE_KEY_BASE64 and GOOGLE_APPLICATION_CREDENTIALS are missing or empty.');
+      console.error('Vision API will NOT work without valid credentials. Please set one of these environment variables.');
+      
+      // For debugging, log current environment variables (excluding sensitive ones)
+      console.log('Current environment configuration:');
+      console.log(`- USE_OCR_EXTRACTION: ${process.env.USE_OCR_EXTRACTION}`);
+      console.log(`- OCR_PROVIDER: ${process.env.OCR_PROVIDER}`);
+      console.log(`- Running on Vercel: ${isVercel() ? 'Yes' : 'No'}`);
+      
+      return null;
+    }
+    
+    // OPTION 1: Try Base64 credentials first (preferred, especially for Vercel)
     if (base64Credentials && base64Credentials.length > 100) {
       try {
-        console.log('Initializing Vision client with Base64 encoded credentials');
+        console.log('Using Base64 encoded credentials for Vision API');
+        
+        // Validate base64 format
+        if (!isValidBase64Json(base64Credentials)) {
+          throw new Error('Invalid Base64 JSON format');
+        }
         
         // Create a temporary credential file
         const credentialsPath = createTempCredentialFile(base64Credentials);
@@ -163,35 +183,35 @@ async function getVisionClient(): Promise<ImageAnnotatorClient | null> {
         // Test the client with a simple call to ensure it works
         await visionClient.getProjectId();
         
-        console.log('Google Cloud Vision client successfully initialized with Base64 credentials');
+        console.log('✅ Google Cloud Vision client successfully initialized with Base64 credentials');
         return visionClient;
       } catch (base64Error) {
-        console.error('Failed to initialize with Base64 credentials:', base64Error);
+        console.error('❌ Failed to initialize with Base64 credentials:', base64Error);
         console.log('Falling back to credentials file approach...');
         // Fall back to credentials file if Base64 approach fails
       }
     } else if (isVercel()) {
-      console.warn('Running on Vercel but GOOGLE_VISION_PRIVATE_KEY_BASE64 is not set. This is not recommended.');
+      console.warn('⚠️ Running on Vercel but GOOGLE_VISION_PRIVATE_KEY_BASE64 is not set or is invalid. This is NOT recommended for production.');
     }
     
-    // Priority 2: Credentials file approach
-    const credentialsPath = process.env.GOOGLE_APPLICATION_CREDENTIALS || '';
-    
-    if (!credentialsPath) {
-      console.error('No Google Cloud Vision credentials provided. Both GOOGLE_VISION_PRIVATE_KEY_BASE64 and GOOGLE_APPLICATION_CREDENTIALS are missing or empty.');
+    // OPTION 2: Credentials file approach
+    if (!credentialsFilePath) {
+      console.error('❌ No credentials file path provided (GOOGLE_APPLICATION_CREDENTIALS)');
+      console.error('Base64 credentials failed and no fallback credentials file is available');
       return null;
     }
     
-    console.log(`Initializing Vision client with credentials from: ${credentialsPath}`);
+    console.log(`Trying credentials file at: ${credentialsFilePath}`);
     
     // Make path absolute if it's relative
-    const absolutePath = credentialsPath.startsWith('./') || credentialsPath.startsWith('../') 
-      ? path.resolve(process.cwd(), credentialsPath)
-      : credentialsPath;
+    const absolutePath = credentialsFilePath.startsWith('./') || credentialsFilePath.startsWith('../') 
+      ? path.resolve(process.cwd(), credentialsFilePath)
+      : credentialsFilePath;
       
     // Check if the credentials file exists
     if (!fs.existsSync(absolutePath)) {
-      console.error(`Credentials file not found at: ${absolutePath}`);
+      console.error(`❌ Credentials file not found at: ${absolutePath}`);
+      console.error('Please check that the file exists and the path is correct');
       return null;
     }
     
@@ -204,14 +224,15 @@ async function getVisionClient(): Promise<ImageAnnotatorClient | null> {
       // Test the client with a simple call to ensure it works
       await visionClient.getProjectId();
       
-      console.log('Google Cloud Vision client successfully initialized with credentials file');
+      console.log('✅ Google Cloud Vision client successfully initialized with credentials file');
       return visionClient;
     } catch (fileError) {
-      console.error(`Failed to initialize Vision client with credentials file: ${fileError instanceof Error ? fileError.message : String(fileError)}`);
+      console.error(`❌ Failed to initialize Vision client with credentials file: ${fileError instanceof Error ? fileError.message : String(fileError)}`);
+      console.error('Please check that the credentials file is valid and has the correct permissions');
       return null;
     }
   } catch (error) {
-    console.error('Failed to initialize Vision client:', error);
+    console.error('❌ Critical error initializing Vision client:', error);
     return null;
   }
 }
@@ -672,9 +693,21 @@ export async function runFoodDetection(
   detectionMethod: 'label' | 'ocr' | 'fallback';
   processingTimeMs: number;
   error?: string;
+  foodDetected: boolean;
+  knownFoodWords: string[];
 }> {
   const startTime = Date.now();
   console.log(`🔎 [${requestId}] Starting food detection...`);
+  
+  // Known food words to check for in OCR text or labels
+  const commonFoodWords = [
+    'apple', 'orange', 'banana', 'grape', 'strawberry', 'blueberry', 'pineapple',
+    'chicken', 'beef', 'pork', 'fish', 'salmon', 'tuna',
+    'rice', 'pasta', 'bread', 'potato', 'tomato', 'carrot', 'broccoli',
+    'salad', 'soup', 'sandwich', 'burger', 'pizza', 'taco',
+    'cake', 'cookie', 'pie', 'fruit', 'vegetable', 'meat', 'cereal',
+    'egg', 'cheese', 'yogurt', 'milk'
+  ];
   
   try {
     // Prepare the image buffer
@@ -682,29 +715,54 @@ export async function runFoodDetection(
     
     // Step 1: Try label detection first (faster and more accurate for simple food items)
     console.log(`🔍 [${requestId}] Running label detection first`);
-    const foodLabels = await detectFoodLabels(imageBuffer, requestId);
+    const foodLabels = await detectFoodLabels(imageBuffer, requestId, 0.65); // Lower threshold for better recall
     
     // Find the top food label by confidence score
     const topFoodLabel = foodLabels.length > 0 
       ? foodLabels.reduce((prev, current) => (prev.score > current.score) ? prev : current)
       : null;
+    
+    // Check if any labels match known food words
+    const foodLabelWords = foodLabels.map(label => label.label.toLowerCase());
+    const knownFoodWords: string[] = [];
+    
+    // Find matches with common food words
+    for (const word of commonFoodWords) {
+      for (const label of foodLabelWords) {
+        if (label.includes(word) && !knownFoodWords.includes(word)) {
+          knownFoodWords.push(word);
+        }
+      }
+    }
+    
+    const hasHighConfidenceLabel = topFoodLabel !== null && topFoodLabel.score > 0.8;
+    const hasModerateConfidenceLabel = topFoodLabel !== null && topFoodLabel.score > 0.65;
+    const matchesKnownFood = knownFoodWords.length > 0;
+    
+    // Log detailed label detection results
+    console.log(`📊 [${requestId}] Label detection results:`);
+    console.log(`- Found ${foodLabels.length} potential food labels`);
+    console.log(`- Top label: ${topFoodLabel ? `${topFoodLabel.label} (${(topFoodLabel.score * 100).toFixed(1)}%)` : 'None'}`);
+    console.log(`- Known food words detected: ${matchesKnownFood ? knownFoodWords.join(', ') : 'None'}`);
       
-    // Check if we have a high-confidence food label (>85%)
-    if (topFoodLabel && topFoodLabel.score > 0.85) {
-      console.log(`✅ [${requestId}] Using high-confidence food label: ${topFoodLabel.label} (${(topFoodLabel.score * 100).toFixed(1)}%)`);
+    // Check if we have a high-confidence food label
+    if (hasHighConfidenceLabel || (hasModerateConfidenceLabel && matchesKnownFood)) {
+      console.log(`✅ [${requestId}] Using food label: ${topFoodLabel!.label} (${(topFoodLabel!.score * 100).toFixed(1)}%)`);
       const processingTimeMs = Date.now() - startTime;
       
       // Create a simple text representation for compatibility with existing flows
-      const labelText = `${topFoodLabel.label}`;
+      const labelText = `${topFoodLabel!.label}`;
       
       return {
         success: true,
         text: labelText,
-        confidence: topFoodLabel.score,
+        confidence: topFoodLabel!.score,
         foodLabels,
         topFoodLabel,
         detectionMethod: 'label',
         processingTimeMs,
+        foodDetected: true,
+        knownFoodWords
       };
     }
     
@@ -712,10 +770,35 @@ export async function runFoodDetection(
     console.log(`🔍 [${requestId}] No high-confidence food label, trying OCR`);
     const ocrResult = await runOCR(base64Image, requestId);
     
+    // Check if OCR text contains any known food words
+    const ocrText = ocrResult.text.toLowerCase();
+    const ocrFoodWords: string[] = [];
+    
+    // Find food words in OCR text
+    for (const word of commonFoodWords) {
+      if (ocrText.includes(word) && !ocrFoodWords.includes(word)) {
+        ocrFoodWords.push(word);
+      }
+    }
+    
+    const hasOcrFoodWords = ocrFoodWords.length > 0;
+    
+    if (hasOcrFoodWords) {
+      console.log(`✅ [${requestId}] OCR text contains food words: ${ocrFoodWords.join(', ')}`);
+    }
+    
     // If OCR successful, combine with any low-confidence food labels
     if (ocrResult.success && ocrResult.text.trim()) {
       console.log(`✅ [${requestId}] Successfully extracted text with OCR, combining with label data`);
       const processingTimeMs = Date.now() - startTime;
+      
+      // Combine known food words from label detection and OCR
+      const combinedFoodWords: string[] = [...knownFoodWords];
+      for (const word of ocrFoodWords) {
+        if (!combinedFoodWords.includes(word)) {
+          combinedFoodWords.push(word);
+        }
+      }
       
       return {
         success: true,
@@ -725,25 +808,35 @@ export async function runFoodDetection(
         topFoodLabel,
         detectionMethod: 'ocr',
         processingTimeMs,
+        foodDetected: hasOcrFoodWords || hasModerateConfidenceLabel,
+        knownFoodWords: combinedFoodWords
       };
     }
     
     // Step 3: If both label detection and OCR failed, provide fallback
     console.log(`⚠️ [${requestId}] Both label detection and OCR failed, using fallback`);
-    const fallbackText = getRandomFallbackText();
+    
+    // Create a more descriptive fallback text if we have some label information
+    let fallbackText = getRandomFallbackText();
+    if (topFoodLabel) {
+      // Use the top label as a hint in the fallback text
+      fallbackText = `This appears to be a ${topFoodLabel.label.toLowerCase()}, but we couldn't analyze it properly.`;
+    }
+    
     const processingTimeMs = Date.now() - startTime;
     
     return {
       success: false,
       text: fallbackText,
       confidence: 0.1,
-      foodLabels: [],
-      topFoodLabel: null,
+      foodLabels,
+      topFoodLabel,
       detectionMethod: 'fallback',
       processingTimeMs,
-      error: "Failed to detect food or extract text"
+      error: "Failed to detect food or extract text with high confidence",
+      foodDetected: hasModerateConfidenceLabel || matchesKnownFood,
+      knownFoodWords
     };
-    
   } catch (error) {
     console.error(`❌ [${requestId}] Error in food detection:`, error);
     const processingTimeMs = Date.now() - startTime;
@@ -756,7 +849,9 @@ export async function runFoodDetection(
       topFoodLabel: null,
       detectionMethod: 'fallback',
       processingTimeMs,
-      error: error instanceof Error ? error.message : String(error)
+      error: error instanceof Error ? error.message : String(error),
+      foodDetected: false,
+      knownFoodWords: []
     };
   }
 } 
