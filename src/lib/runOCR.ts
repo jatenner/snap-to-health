@@ -673,10 +673,10 @@ export async function runFoodDetection(
   processingTimeMs: number;
   error?: string;
 }> {
+  const startTime = Date.now();
+  console.log(`🔎 [${requestId}] Starting food detection...`);
+  
   try {
-    console.log(`🔍 [${requestId}] Starting food detection in image`);
-    const startTime = Date.now();
-    
     // Prepare the image buffer
     const imageBuffer = prepareBase64Image(base64Image);
     
@@ -746,7 +746,7 @@ export async function runFoodDetection(
     
   } catch (error) {
     console.error(`❌ [${requestId}] Error in food detection:`, error);
-    const processingTimeMs = Date.now() - Date.now();
+    const processingTimeMs = Date.now() - startTime;
     
     return {
       success: false,
