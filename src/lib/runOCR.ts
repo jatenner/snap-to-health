@@ -33,7 +33,21 @@ function getRandomFallbackText(): string {
 }
 
 /**
- * Extract text from an image using OCR
+ * Utility function to check if we're running on the server
+ * This is important as Tesseract.js doesn't work well in serverless environments
+ */
+const isServer = () => typeof window === 'undefined';
+
+/**
+ * Check if we're running in a Vercel environment
+ * We need to check both VERCEL=1 and process.env.VERCEL
+ */
+const isVercelEnvironment = () => {
+  return process.env.VERCEL === '1' || process.env.VERCEL === 'true' || process.env.VERCEL === 'yes';
+};
+
+/**
+ * Extract text from an image using Tesseract.js
  * @param base64Image Base64 encoded image
  * @param requestId Request ID for logging
  * @returns Extracted text and confidence score
@@ -47,13 +61,10 @@ export async function runOCR(
   
   const startTime = Date.now();
   
-  // Check for serverless environment (Vercel)
-  const isServerless = process.env.VERCEL === '1';
-  const useSegmentation = process.env.OCR_SEGMENTATION_ENABLED === 'true';
-  
-  // In serverless environments like Vercel, use fallback approach for consistent behavior
-  if (isServerless) {
-    console.log(`🔧 [${requestId}] Running in serverless environment (Vercel)`);
+  // Check for server-side execution or Vercel environment
+  if (isServer() || isVercelEnvironment()) {
+    const environment = isServer() ? 'server-side rendering' : 'Vercel environment';
+    console.log(`🔧 [${requestId}] Running in ${environment}, using fallback text`);
     const fallbackText = getRandomFallbackText();
     console.log(`📋 [${requestId}] Using fallback text: "${fallbackText.substring(0, 50)}..."`);
     
@@ -61,11 +72,12 @@ export async function runOCR(
       success: true,
       text: fallbackText,
       confidence: 0.9,
-      processingTimeMs: 250,
-      error: "Serverless environment - using fallback text"
+      processingTimeMs: 200,
+      error: `${environment} - OCR disabled on server`
     };
   }
   
+  // Remaining OCR code only runs on the client
   try {
     // Dynamically import tesseract.js to avoid SSR issues
     if (!createWorker) {
@@ -151,6 +163,8 @@ export async function runOCR(
     
     // Load language and initialize
     try {
+      // Fix for Tesseract v6.0.0: Use loadLanguage with just the language name
+      // and don't try to call the language data as a function
       await worker.loadLanguage('eng');
       await worker.initialize('eng');
       console.log(`📊 [${requestId}] OCR engine initialized`);
@@ -273,9 +287,11 @@ export async function runAdvancedOCR(
   
   const startTime = Date.now();
   
-  // In serverless environments like Vercel, use fallback approach
-  if (process.env.VERCEL === '1') {
-    console.log(`🔧 [${requestId}] Running in serverless environment (Vercel)`);
+  // Check for server-side execution or Vercel environment
+  // If we're on the server or in serverless environment, always use fallback
+  if (isServer() || isVercelEnvironment()) {
+    const environment = isServer() ? 'server-side rendering' : 'serverless environment (Vercel)';
+    console.log(`🔧 [${requestId}] Running in ${environment}, using fallback text`);
     const fallbackText = getRandomFallbackText();
     console.log(`📋 [${requestId}] Using fallback text: "${fallbackText.substring(0, 50)}..."`);
     
@@ -289,7 +305,7 @@ export async function runAdvancedOCR(
         text: fallbackText,
         confidence: 0.9
       }],
-      error: "Serverless environment - using fallback text"
+      error: `${environment} - using fallback text`
     };
   }
   
