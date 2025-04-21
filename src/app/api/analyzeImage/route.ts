@@ -637,6 +637,615 @@ async function fetchNutrition(
 }
 
 /**
+ * Helper function to determine if an analysis result should be enriched with additional passes
+ */
+function shouldEnrichAnalysis(analysisJson: any): string | null {
+  // Check for low confidence indicators
+  if (!analysisJson) return "null_result";
+  
+  // Check confidence score
+  const confidence = analysisJson.confidence || 0;
+  if (confidence < 5) return "low_confidence_score";
+  
+  // Check for empty or minimal ingredient list
+  if (!analysisJson.detailedIngredients || analysisJson.detailedIngredients.length < 2) {
+    return "insufficient_ingredients";
+  }
+  
+  // Check for image challenges
+  if (analysisJson.imageChallenges && analysisJson.imageChallenges.length > 0) {
+    // If the image has multiple severe challenges, it might need enrichment
+    if (analysisJson.imageChallenges.length >= 2) {
+      return "multiple_image_challenges";
+    }
+  }
+  
+  return null; // No enrichment needed
+}
+
+/**
+ * Function to refine low confidence analysis with a second, more focused pass
+ */
+async function refineLowConfidenceAnalysis(
+  base64Image: string,
+  initialAnalysis: any,
+  healthGoal: string,
+  requestId: string
+): Promise<any> {
+  console.log(`[${requestId}] Running refinement pass for low confidence analysis`);
+  
+  const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
+  
+  // Extract the ingredients we already detected to help with the refined analysis
+  const detectedIngredients = initialAnalysis.detailedIngredients || [];
+  const ingredientNames = detectedIngredients.map((i: any) => i.name).join(", ");
+  
+  // Prepare a focused prompt that builds on what we already detected
+  const refinementSystemPrompt = `You are analyzing a food image that was initially difficult to process.
+Initial analysis detected these possible ingredients with low confidence: ${ingredientNames}
+
+The user's health goal is: "${healthGoal}"
+
+Your task is to:
+1. Look carefully at the image and confirm or correct the initially detected ingredients
+2. Add any ingredients that were missed in the first pass
+3. Assign appropriate confidence scores 
+4. Focus on nutritional aspects relevant to the user's health goal
+5. Provide detailed insights about how this meal relates to their specific health goal
+
+Even if the image is unclear or partial, provide your best analysis of the visible food items.`;
+  
+  // Configure request
+  const headers = {
+    'Content-Type': 'application/json',
+    'Authorization': `Bearer ${OPENAI_API_KEY}`,
+    'OpenAI-Beta': 'assistants=v1'
+  };
+  
+  const requestPayload = {
+    model: "gpt-4o", 
+    messages: [
+      {
+        role: "user",
+        content: [
+          { 
+            type: "text", 
+            text: `${refinementSystemPrompt}
+            
+Return ONLY valid JSON with the same structure as before. Focus on improving these fields:
+- detailedIngredients (with accurate confidence scores)
+- basicNutrition (more accurate estimates)
+- goalImpactScore (better aligned with health goal)
+- feedback & suggestions (more specific to detected ingredients)
+
+Do not return any explanation or text outside the JSON block.`
+          },
+          {
+            type: "image_url",
+            image_url: {
+              url: `data:image/jpeg;base64,${base64Image}`,
+              detail: "high" // Use high detail for refinement
+            }
+          }
+        ]
+      }
+    ],
+    max_tokens: 1000,
+    temperature: 0.3,  // Lower temperature for more focused analysis
+    response_format: { type: "json_object" }
+  };
+  
+  try {
+    // Create an AbortController for timeout
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => {
+      controller.abort();
+      console.error(`[${requestId}] Refinement request aborted due to timeout (25s)`);
+    }, 25000);
+    
+    // Call OpenAI API
+    const response = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(requestPayload),
+      signal: controller.signal
+    });
+    
+    // Clear timeout
+    clearTimeout(timeoutId);
+    
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error(`[${requestId}] Refinement API Error:`, response.status, errorText);
+      return initialAnalysis; // Return original analysis if refinement fails
+    }
+    
+    const responseData = await response.json();
+    
+    if (
+      !responseData.choices || 
+      !responseData.choices[0] || 
+      !responseData.choices[0].message || 
+      !responseData.choices[0].message.content
+    ) {
+      console.error(`[${requestId}] Invalid refinement response structure`);
+      return initialAnalysis;
+    }
+    
+    const refinedText = responseData.choices[0].message.content;
+    
+    try {
+      // Parse the JSON response
+      const refinedJson = JSON.parse(refinedText.trim());
+      console.log(`[${requestId}] Refinement JSON parsed successfully`);
+      
+      // Create a merged result that takes the best of both analyses
+      return {
+        ...initialAnalysis,
+        ...refinedJson,
+        confidence: Math.max(initialAnalysis.confidence || 0, refinedJson.confidence || 0),
+        // Keep track of the refinement in the analysis
+        _meta: {
+          ...(initialAnalysis._meta || {}),
+          refinementApplied: true,
+          originalConfidence: initialAnalysis.confidence
+        }
+      };
+    } catch (error) {
+      console.error(`[${requestId}] Failed to parse refinement JSON:`, error);
+      return initialAnalysis;
+    }
+  } catch (error) {
+    console.error(`[${requestId}] Refinement request error:`, error);
+    return initialAnalysis;
+  }
+}
+
+/**
+ * Return format string based on a specific health goal
+ */
+function getGoalSpecificPrompt(healthGoal: string): string {
+  const goalLower = healthGoal.toLowerCase();
+  
+  if (goalLower.includes('weight loss') || goalLower.includes('lose weight')) {
+    return `For weight loss, analyze calories and macronutrient balance. Identify high-calorie components, hidden sugars, and refined carbs. Highlight fiber sources and protein that promote satiety.`;
+  }
+  
+  if (goalLower.includes('muscle') || goalLower.includes('strength') || goalLower.includes('build muscle')) {
+    return `For muscle building, focus on protein quality and quantity. Identify complete proteins, leucine content, and distribution of protein sources. Analyze carb quality for glycogen replenishment and overall caloric adequacy.`;
+  }
+  
+  if (goalLower.includes('energy') || goalLower.includes('fatigue')) {
+    return `For energy improvement, identify complex carbs, B vitamins, iron, and magnesium sources. Note glycemic impact, fiber content for sustained energy, and potential causes of energy crashes.`;
+  }
+  
+  if (goalLower.includes('heart') || goalLower.includes('cholesterol') || goalLower.includes('blood pressure')) {
+    return `For heart health, analyze sodium content, saturated fat, trans fats, and cholesterol. Identify omega-3 sources, potassium, fiber (particularly soluble), and antioxidants that support cardiovascular function.`;
+  }
+  
+  if (goalLower.includes('diabetes') || goalLower.includes('blood sugar') || goalLower.includes('insulin')) {
+    return `For blood sugar management, focus on glycemic impact, fiber content, and carb quality. Note protein adequacy for slowing glucose absorption and identify hidden sugars or refined carbs that may spike blood glucose.`;
+  }
+  
+  // Default prompt for general health
+  return `For general health, provide a balanced analysis of all macronutrients and key micronutrients. Highlight both strengths and potential improvements for overall nutritional quality.`;
+}
+
+/**
+ * Function to analyze the image with GPT-4 Vision
+ */
+export async function analyzeWithGPT4Vision(base64Image: string, healthGoal: string, requestId: string) {
+  console.time(`⏱️ [${requestId}] analyzeWithGPT4Vision`);
+  const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
+  
+  if (!OPENAI_API_KEY) {
+    console.timeEnd(`⏱️ [${requestId}] analyzeWithGPT4Vision`);
+    throw new Error('OpenAI API key is not configured');
+  }
+
+  // Try with primary prompt first, then fallback to simpler prompt if needed
+  let attempt = 1;
+  let lastError: Error | null = null;
+  const reasoningLogs: any[] = [];
+  const fallbackMessage = "We couldn't analyze this image properly. Please try again with a clearer photo.";
+
+  while (attempt <= 2) {
+    try {
+      console.log(`[${requestId}] GPT-4 Vision attempt ${attempt} starting...`);
+      
+      // Create an AbortController for timeout management
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => {
+        controller.abort();
+        console.error(`[${requestId}] OpenAI request aborted due to timeout (45s)`);
+      }, 45000); // 45 second timeout (to stay within Vercel's limits)
+
+      console.log(`[${requestId}] Sending request to OpenAI API...`);
+      
+      // Get goal-specific prompt
+      const goalPrompt = getGoalSpecificPrompt(healthGoal);
+      
+      // Updated primary system prompt focused on ingredient detection
+      const primarySystemPrompt = `You are a nutrition-focused food vision expert. This image may be blurry, dark, or imperfect.
+Try your best to:
+- List all identifiable food items, even if uncertain
+- Guess their category (protein, carb, veg, etc.)
+- Give a confidence score (0–10) for each
+- NEVER return "unclear image" — always offer your best guess
+
+${goalPrompt}`;
+
+      // Improved fallback prompt for retry attempts
+      const fallbackSystemPrompt = attempt === 1 ? primarySystemPrompt 
+        : `You are a nutrition expert analyzing a potentially low-quality food image. 
+
+I need you to identify ANY possible food items, even if very unclear:
+- Make educated guesses based on shapes, colors, textures and shadows
+- Identify partial items and suggest what they likely are
+- Propose contextually likely combinations (e.g., if you see rice, consider common pairings)
+- Use even subtle visual cues to infer possible ingredients
+- NEVER say "I cannot identify" or "unclear image" - always make reasonable guesses
+- Assign appropriate low confidence scores (1-4) for uncertain items
+
+Improve this ingredient list using best guess. Assume the image may be dim or partially blocked.
+
+The user's health goal is: "${healthGoal}" - relate your analysis to this goal when possible.
+
+IMPORTANT: Just because an image is blurry doesn't mean we can't extract useful information. 
+Even with 20% confidence, provide your best assessment of what food items are likely present.`;
+      
+      // Log the prompt being used
+      console.log(`[${requestId}] Analyzing image with health goal: ${healthGoal}`);
+      console.log(`[${requestId}] Using ${attempt === 1 ? 'primary' : 'fallback'} prompt (${fallbackSystemPrompt.length} chars)`);
+      
+      // Configure request headers for better performance
+      const headers = {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${OPENAI_API_KEY}`,
+        'OpenAI-Beta': 'assistants=v1'  // Use latest API features
+      };
+      
+      // Improved JSON response format with detailed ingredients and confidence scores
+      const requestPayload = {
+        model: "gpt-4o",  // Using GPT-4o for faster response
+        messages: [
+          {
+            role: "user",
+            content: [
+              { 
+                type: "text", 
+                text: `${fallbackSystemPrompt}
+
+Return ONLY valid JSON that can be parsed with JSON.parse(). Use this exact format:
+{
+  "description": "A concise description of the meal focusing on key components",
+  "ingredientList": ["ingredient1", "ingredient2", ...],
+  "detailedIngredients": [
+    { "name": "ingredient1", "category": "protein/vegetable/grain/etc", "confidence": 8.5 },
+    { "name": "ingredient2", "category": "protein/vegetable/grain/etc", "confidence": 6.0 }
+  ],
+  "confidence": 7.5,
+  "basicNutrition": {
+    "calories": "estimated calories",
+    "protein": "estimated protein in grams",
+    "carbs": "estimated carbs in grams",
+    "fat": "estimated fat in grams"
+  },
+  "goalImpactScore": 7,
+  "goalName": "${formatGoalName(healthGoal)}",
+  "scoreExplanation": "Clear explanation of how this meal supports or hinders the specific goal, based on scientific evidence",
+  "positiveFoodFactors": [
+    "Specific way ingredient X helps with the goal due to nutrient Y",
+    "Specific way ingredient Z supports the goal"
+  ],
+  "negativeFoodFactors": [
+    "Specific limitation of ingredient A for this goal",
+    "How ingredient B might be suboptimal for the goal"
+  ],
+  "feedback": [
+    "Actionable, goal-specific feedback point 1",
+    "Actionable, goal-specific feedback point 2"
+  ],
+  "suggestions": [
+    "Specific, evidence-based recommendation 1",
+    "Specific, evidence-based recommendation 2"
+  ],
+  "imageChallenges": ["list any challenges with analyzing this image, like lighting, blur, etc."]
+}
+
+IMPORTANT GUIDELINES:
+1. Score must be between 1-10 (10 being the most beneficial for the goal)
+2. Confidence score must be between 0-10 (10 being extremely confident in your analysis, 0 being no confidence)
+3. For low-quality images, confidence should reflect your certainty about the ingredients (e.g., 2-4 for very blurry, 5-7 for partially visible food, 8-10 for clear images)
+4. Be specific and quantitative in your analysis - mention actual nutrients and compounds when relevant
+5. Do not repeat the same information across different sections
+6. Every single insight must directly relate to the user's goal of "${healthGoal}"
+7. Use plain language to explain complex nutrition concepts
+8. Explain WHY each factor helps or hinders the goal (e.g., "High magnesium content aids recovery by relaxing muscles and reducing inflammation")
+9. Suggestions should be specific and actionable, not general tips
+10. Avoid redundancy between positiveFoodFactors, negativeFoodFactors, feedback, and suggestions
+11. Focus on the user's specific goal, not general healthy eating advice
+12. If image quality is poor, DO NOT refuse to analyze - provide your best guess and set confidence level appropriately
+13. The detailedIngredients array should include EVERY ingredient you identify, along with its food category and your confidence for that specific item
+14. ALWAYS return at least 3 ingredients with your best guess, even if confidence is low
+15. For very unclear images, look for shapes, colors, textures, and contextual clues to infer possible food items
+
+Do not return any explanation or text outside the JSON block. Your entire response must be valid JSON only.`
+              },
+              {
+                type: "image_url",
+                image_url: {
+                  url: `data:image/jpeg;base64,${base64Image}`,
+                  detail: attempt === 1 ? "low" : "high" // Use higher detail on second attempt
+                }
+              }
+            ]
+          }
+        ],
+        max_tokens: 1500,
+        temperature: attempt === 1 ? 0.5 : 0.7,  // Higher temperature on second attempt for more creativity
+        response_format: { type: "json_object" }  // Force JSON response
+      };
+      
+      console.log(`[${requestId}] Request URL: https://api.openai.com/v1/chat/completions`);
+      console.log(`[${requestId}] Request model:`, requestPayload.model);
+      
+      const startTime = Date.now();
+      
+      try {
+        // Use native fetch with the AbortController signal for timeout management
+        const response = await fetch('https://api.openai.com/v1/chat/completions', {
+          method: 'POST',
+          headers,
+          body: JSON.stringify(requestPayload),
+          signal: controller.signal
+        });
+        
+        // Clear the timeout since the request completed
+        clearTimeout(timeoutId);
+        
+        const endTime = Date.now();
+        console.log(`[${requestId}] OpenAI API request completed in ${(endTime - startTime) / 1000}s`);
+        
+        if (!response.ok) {
+          const errorText = await response.text();
+          console.error(`[${requestId}] OpenAI API Error Status:`, response.status);
+          console.error(`[${requestId}] OpenAI API Error Response:`, errorText);
+          
+          // Store this error but try again if it's our first attempt
+          lastError = new Error(`OpenAI API Error (attempt ${attempt}): ${response.status} ${response.statusText}`);
+          attempt++;
+          continue;
+        }
+        
+        const responseData = await response.json();
+        console.log(`[${requestId}] GPT-4 Vision Analysis Complete`);
+        
+        if (
+          !responseData.choices || 
+          !responseData.choices[0] || 
+          !responseData.choices[0].message || 
+          !responseData.choices[0].message.content
+        ) {
+          console.error(`[${requestId}] Invalid OpenAI response structure:`, JSON.stringify(responseData));
+          
+          // Store this error but try again if it's our first attempt
+          lastError = new Error(`Invalid response structure from OpenAI API (attempt ${attempt})`);
+          attempt++;
+          continue;
+        }
+        
+        const analysisText = responseData.choices[0].message.content;
+        
+        try {
+          // Parse the JSON response
+          const analysisJson = JSON.parse(analysisText.trim());
+          console.log(`[${requestId}] Analysis JSON parsed successfully`);
+          
+          // Store the raw result in reasoningLogs for debugging
+          reasoningLogs.push({
+            stage: `initial_analysis_attempt_${attempt}`,
+            result: analysisJson,
+            timestamp: new Date().toISOString()
+          });
+          
+          // Check if we need to enrich the result with a second pass
+          const needsEnrichment = shouldEnrichAnalysis(analysisJson);
+          
+          if (needsEnrichment && attempt === 1) {
+            console.log(`[${requestId}] Low confidence analysis detected (${needsEnrichment}), performing enrichment pass`);
+            const enrichedAnalysis = await refineLowConfidenceAnalysis(
+              base64Image, 
+              analysisJson, 
+              healthGoal, 
+              requestId
+            );
+            
+            // Store the enriched result in reasoningLogs
+            reasoningLogs.push({
+              stage: "enrichment_pass",
+              originalConfidence: analysisJson.confidence,
+              detectedIssue: needsEnrichment,
+              result: enrichedAnalysis,
+              timestamp: new Date().toISOString()
+            });
+            
+            // Combine the enriched analysis with the original, prioritizing the enriched data
+            const combinedAnalysis = {
+              ...analysisJson,
+              ...enrichedAnalysis,
+              confidence: Math.max(analysisJson.confidence || 0, enrichedAnalysis.confidence || 0),
+              reasoningLogs: reasoningLogs
+            };
+            
+            console.log(`[${requestId}] GPT-4 Vision analysis completed in ${(endTime - startTime) / 1000}s (with enrichment)`);
+            console.timeEnd(`⏱️ [${requestId}] analyzeWithGPT4Vision`);
+            return combinedAnalysis;
+          }
+          
+          // If no enrichment needed or this is the second attempt, return the analysis as is
+          console.log(`[${requestId}] GPT-4 Vision analysis completed in ${(endTime - startTime) / 1000}s (without enrichment)`);
+          console.timeEnd(`⏱️ [${requestId}] analyzeWithGPT4Vision`);
+          return {
+            ...analysisJson,
+            reasoningLogs
+          };
+        } catch (jsonError: unknown) {
+          console.error(`[${requestId}] Failed to parse JSON from OpenAI response:`, jsonError);
+          console.error(`[${requestId}] Raw response text: ${analysisText.substring(0, 200)}...`);
+          
+          // Store this error but try again if it's our first attempt
+          lastError = jsonError instanceof Error ? jsonError : new Error(String(jsonError));
+          if (attempt === 1) {
+            attempt++;
+            continue;
+          } else {
+            throw new Error(`Failed to parse analysis JSON: ${jsonError instanceof Error ? jsonError.message : String(jsonError)}`);
+          }
+        }
+      } catch (fetchError: any) {
+        // Clear the timeout to prevent potential memory leaks
+        clearTimeout(timeoutId);
+        
+        if (fetchError.name === 'AbortError') {
+          console.error(`[${requestId}] Request aborted due to timeout: ${fetchError.message}`);
+          lastError = new Error('Analysis request timed out');
+        } else {
+          console.error(`[${requestId}] Fetch error during OpenAI API call:`, fetchError);
+          lastError = fetchError instanceof Error ? fetchError : new Error(String(fetchError));
+        }
+        
+        // Try again with a simplified prompt if this is the first attempt
+        if (attempt === 1) {
+          attempt++;
+          continue;
+        } else {
+          throw new Error(`Failed to complete analysis after ${attempt} attempts: ${lastError.message}`);
+        }
+      }
+    } catch (attemptError) {
+      console.error(`[${requestId}] Error during analysis attempt ${attempt}:`, attemptError);
+      
+      // Store the error and try again if it's our first attempt
+      lastError = attemptError;
+      if (attempt === 1) {
+        attempt++;
+        continue;
+      } else {
+        throw new Error(`Failed to analyze image after ${attempt} attempts: ${lastError.message}`);
+      }
+    }
+  }
+  
+  // If we reach here, all attempts failed. Throw the last error.
+  console.timeEnd(`⏱️ [${requestId}] analyzeWithGPT4Vision`);
+  throw lastError || new Error('Failed to analyze image with GPT-4 Vision');
+}
+
+/**
+ * Function to convert GPT-4 Vision result to the standard AnalysisResult format
+ */
+function convertVisionResultToAnalysisResult(
+  visionResult: any, 
+  requestId: string, 
+  healthGoal: string
+): AnalysisResult {
+  console.log(`[${requestId}] Converting GPT-4 Vision result to AnalysisResult format`);
+  
+  // Extract basic nutrition values from the Vision API response
+  const basicNutrition = visionResult.basicNutrition || {};
+  
+  // Helper function to parse a nutrition value that might be a string with units
+  const parseNutritionValue = (value: string | number): number => {
+    if (typeof value === 'number') return value;
+    if (typeof value !== 'string') return 0;
+    
+    // Extract the numeric portion from strings like "500 kcal" or "25g"
+    const match = value.match(/(\d+(\.\d+)?)/);
+    return match ? parseFloat(match[1]) : 0;
+  };
+  
+  // Convert nutrient values
+  const nutrients = [
+    { 
+      name: 'Calories', 
+      value: parseNutritionValue(basicNutrition.calories || '0'), 
+      unit: 'kcal', 
+      isHighlight: true 
+    },
+    { 
+      name: 'Protein', 
+      value: parseNutritionValue(basicNutrition.protein || '0'), 
+      unit: 'g', 
+      isHighlight: true 
+    },
+    { 
+      name: 'Carbohydrates', 
+      value: parseNutritionValue(basicNutrition.carbs || '0'), 
+      unit: 'g', 
+      isHighlight: true 
+    },
+    { 
+      name: 'Fat', 
+      value: parseNutritionValue(basicNutrition.fat || '0'), 
+      unit: 'g', 
+      isHighlight: true 
+    }
+  ];
+  
+  // Convert detailed ingredients adding confidence emojis
+  const detailedIngredients = (visionResult.detailedIngredients || []).map((ingredient: any) => {
+    // Calculate emoji based on confidence level
+    let confidenceEmoji = '❓'; // Default/unknown
+    const confidence = ingredient.confidence || 0;
+    
+    if (confidence >= 8) confidenceEmoji = '✅'; // High confidence
+    else if (confidence >= 5) confidenceEmoji = '🟡'; // Medium confidence
+    else confidenceEmoji = '❓'; // Low confidence
+    
+    return {
+      name: ingredient.name,
+      category: ingredient.category || 'food',
+      confidence: confidence,
+      confidenceEmoji
+    };
+  });
+  
+  // Combine feedback from multiple sources if available
+  const combinedFeedback = [
+    ...(visionResult.feedback || []),
+    ...(visionResult.positiveFoodFactors || []).map((item: string) => `✅ ${item}`),
+    ...(visionResult.negativeFoodFactors || []).map((item: string) => `⚠️ ${item}`)
+  ];
+  
+  // Create the standardized analysis result
+  const result: AnalysisResult = {
+    description: visionResult.description || `Analysis of meal for ${formatGoalName(healthGoal)}`,
+    nutrients,
+    feedback: combinedFeedback,
+    suggestions: visionResult.suggestions || [],
+    detailedIngredients,
+    goalScore: {
+      overall: visionResult.goalImpactScore || 5,
+      specific: {}
+    },
+    goalName: formatGoalName(healthGoal),
+    modelInfo: {
+      model: "gpt-4-vision",
+      usedFallback: false,
+      ocrExtracted: false
+    },
+    source: `gpt4-vision${visionResult.imageChallenges ? '-with-challenges' : ''}`,
+    _meta: {
+      ocrConfidence: visionResult.confidence,
+      debugTrace: visionResult.imageChallenges ? `Image challenges: ${visionResult.imageChallenges.join(', ')}` : undefined
+    }
+  };
+  
+  return result;
+}
+
+/**
  * Simple POST handler for the /api/analyzeImage endpoint
  * Tries Nutritionix first, falls back to GPT if Nutritionix fails
  * Implements caching with a 1-hour TTL
@@ -646,9 +1255,106 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
   const requestId = crypto.randomUUID();
   const startTime = Date.now();
   
+  // Validate critical API credentials first to fail fast
+  const credentialValidation = validateApiCredentials();
+  if (!credentialValidation.valid) {
+    console.error(`[${requestId}] API credential validation failed: ${credentialValidation.error}`);
+    
+    // Create a clear error response with detailed information
+    const errorResponse: AnalysisResponse = {
+      success: false,
+      fallback: true,
+      requestId,
+      message: `API credential error: ${credentialValidation.error || "Unknown credential error"}`,
+      imageUrl: null,
+      elapsedTime: Date.now() - startTime,
+      result: createUniversalErrorFallback("api_credential_error"),
+      error: credentialValidation.error || "Unknown credential error",
+      diagnostics: {
+        validationErrors: credentialValidation.details,
+        timestamp: new Date().toISOString()
+      }
+    };
+    
+    return NextResponse.json(errorResponse, { status: 500 });
+  }
+  
   // Set global timeout for the entire request
   const GLOBAL_TIMEOUT_MS = 30000; // 30 seconds max for the entire request
   let globalTimeoutId: NodeJS.Timeout | null = null;
+  
+  // Function to validate essential API credentials
+  function validateApiCredentials(): { valid: boolean; error?: string; details: Record<string, string> } {
+    interface ValidationObject {
+      googleVisionValid: boolean;
+      nutritionixValid: boolean;
+      openaiValid: boolean;
+      details: Record<string, string>;
+    }
+    
+    const validation: ValidationObject = {
+      googleVisionValid: false,
+      nutritionixValid: false,
+      openaiValid: false,
+      details: {}
+    };
+    
+    // Check OpenAI API key
+    if (!process.env.OPENAI_API_KEY) {
+      validation.details.openai = "Missing OpenAI API key";
+    } else if (process.env.OPENAI_API_KEY.length < 20) {
+      validation.details.openai = "OpenAI API key appears invalid (too short)";
+    } else {
+      validation.openaiValid = true;
+    }
+    
+    // Check Nutritionix API credentials
+    if (!process.env.NUTRITIONIX_APP_ID || !process.env.NUTRITIONIX_API_KEY) {
+      validation.details.nutritionix = "Missing Nutritionix credentials";
+    } else if (process.env.NUTRITIONIX_APP_ID.length < 5 || process.env.NUTRITIONIX_API_KEY.length < 10) {
+      validation.details.nutritionix = "Nutritionix credentials appear invalid (too short)";
+    } else {
+      validation.nutritionixValid = true;
+    }
+    
+    // Check Google Vision API credentials
+    const useOcr = process.env.USE_OCR_EXTRACTION === 'true';
+    if (useOcr) {
+      const hasBase64Creds = !!process.env.GOOGLE_VISION_PRIVATE_KEY_BASE64 && 
+                         process.env.GOOGLE_VISION_PRIVATE_KEY_BASE64.length > 100;
+      const hasFileCreds = !!process.env.GOOGLE_APPLICATION_CREDENTIALS;
+      
+      if (!hasBase64Creds && !hasFileCreds) {
+        validation.details.googleVision = "Missing Google Vision API credentials";
+      } else {
+        validation.googleVisionValid = true;
+      }
+    } else {
+      // OCR is disabled, so Vision credentials aren't critical
+      validation.googleVisionValid = true;
+      validation.details.googleVision = "OCR extraction disabled, skipping validation";
+    }
+    
+    // Determine overall validity and error message
+    const valid = validation.nutritionixValid && 
+                (validation.openaiValid || validation.googleVisionValid);
+    
+    let error: string | undefined;
+    if (!valid) {
+      const missingServices = [];
+      if (!validation.nutritionixValid) missingServices.push("Nutritionix");
+      if (!validation.openaiValid) missingServices.push("OpenAI");
+      if (!validation.googleVisionValid) missingServices.push("Google Vision");
+      
+      error = `Missing or invalid API credentials for: ${missingServices.join(", ")}`;
+    }
+    
+    return {
+      valid,
+      error,
+      details: validation.details
+    };
+  }
   
   // Create timeout promise for the entire request
   const timeoutPromise = new Promise<NextResponse>((_, reject) => {
@@ -827,6 +1533,81 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       }
       
       console.log(`[analyzeImage] Cache miss for ${cacheKey}, processing...`);
+      
+      // Check if we should use GPT-4 Vision
+      const useGpt4Vision = process.env.USE_GPT4_VISION === 'true';
+      console.log(`[${requestId}] USE_GPT4_VISION flag: ${useGpt4Vision ? 'enabled' : 'disabled'}`);
+      
+      // Analysis result variable used throughout the function
+      let analysisResult: AnalysisResult | null = null;
+      
+      if (useGpt4Vision) {
+        try {
+          // Use GPT-4 Vision for direct image analysis
+          console.log(`[${requestId}] Using GPT-4 Vision for image analysis`);
+          
+          // Add explicit timeout for vision analysis
+          const controller = new AbortController();
+          const timeoutId = setTimeout(() => {
+            console.warn(`[${requestId}] GPT-4 Vision timeout reached (45s), aborting`);
+            controller.abort();
+          }, 45000);
+          
+          try {
+            // Run vision analysis
+            const visionResult = await analyzeWithGPT4Vision(imageBase64, healthGoal, requestId);
+            
+            // Clear timeout
+            clearTimeout(timeoutId);
+            
+            // Convert to standard format
+            analysisResult = convertVisionResultToAnalysisResult(visionResult, requestId, healthGoal);
+            
+            console.log(`[${requestId}] GPT-4 Vision analysis successful`);
+            
+            // Clear the timeout since we're returning early
+            if (globalTimeoutId) clearTimeout(globalTimeoutId);
+            
+            // Prepare the final response
+            const elapsedTime = Date.now() - startTime;
+            console.log(`[analyzeImage] Completed GPT-4 Vision analysis in ${elapsedTime}ms`);
+            
+            // Cache the result for future requests
+            cache.set(cacheKey, analysisResult);
+            
+            // Create the final response
+            const response: AnalysisResponse = {
+              success: true,
+              fallback: false,
+              requestId,
+              message: "Analysis completed successfully with GPT-4 Vision",
+              result: analysisResult,
+              elapsedTime,
+              error: null,
+              imageUrl: null,
+              diagnostics: {
+                visionConfidence: visionResult.confidence,
+                modelUsed: "gpt-4-vision",
+                processingTimeMs: elapsedTime
+              }
+            };
+            
+            return NextResponse.json(response);
+          } catch (visionError: any) {
+            // Clear timeout
+            clearTimeout(timeoutId);
+            
+            // Log the error and fall back to OCR-based analysis
+            console.error(`[${requestId}] GPT-4 Vision analysis failed, falling back to OCR:`, visionError.message);
+            console.log(`[${requestId}] Falling back to OCR-based analysis...`);
+            // Continue with OCR-based analysis below
+          }
+        } catch (visionSetupError: any) {
+          console.error(`[${requestId}] Error setting up GPT-4 Vision analysis:`, visionSetupError.message);
+          console.log(`[${requestId}] Falling back to OCR-based analysis...`);
+          // Continue with OCR-based analysis below
+        }
+      }
       
       // Run food detection with error handling and timeout
       console.log(`[${requestId}] Running food detection on image...`);
@@ -1071,7 +1852,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       }
       
       // Create analysis from the nutrition data
-      const analysisResult: AnalysisResult = {
+      analysisResult = {
         description: nutritionData.raw?.description || "Could not analyze this meal properly.",
         nutrients: nutritionData.nutrients || [
           { name: 'Calories', value: 0, unit: 'kcal', isHighlight: true },

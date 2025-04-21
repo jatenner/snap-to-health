@@ -48,8 +48,8 @@ export const FEATURE_FLAGS = {
   // Use OCR text extraction (always enabled now)
   USE_OCR_EXTRACTION: true,
   
-  // Disable Vision-based analysis (deprecated)
-  USE_GPT4_VISION: false
+  // Enable Vision-based analysis
+  USE_GPT4_VISION: true
 };
 
 /**
