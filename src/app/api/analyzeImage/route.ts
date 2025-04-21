@@ -10,7 +10,7 @@ import { extractBase64Image } from '@/lib/imageProcessing';
 import { getNutritionData, createNutrientAnalysis, NutritionData, NutritionixFood } from '@/lib/nutritionixApi';
 import { callGptNutritionFallback } from '@/lib/gptNutrition';
 import { createEmptyFallbackAnalysis } from '@/lib/analyzeImageWithOCR';
-import { runOCR, OCRResult } from '@/lib/runOCR';
+import { runOCR, OCRResult, runFoodDetection, detectFoodLabels } from '@/lib/runOCR';
 import { analyzeMealTextOnly, MealAnalysisResult } from '@/lib/analyzeMealTextOnly';
 import { API_CONFIG } from '@/lib/constants';
 import { createAnalysisDiagnostics, checkOCRConfig, checkNutritionixCredentials } from '@/lib/diagnostics';
@@ -276,6 +276,9 @@ interface AnalysisResult {
     model: string;
     usedFallback: boolean;
     ocrExtracted: boolean;
+    usedLabelDetection?: boolean;
+    detectedLabel?: string | null;
+    labelConfidence?: number;
   };
   lowConfidence?: boolean;
   fallback?: boolean;
@@ -290,6 +293,9 @@ interface AnalysisResult {
     foodConfidence?: number;
     debugTrace?: string;
     ocrConfidence?: number;
+    usedLabelDetection?: boolean;
+    detectedLabel?: string | null;
+    labelConfidence?: number;
   };
   no_result?: boolean;
 }
@@ -822,47 +828,70 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       
       console.log(`[analyzeImage] Cache miss for ${cacheKey}, processing...`);
       
-      // Run OCR with error handling and timeout
-      console.log(`[${requestId}] Running OCR on image...`);
-      let ocrResult: OCRResult;
+      // Run food detection with error handling and timeout
+      console.log(`[${requestId}] Running food detection on image...`);
+      let foodDetectionResult;
+      let labelDetectionMetadata = {
+        usedLabelDetection: false,
+        detectedLabel: null as string | null,
+        labelConfidence: 0,
+        labelMatchCandidates: [] as Array<{label: string, score: number}>
+      };
       
       try {
-        // Add explicit timeout for OCR to avoid hanging requests
+        // Add explicit timeout for food detection to avoid hanging requests
         const controller = new AbortController();
         const timeoutId = setTimeout(() => {
-          console.warn(`[${requestId}] OCR timeout reached (10s), aborting`);
+          console.warn(`[${requestId}] Food detection timeout reached (10s), aborting`);
           controller.abort();
         }, 10000);
 
-        // Run OCR with the specified timeout
-        ocrResult = await Promise.race([
-          runOCR(imageBase64, requestId),
+        // Run food detection with the specified timeout
+        foodDetectionResult = await Promise.race([
+          runFoodDetection(imageBase64, requestId),
           new Promise<never>((_, reject) => 
-            setTimeout(() => reject(new Error('OCR_TIMEOUT')), 10000)
+            setTimeout(() => reject(new Error('FOOD_DETECTION_TIMEOUT')), 10000)
           )
         ]);
         clearTimeout(timeoutId);
-      } catch (ocrError: any) {
-        // Handle OCR timeout or other errors
-        console.error(`[${requestId}] OCR error:`, ocrError.message);
-        ocrResult = {
+      } catch (detectionError: any) {
+        // Handle detection timeout or other errors
+        console.error(`[${requestId}] Food detection error:`, detectionError.message);
+        foodDetectionResult = {
           success: false,
           text: "",
           confidence: 0,
-          error: ocrError.message,
-          processingTimeMs: 0
+          foodLabels: [],
+          topFoodLabel: null,
+          detectionMethod: 'fallback' as 'fallback',
+          processingTimeMs: 0,
+          error: detectionError.message
         };
       }
       
-      // Extract text from OCR result
-      let extractedText = ocrResult.text || "";
+      // Extract information from food detection result
+      let extractedText = foodDetectionResult.text || "";
+      const detectedFoodLabels = foodDetectionResult.foodLabels || [];
+      const topFoodLabel = foodDetectionResult.topFoodLabel;
+      const detectionMethod = foodDetectionResult.detectionMethod;
       
-      // Debug logs for OCR output
-      console.log(`[${requestId}] OCR complete: success=${ocrResult.success}, confidence=${ocrResult.confidence}`);
-      console.log(`[${requestId}] Extracted text (${extractedText.length} chars): ${extractedText.substring(0, 100)}`);
+      // Set metadata for the response
+      labelDetectionMetadata = {
+        usedLabelDetection: detectionMethod === 'label',
+        detectedLabel: topFoodLabel?.label || null,
+        labelConfidence: topFoodLabel?.score || 0,
+        labelMatchCandidates: detectedFoodLabels
+      };
       
-      // Process the extracted text only if we have something meaningful
-      // Otherwise, proceed with a fallback approach
+      // Debug logs for food detection output
+      console.log(`[${requestId}] Food detection complete: method=${detectionMethod}, confidence=${foodDetectionResult.confidence}`);
+      if (detectionMethod === 'label') {
+        console.log(`[${requestId}] Using high-confidence label: ${topFoodLabel?.label} (${(topFoodLabel?.score || 0) * 100}%)`);
+      } else {
+        console.log(`[${requestId}] Extracted text (${extractedText.length} chars): ${extractedText.substring(0, 100)}`);
+      }
+      
+      // Process the detected food information
       let nutritionData: ExtendedNutritionData;
       let analysis: any = { 
         success: false, 
@@ -870,9 +899,53 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
         suggestions: ["Try uploading a photo of food."] 
       };
       
-      if (extractedText.length > 0 && ocrResult.success) {
-        // Get nutrition data from the extracted text
-        nutritionData = await fetchNutrition(extractedText, requestId);
+      if (extractedText.length > 0 && foodDetectionResult.success) {
+        // Special handling for high-confidence labels detected by Vision API
+        if (detectionMethod === 'label' && topFoodLabel && topFoodLabel.score > 0.8) {
+          console.log(`[${requestId}] Using direct label analysis for detected food: ${topFoodLabel.label}`);
+          
+          // Call Nutritionix directly with the detected food label
+          const nutritionixData = await getNutritionData(topFoodLabel.label, requestId);
+          
+          if (nutritionixData.success && nutritionixData.data) {
+            // Add meta debug info to track label detection data
+            nutritionData = {
+              ...nutritionixData.data,
+              source: 'nutritionix',
+              _meta: {
+                ocrText: extractedText,
+                foodTerms: [topFoodLabel.label],
+                foodConfidence: topFoodLabel.score,
+                debugTrace: `Used direct label detection: ${topFoodLabel.label} (confidence: ${(topFoodLabel.score * 100).toFixed(1)}%)`
+              }
+            };
+          } else {
+            console.warn(`[${requestId}] Label-based Nutritionix lookup failed for "${topFoodLabel.label}". Using GPT fallback`);
+            
+            // Fall back to GPT using the detected label
+            const gptFallback = await callGptNutritionFallback(topFoodLabel.label, requestId);
+            
+            // Add meta debug info
+            nutritionData = {
+              ...gptFallback,
+              source: 'gpt_label_fallback',
+              _meta: {
+                ocrText: extractedText,
+                foodTerms: [topFoodLabel.label],
+                foodConfidence: topFoodLabel.score,
+                debugTrace: `Used GPT fallback after label-based Nutritionix failure for "${topFoodLabel.label}"`
+              }
+            };
+            
+            // Validate GPT fallback data
+            nutritionData = validateNutritionData(nutritionData, requestId);
+          }
+        }
+        // Regular OCR-based text analysis
+        else {
+          // Get nutrition data from the extracted text
+          nutritionData = await fetchNutrition(extractedText, requestId);
+        }
         
         // Check if no food was detected in the OCR text
         if (nutritionData.noFoodDetected) {
@@ -917,7 +990,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
             error: null,
             imageUrl: null,
             diagnostics: {
-              ocrConfidence: ocrResult.confidence,
+              ocrConfidence: foodDetectionResult.confidence,
               ocrText: extractedText,
               textLength: extractedText.length,
               processingTimeMs: Date.now() - startTime,
@@ -987,7 +1060,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
           error: null,
           imageUrl: null,
           diagnostics: {
-            ocrConfidence: ocrResult.confidence,
+            ocrConfidence: foodDetectionResult.confidence,
             textLength: 0,
             processingTimeMs: Date.now() - startTime,
             ocrFailed: true
@@ -1022,14 +1095,20 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
         modelInfo: {
           model: nutritionData.source || "fallback",
           usedFallback: nutritionData.raw?.fallback || false,
-          ocrExtracted: !!extractedText
+          ocrExtracted: !!extractedText,
+          usedLabelDetection: labelDetectionMetadata.usedLabelDetection,
+          detectedLabel: labelDetectionMetadata.detectedLabel,
+          labelConfidence: labelDetectionMetadata.labelConfidence
         },
         lowConfidence: nutritionData.raw?.fallback || false,
         fallback: nutritionData.raw?.fallback || false,
         source: nutritionData.source || "fallback",
         _meta: {
           ocrText: extractedText,
-          ocrConfidence: ocrResult.confidence,
+          ocrConfidence: foodDetectionResult.confidence,
+          usedLabelDetection: labelDetectionMetadata.usedLabelDetection,
+          detectedLabel: labelDetectionMetadata.detectedLabel,
+          labelConfidence: labelDetectionMetadata.labelConfidence,
           ...nutritionData._meta
         }
       };
@@ -1095,19 +1174,23 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
         success: true,
         fallback: (nutritionData as any).source !== 'nutritionix',
         requestId,
-        message: "Analysis completed successfully" + (ocrResult.error ? " (with text extraction fallback)" : ""),
+        message: "Analysis completed successfully" + (foodDetectionResult.error ? " (with text extraction fallback)" : ""),
         result: validatedResult,
         elapsedTime,
         error: null,
         imageUrl: null,
         diagnostics: {
-          ocrConfidence: ocrResult.confidence,
+          ocrConfidence: foodDetectionResult.confidence,
           ocrText: extractedText,
           usedFallback: (nutritionData as any).source !== 'nutritionix',
           source: (nutritionData as any).source,
           textLength: extractedText.length,
           noFoodDetected: nutritionData.noFoodDetected || false,
           foodTerms: nutritionData._meta?.foodTerms || [],
+          labelDetection: labelDetectionMetadata.usedLabelDetection,
+          detectedLabel: labelDetectionMetadata.detectedLabel,
+          labelConfidence: labelDetectionMetadata.labelConfidence,
+          labelMatchCandidates: labelDetectionMetadata.labelMatchCandidates,
           processingTimeMs: elapsedTime
         }
       };

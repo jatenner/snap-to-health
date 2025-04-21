@@ -232,6 +232,94 @@ function prepareBase64Image(base64Image: string): Buffer {
 }
 
 /**
+ * Detects food labels in an image using Google Vision API
+ * @param imageBuffer Buffer containing the image data
+ * @param requestId Request ID for logging
+ * @param confidenceThreshold Minimum confidence score for labels (0-1)
+ * @returns Array of detected food labels with their confidence scores
+ */
+export async function detectFoodLabels(
+  imageBuffer: Buffer,
+  requestId: string,
+  confidenceThreshold: number = 0.75
+): Promise<Array<{label: string, score: number}>> {
+  try {
+    console.log(`🔍 [${requestId}] Running Google Vision label detection`);
+    
+    // Get Vision client
+    const client = await getVisionClient();
+    if (!client) {
+      console.error(`❌ [${requestId}] Failed to initialize Vision client for label detection`);
+      return [];
+    }
+    
+    // Start timing
+    const startTime = Date.now();
+    
+    // Call the Vision API for label detection
+    const [result] = await client.labelDetection({
+      image: {
+        content: imageBuffer.toString('base64')
+      }
+    });
+    
+    // Calculate processing time
+    const processingTime = Date.now() - startTime;
+    console.log(`⏱️ [${requestId}] Label detection completed in ${processingTime}ms`);
+    
+    // Check if we have any labels
+    if (!result.labelAnnotations || result.labelAnnotations.length === 0) {
+      console.log(`⚠️ [${requestId}] No labels detected in image`);
+      return [];
+    }
+    
+    // Food-related categories and keywords to help filter labels
+    const foodCategories = [
+      'Food', 'Fruit', 'Vegetable', 'Dessert', 'Beverage', 'Drink', 'Meat',
+      'Dairy Product', 'Baked goods', 'Breakfast', 'Cuisine', 'Dish', 'Meal'
+    ];
+    
+    // Extract labels with confidence above threshold
+    const foodLabels = result.labelAnnotations
+      .filter(label => {
+        // Check confidence threshold
+        const confidence = label.score || 0;
+        
+        // Check if label is potentially food-related
+        const isFoodRelated = label.description && (
+          // Direct food category match
+          foodCategories.some(category => 
+            label.description?.toLowerCase().includes(category.toLowerCase())
+          ) ||
+          // Check for food-related label
+          true // For now, consider all high-confidence labels
+        );
+        
+        return confidence >= confidenceThreshold && isFoodRelated;
+      })
+      .map(label => ({
+        label: label.description || '',
+        score: label.score || 0
+      }));
+    
+    // Log detected labels
+    if (foodLabels.length > 0) {
+      console.log(`✅ [${requestId}] Detected ${foodLabels.length} potential food labels:`);
+      foodLabels.forEach(item => {
+        console.log(`   - ${item.label} (confidence: ${(item.score * 100).toFixed(1)}%)`);
+      });
+    } else {
+      console.log(`⚠️ [${requestId}] No high-confidence food labels detected`);
+    }
+    
+    return foodLabels;
+  } catch (error) {
+    console.error(`❌ [${requestId}] Error detecting food labels:`, error);
+    return [];
+  }
+}
+
+/**
  * Calculate confidence score from Google Vision API results
  */
 function calculateConfidence(result: any): number {
@@ -561,5 +649,114 @@ export async function runAdvancedOCR(
     };
   } finally {
     console.timeEnd(`⏱️ [${requestId}] runAdvancedOCR`);
+  }
+}
+
+/**
+ * Runs label detection first, then falls back to OCR if no food labels are found
+ * This provides a more accurate way to identify food items in images
+ * 
+ * @param base64Image Base64 encoded image
+ * @param requestId Request ID for logging
+ * @returns Combined result with OCR text and detected food labels
+ */
+export async function runFoodDetection(
+  base64Image: string,
+  requestId: string
+): Promise<{
+  success: boolean;
+  text: string;
+  confidence: number;
+  foodLabels: Array<{label: string, score: number}>;
+  topFoodLabel: {label: string, score: number} | null;
+  detectionMethod: 'label' | 'ocr' | 'fallback';
+  processingTimeMs: number;
+  error?: string;
+}> {
+  try {
+    console.log(`🔍 [${requestId}] Starting food detection in image`);
+    const startTime = Date.now();
+    
+    // Prepare the image buffer
+    const imageBuffer = prepareBase64Image(base64Image);
+    
+    // Step 1: Try label detection first (faster and more accurate for simple food items)
+    console.log(`🔍 [${requestId}] Running label detection first`);
+    const foodLabels = await detectFoodLabels(imageBuffer, requestId);
+    
+    // Find the top food label by confidence score
+    const topFoodLabel = foodLabels.length > 0 
+      ? foodLabels.reduce((prev, current) => (prev.score > current.score) ? prev : current)
+      : null;
+      
+    // Check if we have a high-confidence food label (>85%)
+    if (topFoodLabel && topFoodLabel.score > 0.85) {
+      console.log(`✅ [${requestId}] Using high-confidence food label: ${topFoodLabel.label} (${(topFoodLabel.score * 100).toFixed(1)}%)`);
+      const processingTimeMs = Date.now() - startTime;
+      
+      // Create a simple text representation for compatibility with existing flows
+      const labelText = `${topFoodLabel.label}`;
+      
+      return {
+        success: true,
+        text: labelText,
+        confidence: topFoodLabel.score,
+        foodLabels,
+        topFoodLabel,
+        detectionMethod: 'label',
+        processingTimeMs,
+      };
+    }
+    
+    // Step 2: Fall back to OCR if no high-confidence food labels found
+    console.log(`🔍 [${requestId}] No high-confidence food label, trying OCR`);
+    const ocrResult = await runOCR(base64Image, requestId);
+    
+    // If OCR successful, combine with any low-confidence food labels
+    if (ocrResult.success && ocrResult.text.trim()) {
+      console.log(`✅ [${requestId}] Successfully extracted text with OCR, combining with label data`);
+      const processingTimeMs = Date.now() - startTime;
+      
+      return {
+        success: true,
+        text: ocrResult.text,
+        confidence: ocrResult.confidence,
+        foodLabels,
+        topFoodLabel,
+        detectionMethod: 'ocr',
+        processingTimeMs,
+      };
+    }
+    
+    // Step 3: If both label detection and OCR failed, provide fallback
+    console.log(`⚠️ [${requestId}] Both label detection and OCR failed, using fallback`);
+    const fallbackText = getRandomFallbackText();
+    const processingTimeMs = Date.now() - startTime;
+    
+    return {
+      success: false,
+      text: fallbackText,
+      confidence: 0.1,
+      foodLabels: [],
+      topFoodLabel: null,
+      detectionMethod: 'fallback',
+      processingTimeMs,
+      error: "Failed to detect food or extract text"
+    };
+    
+  } catch (error) {
+    console.error(`❌ [${requestId}] Error in food detection:`, error);
+    const processingTimeMs = Date.now() - Date.now();
+    
+    return {
+      success: false,
+      text: getRandomFallbackText(),
+      confidence: 0,
+      foodLabels: [],
+      topFoodLabel: null,
+      detectionMethod: 'fallback',
+      processingTimeMs,
+      error: error instanceof Error ? error.message : String(error)
+    };
   }
 } 

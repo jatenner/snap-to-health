@@ -65,6 +65,9 @@ interface AnalysisResult {
     ocrExtracted?: boolean;
     ocrConfidence?: number;
     usedFallback?: boolean;
+    usedLabelDetection?: boolean;
+    detectedLabel?: string | null;
+    labelConfidence?: number;
   };
   _meta?: {
     fallback?: boolean;
@@ -72,6 +75,9 @@ interface AnalysisResult {
     ocrConfidence?: number;
     foodTerms?: string[];
     debugTrace?: string;
+    usedLabelDetection?: boolean;
+    detectedLabel?: string | null;
+    labelConfidence?: number;
   };
   no_result?: boolean;
 }
@@ -229,9 +235,52 @@ const SaveStatusBanner = ({
  * Component to display a warning when using a fallback model
  */
 const ModelWarningBanner = ({ modelInfo }: { modelInfo?: AnalysisResult['modelInfo'] }) => {
-  // Check if modelInfo exists and also check if 'usedFallback' property exists on it
-  // Rather than directly accessing modelInfo.usedFallback, check it safely
-  if (!modelInfo || !('usedFallback' in modelInfo) || modelInfo.usedFallback !== true) {
+  // Skip if no model info is available
+  if (!modelInfo) return null;
+  
+  // Only show banner if using GPT model or fallback
+  if (!modelInfo.usedFallback && !modelInfo.model?.includes('gpt')) return null;
+  
+  return (
+    <div className="mb-3 px-3 py-2 bg-yellow-50 text-yellow-800 border border-yellow-100 rounded-md text-xs flex items-center">
+      <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 mr-1 flex-shrink-0" viewBox="0 0 20 20" fill="currentColor">
+        <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clipRule="evenodd" />
+      </svg>
+      <span>
+        {modelInfo.usedFallback 
+          ? 'Using estimated nutritional data due to text extraction challenges.'
+          : 'Analysis performed using AI text extraction.'}
+        {modelInfo.ocrConfidence !== undefined && 
+          ` Text extraction confidence: ${Math.round(modelInfo.ocrConfidence * 100)}%`}
+      </span>
+    </div>
+  );
+};
+
+const LabelDetectionInfo = ({ modelInfo }: { modelInfo?: AnalysisResult['modelInfo'] }) => {
+  // Skip if no model info or no label detection was used
+  if (!modelInfo || !modelInfo.usedLabelDetection || !modelInfo.detectedLabel) return null;
+  
+  // Calculate confidence percentage
+  const confidencePercent = modelInfo.labelConfidence ? Math.round(modelInfo.labelConfidence * 100) : 0;
+  
+  return (
+    <div className="mb-3 px-3 py-2 bg-green-50 text-green-800 border border-green-100 rounded-md text-xs flex items-center">
+      <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 mr-1 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+      </svg>
+      <span>
+        🍽️ Detected <span className="font-medium">{modelInfo.detectedLabel}</span> via image recognition
+        {confidencePercent > 0 && ` (${confidencePercent}% confidence)`}
+      </span>
+    </div>
+  );
+};
+
+// FallbackWarningBanner component to show when displaying fallback results
+const FallbackWarningBanner = ({ fallback }: { fallback?: boolean }) => {
+  // Don't show if not in fallback mode
+  if (!fallback) {
     return null;
   }
   
@@ -247,30 +296,6 @@ const ModelWarningBanner = ({ modelInfo }: { modelInfo?: AnalysisResult['modelIn
           <h3 className="text-sm font-medium text-amber-800">Limited Analysis Mode</h3>
           <div className="mt-1 text-xs text-amber-700">
             <p>Analysis was performed using a fallback method. Results may be less accurate.</p>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-};
-
-// FallbackWarningBanner component to show when displaying fallback results
-const FallbackWarningBanner = ({ fallback }: { fallback?: boolean }) => {
-  if (!fallback) return null;
-  
-  return (
-    <div className="mb-4 p-3 bg-amber-50 border border-amber-200 rounded-md">
-      <div className="flex items-start">
-        <div className="flex-shrink-0 pt-0.5">
-          <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 text-amber-500" viewBox="0 0 20 20" fill="currentColor">
-            <path fillRule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
-          </svg>
-        </div>
-        <div className="ml-3">
-          <h3 className="text-sm font-medium text-amber-800">Fallback Analysis</h3>
-          <div className="mt-1 text-xs text-amber-700">
-            <p>We couldn't analyze this meal in detail. These are default values and generic suggestions.</p>
-            <p className="mt-1">For better results, try uploading a clearer photo with good lighting.</p>
           </div>
         </div>
       </div>
@@ -664,6 +689,9 @@ export default function MealAnalysisPage() {
         
         {/* Show model warning banner for fallback models */}
         <ModelWarningBanner modelInfo={analysisResult?.modelInfo} />
+
+        {/* Label Detection Info */}
+        <LabelDetectionInfo modelInfo={analysisResult?.modelInfo} />
 
         {/* Main analysis section */}
         <div className="bg-white rounded-lg shadow-md overflow-hidden mb-6">
