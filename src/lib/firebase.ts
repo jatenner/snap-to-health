@@ -5,7 +5,6 @@ import { getAuth, Auth } from 'firebase/auth';
 import { getFirestore, Firestore } from 'firebase/firestore';
 import { getStorage, FirebaseStorage } from 'firebase/storage';
 import { getAnalytics, Analytics } from 'firebase/analytics';
-import { ref } from 'firebase/storage';
 
 // Only initialize Firebase in the browser
 let app: FirebaseApp | null = null;

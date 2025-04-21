@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react';
 import { app, auth, db, storage } from '@/lib/firebase';
 import { collection, getDocs, limit, query } from 'firebase/firestore';
-import { ref, listAll } from 'firebase/storage';
+import * as firebaseStorage from 'firebase/storage';
 
 export default function FirebaseClientCheckPage() {
   const [status, setStatus] = useState<{
@@ -105,9 +105,9 @@ export default function FirebaseClientCheckPage() {
         try {
           if (!storage) throw new Error('Storage not initialized');
           
-          // Try to list files at root
-          const rootRef = ref(storage, '/');
-          const result = await listAll(rootRef);
+          // Try to list files at root using explicit imports
+          const rootRef = firebaseStorage.ref(storage, '/');
+          const result = await firebaseStorage.listAll(rootRef);
           
           setStatus(prev => ({
             ...prev,

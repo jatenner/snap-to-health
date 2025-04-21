@@ -834,7 +834,7 @@ function getGoalSpecificPrompt(healthGoal: string): string {
 /**
  * Function to analyze the image with GPT-4 Vision
  */
-export async function analyzeWithGPT4Vision(base64Image: string, healthGoal: string, requestId: string) {
+async function analyzeWithGPT4Vision(base64Image: string, healthGoal: string, requestId: string) {
   console.time(`⏱️ [${requestId}] analyzeWithGPT4Vision`);
   const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
   
