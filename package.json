@@ -13,6 +13,7 @@
     "axios": "^1.8.4",
     "encoding": "^0.1.13",
     "firebase": "^10.7.1",
+    "firebase-admin": "^13.2.0",
     "next": "^13.4.7",
     "node-cache": "^5.1.2",
     "openai": "^4.20.0",
