@@ -100,7 +100,7 @@ function createUniversalFallbackResult(reason: string = "unknown", partial: Part
     if (Array.isArray(partial.nutrients) && partial.nutrients.length > 0) {
       fallback.nutrients = partial.nutrients.map(n => ({
         name: n.name || "Unknown",
-        value: n.value ?? 0,
+        value: typeof n.value === 'string' ? parseFloat(n.value) || 0 : (n.value ?? 0),
         unit: n.unit || "g",
         isHighlight: n.isHighlight ?? false
       }));
