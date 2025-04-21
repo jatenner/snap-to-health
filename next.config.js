@@ -3,21 +3,24 @@ const webpack = require('webpack');
 
 const nextConfig = {
   reactStrictMode: true,
-  transpilePackages: ['@firebase/auth', '@firebase/storage', 'firebase'],
+  // Output builds in the standalone mode for better compatibility with serverless environments
+  output: "standalone",
+  // Disable Image Optimization API in dev mode to avoid extra complexity
   images: {
-    domains: ['*'],
+    formats: ['image/avif', 'image/webp'],
     remotePatterns: [
       {
         protocol: 'https',
-        hostname: '**',
+        hostname: '**.githubusercontent.com',
       },
     ],
   },
-  // Explicitly enable environment variables to be exposed to the browser
-  // These are already prefixed with NEXT_PUBLIC_ so they should be exposed by default,
-  // but we're being extra explicit here to ensure they're available
+  // Runtime environment variables for the client
   env: {
-    // Firebase config
+    // Nutritionix API credentials - public since they're used on the client
+    NEXT_PUBLIC_NUTRITIONIX_APP_ID: process.env.NEXT_PUBLIC_NUTRITIONIX_APP_ID,
+    NEXT_PUBLIC_NUTRITIONIX_API_KEY: process.env.NEXT_PUBLIC_NUTRITIONIX_API_KEY,
+    // Firebase public config
     NEXT_PUBLIC_FIREBASE_API_KEY: process.env.NEXT_PUBLIC_FIREBASE_API_KEY,
     NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN: process.env.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN,
     NEXT_PUBLIC_FIREBASE_PROJECT_ID: process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID,
@@ -25,82 +28,67 @@ const nextConfig = {
     NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID: process.env.NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID,
     NEXT_PUBLIC_FIREBASE_APP_ID: process.env.NEXT_PUBLIC_FIREBASE_APP_ID,
     NEXT_PUBLIC_FIREBASE_MEASUREMENT_ID: process.env.NEXT_PUBLIC_FIREBASE_MEASUREMENT_ID,
-    
-    // Explicitly define Nutritionix API keys
-    NUTRITIONIX_APP_ID: process.env.NUTRITIONIX_APP_ID,
-    NUTRITIONIX_API_KEY: process.env.NUTRITIONIX_API_KEY,
-    
-    // Add Tesseract.js CDN environment variables
-    TESSERACT_WORKER_URL: 'https://cdn.jsdelivr.net/npm/tesseract.js@4.1.1/dist/worker.min.js',
-    TESSERACT_CORE_URL: 'https://cdn.jsdelivr.net/npm/tesseract.js-core@4.0.4/tesseract-core.wasm.js',
-    TESSERACT_LANG_PATH: 'https://cdn.jsdelivr.net/npm/tesseract.js-data@4.0.0/eng',
+    // Flag to easily enable/disable features in different environments
+    NEXT_PUBLIC_ENVIRONMENT: process.env.NODE_ENV,
+    // Vercel deployment indicator
+    VERCEL: process.env.VERCEL
   },
   // Configure webpack to handle Tesseract.js worker scripts correctly
   webpack: (config, { isServer, dev }) => {
-    // Prevent the issue with .next/worker-script/node/index.js not found
-    if (!isServer) {
-      // Add fallbacks for Node.js core modules
-      config.resolve.fallback = {
-        ...config.resolve.fallback,
-        fs: false,
-        path: false,
-        crypto: false,
-        os: false,
-        stream: false,
-        util: false,
-        buffer: false,
-      };
+    // For OCR worker to function properly, we need to handle the worker correctly
+    config.module.rules.push({
+      test: /tesseract\.js-core\/tesseract-core\.wasm\.js/,
+      type: 'javascript/auto',
+      loader: 'file-loader',
+      options: {
+        name: 'static/chunks/[name].[hash].[ext]',
+      },
+    });
 
-      // Force Tesseract.js to use CDN paths in all environments
-      config.resolve.alias = {
-        ...config.resolve.alias,
-        'tesseract.js-core': 'tesseract.js-core/dist/tesseract-core.wasm.js',
-      };
+    // Handle Tesseract.js language data files
+    config.module.rules.push({
+      test: /tesseract\.js-data.*?\/eng.*?\.js$/,
+      use: 'null-loader',
+    });
+
+    // Prevent Tesseract from causing issues with Next.js SSR
+    if (isServer) {
+      // Add null loader for tesseract.js on server-side to prevent issues
+      config.module.rules.push({
+        test: /tesseract\.js/,
+        use: 'null-loader',
+      });
       
-      // Add environment definitions for Tesseract workers
-      if (webpack && webpack.DefinePlugin) {
-        config.plugins.push(
-          new webpack.DefinePlugin({
-            'process.env.TESSERACT_WORKER_URL': JSON.stringify('https://cdn.jsdelivr.net/npm/tesseract.js@4.1.1/dist/worker.min.js'),
-            'process.env.TESSERACT_CORE_URL': JSON.stringify('https://cdn.jsdelivr.net/npm/tesseract.js-core@4.0.4/tesseract-core.wasm.js'),
-            'process.env.TESSERACT_LANG_PATH': JSON.stringify('https://cdn.jsdelivr.net/npm/tesseract.js-data@4.0.0/eng'),
-            // Define Nutritionix API keys for client 
-            'process.env.NUTRITIONIX_APP_ID': JSON.stringify(process.env.NUTRITIONIX_APP_ID),
-            'process.env.NUTRITIONIX_API_KEY': JSON.stringify(process.env.NUTRITIONIX_API_KEY),
-          })
-        );
-      } else {
-        console.warn('webpack.DefinePlugin is not available, skipping Tesseract environment variables');
-      }
+      // Add null loader for undici to prevent issues with Firebase Storage
+      config.module.rules.push({
+        test: /undici/,
+        use: 'null-loader',
+      });
+      
+      // Handle specific Firebase Storage modules that try to import undici
+      config.module.rules.push({
+        test: /node_modules\/@firebase\/storage/,
+        use: {
+          loader: 'null-loader',
+        },
+      });
     }
 
-    // Configure asset modules for handling wasm files and worker scripts
-    config.module.rules.unshift({
-      test: /tesseract\.js-core[\\/].*?\.wasm$/,
-      type: 'asset/resource',
-      generator: {
-        filename: 'static/chunks/[name].[hash][ext]',
-      },
-    });
-    
-    config.module.rules.unshift({
-      test: /tesseract\.js[\\/]dist[\\/]worker\.min\.js$/,
-      type: 'asset/resource',
-      generator: {
-        filename: 'static/chunks/[name].[hash][ext]',
-      },
-    });
+    // Configure fallbacks for Node.js core modules
+    config.resolve.fallback = {
+      ...config.resolve.fallback,
+      fs: false,
+      path: false,
+      crypto: false,
+      undici: false, // Add explicit fallback for undici
+      http: false,
+      https: false,
+      stream: false,
+      zlib: false,
+    };
 
-    // Fix for undici private class fields
-    // Exclude undici modules from normal processing
-    config.module.rules.push({
-      test: /undici\/lib\/web\/fetch\/util\.js$/,
-      use: 'null-loader',
-      include: [
-        /node_modules\/@firebase\/storage\/node_modules\/undici/,
-        /node_modules\/firebase\/node_modules\/undici/
-      ]
-    });
+    // Add source maps for better debugging
+    config.devtool = 'source-map';
 
     return config;
   },
