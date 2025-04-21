@@ -286,6 +286,7 @@ interface AnalysisResult {
   saved?: boolean;
   savedMealId?: string;
   saveError?: string;
+  rawTextResponse?: string;
   _meta?: {
     ocrText?: string;
     foodTerms?: string[];
@@ -2302,3 +2303,6 @@ function ensureCriticalFields(result: any): any {
   console.info("[Test] Fallback result with partial data accepted ✅");
   return normalized;
 }
+
+// Export the function for testing purposes
+export { analyzeWithGPT4Vision };
