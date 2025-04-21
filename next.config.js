@@ -3,6 +3,7 @@ const webpack = require('webpack');
 
 const nextConfig = {
   reactStrictMode: true,
+  transpilePackages: ['@firebase/auth', '@firebase/storage', 'firebase'],
   images: {
     domains: ['*'],
     remotePatterns: [
@@ -88,6 +89,17 @@ const nextConfig = {
       generator: {
         filename: 'static/chunks/[name].[hash][ext]',
       },
+    });
+
+    // Fix for undici private class fields
+    // Exclude undici modules from normal processing
+    config.module.rules.push({
+      test: /undici\/lib\/web\/fetch\/util\.js$/,
+      use: 'null-loader',
+      include: [
+        /node_modules\/@firebase\/storage\/node_modules\/undici/,
+        /node_modules\/firebase\/node_modules\/undici/
+      ]
     });
 
     return config;

@@ -1,15 +1,11 @@
 // src/app/api/proxy/storage/route.ts
 import { NextRequest, NextResponse } from 'next/server';
-import { getStorage, ref, uploadBytes, getDownloadURL } from 'firebase/storage';
-import { app } from '@/lib/firebase';
+
+// Instead of importing directly from firebase/storage which uses private class fields,
+// we'll use a safer approach that doesn't rely on these problematic imports
+export const runtime = 'nodejs'; // Force Node.js runtime instead of Edge
 
 export async function GET(request: NextRequest) {
-  // Ensure Firebase app is initialized before proceeding
-  if (!app) {
-    console.error('API Error: Firebase app is not initialized in GET /api/proxy/storage');
-    return NextResponse.json({ error: 'Firebase not configured' }, { status: 500 });
-  }
-  
   try {
     // Extract URL parameters
     const url = new URL(request.url);
@@ -19,11 +15,21 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: 'No path parameter provided' }, { status: 400 });
     }
     
-    // Get the referenced file
-    const storage = getStorage(app);
-    const fileRef = ref(storage, path);
+    // Dynamically import Firebase modules only when needed
+    const { getStorage, ref, getDownloadURL } = await import('firebase/storage');
+    const { app } = await import('@/lib/firebase');
+    
+    // Ensure Firebase app is initialized before proceeding
+    if (!app) {
+      console.error('API Error: Firebase app is not initialized in GET /api/proxy/storage');
+      return NextResponse.json({ error: 'Firebase not configured' }, { status: 500 });
+    }
     
     try {
+      // Get the referenced file
+      const storage = getStorage(app);
+      const fileRef = ref(storage, path);
+      
       // Get the download URL
       const downloadUrl = await getDownloadURL(fileRef);
       
@@ -61,12 +67,6 @@ export async function GET(request: NextRequest) {
 }
 
 export async function POST(request: NextRequest) {
-  // Ensure Firebase app is initialized before proceeding
-  if (!app) {
-    console.error('API Error: Firebase app is not initialized in POST /api/proxy/storage');
-    return NextResponse.json({ error: 'Firebase not configured' }, { status: 500 });
-  }
-  
   try {
     // Parse formData
     const formData = await request.formData();
@@ -76,6 +76,16 @@ export async function POST(request: NextRequest) {
     
     if (!file || !path) {
       return NextResponse.json({ error: 'File and path are required' }, { status: 400 });
+    }
+    
+    // Dynamically import Firebase modules only when needed
+    const { getStorage, ref, uploadBytes, getDownloadURL } = await import('firebase/storage');
+    const { app } = await import('@/lib/firebase');
+    
+    // Ensure Firebase app is initialized before proceeding
+    if (!app) {
+      console.error('API Error: Firebase app is not initialized in POST /api/proxy/storage');
+      return NextResponse.json({ error: 'Firebase not configured' }, { status: 500 });
     }
     
     // Parse metadata if provided
