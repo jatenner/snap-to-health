@@ -17,6 +17,16 @@ interface Nutrient {
   isHighlight: boolean;
 }
 
+// Add NutrientDetail type definition
+type NutrientDetail = {
+  name: string;
+  value: string | number;
+  unit: string;
+  isHighlight: boolean;
+  percentOfDailyValue?: number;
+  amount?: number;
+};
+
 interface DetailedIngredient {
   name: string;
   category: string;
@@ -26,11 +36,15 @@ interface DetailedIngredient {
 
 interface AnalysisResult {
   description: string;
-  nutrients: Nutrient[];
+  nutrients: NutrientDetail[];
   feedback: string[];
   suggestions: string[];
   sleepScore?: number;
-  goalScore?: number;
+  // Define goalScore as either a number or an object with specific structure
+  goalScore: number | {
+    overall: number;
+    specific: Record<string, number>;
+  };
   goalName?: string;
   scoreExplanation?: string;
   positiveFoodFactors?: string[];
@@ -39,7 +53,7 @@ interface AnalysisResult {
   partial?: boolean;
   missing?: string;
   confidence?: number;
-  detailedIngredients?: DetailedIngredient[];
+  detailedIngredients: DetailedIngredient[];
   reasoningLogs?: any[];
   fallback?: boolean;
   lowConfidence?: boolean;
@@ -47,13 +61,19 @@ interface AnalysisResult {
   insight?: string;
   message?: string;
   modelInfo?: {
-    model: string;
-    usedFallback: boolean;
-    ocrExtracted: boolean;
+    model?: string;
+    ocrExtracted?: boolean;
+    ocrConfidence?: number;
+    usedFallback?: boolean;
   };
   _meta?: {
-    fallback: boolean;
+    fallback?: boolean;
+    ocrText?: string;
+    ocrConfidence?: number;
+    foodTerms?: string[];
+    debugTrace?: string;
   };
+  no_result?: boolean;
 }
 
 // Component to display ingredients with confidence levels
@@ -209,8 +229,9 @@ const SaveStatusBanner = ({
  * Component to display a warning when using a fallback model
  */
 const ModelWarningBanner = ({ modelInfo }: { modelInfo?: AnalysisResult['modelInfo'] }) => {
-  // If no model info or OCR-based analysis is being used without fallback, don't show warning
-  if (!modelInfo || !modelInfo.usedFallback) {
+  // Check if modelInfo exists and also check if 'usedFallback' property exists on it
+  // Rather than directly accessing modelInfo.usedFallback, check it safely
+  if (!modelInfo || !('usedFallback' in modelInfo) || modelInfo.usedFallback !== true) {
     return null;
   }
   
@@ -533,9 +554,21 @@ export default function MealAnalysisPage() {
   ) : [];
 
   // Generate score color based on value
-  const getScoreColor = (value: number) => {
+  const getScoreColor = (value: number | { overall: number; specific: Record<string, number> }) => {
+    // Extract the score value - handle both number and object
+    let scoreValue: number;
+    
+    if (typeof value === 'object' && value !== null && 'overall' in value) {
+      scoreValue = value.overall;
+    } else if (typeof value === 'number') {
+      scoreValue = value;
+    } else {
+      scoreValue = 5; // Default value
+    }
+    
     // Ensure value is a valid number
-    const scoreValue = Number.isFinite(value) ? value : 5;
+    if (!Number.isFinite(scoreValue)) scoreValue = 5;
+    
     if (scoreValue >= 8) return 'bg-green-500';
     if (scoreValue >= 5) return 'bg-yellow-400';
     return 'bg-red-500';
@@ -556,9 +589,21 @@ export default function MealAnalysisPage() {
   };
 
   // Get score label
-  const getScoreLabel = (score: number) => {
+  const getScoreLabel = (score: number | { overall: number; specific: Record<string, number> }) => {
+    // Extract the score value - handle both number and object
+    let safeScore: number;
+    
+    if (typeof score === 'object' && score !== null && 'overall' in score) {
+      safeScore = score.overall;
+    } else if (typeof score === 'number') {
+      safeScore = score;
+    } else {
+      safeScore = 5; // Default value
+    }
+    
     // Ensure score is a valid number
-    const safeScore = Number.isFinite(score) ? score : 5;
+    if (!Number.isFinite(safeScore)) safeScore = 5;
+    
     if (safeScore >= 9) return "Excellent";
     if (safeScore >= 7) return "Very Good";
     if (safeScore >= 5) return "Good";
@@ -605,8 +650,14 @@ export default function MealAnalysisPage() {
           userId={currentUser?.uid || null}
         />
         
-        {/* Show fallback alert when _meta.fallback is true, but we have valid data for display */}
-        <FallbackAlert show={Boolean(analysisResult?._meta?.fallback)} />
+        {/* Fallback Alert - shown when fallback, lowConfidence, or no_result */}
+        <FallbackAlert 
+          show={Boolean(analysisResult?.fallback || analysisResult?.lowConfidence || analysisResult?.no_result)} 
+          noResult={Boolean(analysisResult?.no_result)}
+          isNoTextDetected={analysisResult?.modelInfo?.model === 'ocr_failed' && !analysisResult?.modelInfo?.ocrExtracted}
+          isNoFoodDetected={analysisResult?.modelInfo?.model === 'no_food_detected' || (!analysisResult?.detailedIngredients || analysisResult?.detailedIngredients.length === 0)}
+          message={analysisResult?.message}
+        />
         
         {/* Show fallback warning banner for fallback results */}
         <FallbackWarningBanner fallback={fallback} />

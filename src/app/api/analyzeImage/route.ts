@@ -17,6 +17,7 @@ import { createAnalysisDiagnostics, checkOCRConfig, checkNutritionixCredentials 
 import { GPT_MODEL } from '@/lib/constants';
 import { saveMealToFirestore } from '@/lib/mealUtils';
 import { isValidAnalysis, normalizeAnalysisResult } from '@/lib/utils/analysisValidator';
+import { containsFoodRelatedTerms, isNutritionLabel } from '@/lib/utils/foodDetection';
 
 const cache = new NodeCache({ stdTTL: 60 * 60 })  // 1 hour
 const oai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
@@ -282,10 +283,27 @@ interface AnalysisResult {
   saved?: boolean;
   savedMealId?: string;
   saveError?: string;
+  _meta?: {
+    ocrText?: string;
+    foodTerms?: string[];
+    isNutritionLabel?: boolean;
+    foodConfidence?: number;
+    debugTrace?: string;
+    ocrConfidence?: number;
+  };
+  no_result?: boolean;
 }
 
 interface ExtendedNutritionData extends NutritionData {
   source: string;
+  noFoodDetected?: boolean;
+  _meta?: {
+    ocrText?: string;
+    foodTerms?: string[];
+    isNutritionLabel?: boolean;
+    foodConfidence?: number;
+    debugTrace?: string;
+  };
 }
 
 interface NutrientAnalysisResult {
@@ -504,66 +522,111 @@ function createFallbackNutritionData(requestId: string): ExtendedNutritionData {
 }
 
 /**
- * Fetch nutrition data with caching and fallback
- * @param text OCR text to analyze
- * @param requestId Request identifier for tracking
- * @returns Nutrition data from either Nutritionix or GPT fallback
+ * Fetch nutrition data from Nutritionix API with GPT fallback
+ * Enhanced with food text validation to prevent hallucinated results
  */
 async function fetchNutrition(
   text: string,
   requestId: string
-): Promise<NutritionData> {
-  console.log(`[${requestId}] fetchNutrition: Starting. Text: ${text.substring(0, 30)}...`);
-
+): Promise<ExtendedNutritionData & { noFoodDetected?: boolean }> {
+  console.log(`[${requestId}] fetchNutrition: Starting. Text: ${text.substring(0, 50)}...`);
+  
   try {
-    // First, check if Nutritionix API keys are set
-    const hasNutritionixApiId = !!process.env.NUTRITIONIX_APP_ID;
-    const hasNutritionixApiKey = !!process.env.NUTRITIONIX_API_KEY;
+    // First, check if the text contains enough food-related terms
+    const foodTermCheck = containsFoodRelatedTerms(text);
+    const isNutritionLabelText = isNutritionLabel(text);
     
-    const useNutritionix = hasNutritionixApiId && hasNutritionixApiKey;
+    // Log food term detection results
+    console.log(`[${requestId}] Food term detection: isValid=${foodTermCheck.isValid}, terms=${foodTermCheck.foodTermCount}, confidence=${foodTermCheck.confidence.toFixed(2)}`);
+    console.log(`[${requestId}] Is nutrition label: ${isNutritionLabelText}`);
     
-    if (!useNutritionix) {
-      console.log(`[${requestId}] fetchNutrition: Nutritionix credentials not found, using GPT fallback`);
-      const gptFallback = await callGptNutritionFallback(text, requestId);
-      
-      // Validate GPT fallback data
-      return validateNutritionData(gptFallback, requestId);
-    }
-    
-    try {
+    // If it's a nutrition label or contains enough food terms, continue with processing
+    if (foodTermCheck.isValid || isNutritionLabelText) {
       console.log(`[${requestId}] fetchNutrition: Trying Nutritionix API`);
-      const startTime = Date.now();
       
-      // Call the Nutritionix API
+      // Try Nutritionix API first
       const nutritionixData = await getNutritionData(text, requestId);
       
       if (nutritionixData.success && nutritionixData.data) {
-        console.log(`[${requestId}] fetchNutrition: Nutritionix success in ${Date.now() - startTime}ms`);
-        
-        // Add source information and validate
-        const extendedData: ExtendedNutritionData = {
+        // Add meta debug info to track OCR text and food terms
+        const enhancedData: ExtendedNutritionData = {
           ...nutritionixData.data,
-          source: 'nutritionix'
+          source: 'nutritionix',
+          _meta: {
+            ocrText: text,
+            foodTerms: foodTermCheck.foodTerms,
+            isNutritionLabel: isNutritionLabelText,
+            foodConfidence: foodTermCheck.confidence,
+            debugTrace: 'Used Nutritionix API successfully'
+          }
         };
         
-        return validateNutritionData(extendedData, requestId);
+        return enhancedData;
       } else {
-        throw new Error(nutritionixData.error || 'Nutritionix returned unsuccessful response');
+        console.warn(`[${requestId}] fetchNutrition: Nutritionix failed: ${nutritionixData.error}. Using GPT fallback`);
+        
+        // If Nutritionix fails, fall back to GPT only if we have valid food terms
+        const gptFallback = await callGptNutritionFallback(text, requestId);
+        
+        // Add meta debug info
+        const enhancedGptData = {
+          ...gptFallback,
+          _meta: {
+            ocrText: text,
+            foodTerms: foodTermCheck.foodTerms,
+            isNutritionLabel: isNutritionLabelText,
+            foodConfidence: foodTermCheck.confidence,
+            debugTrace: 'Used GPT fallback after Nutritionix failure'
+          }
+        };
+        
+        // Validate GPT fallback data
+        return validateNutritionData(enhancedGptData, requestId);
       }
-    } catch (error) {
-      console.warn(`[${requestId}] fetchNutrition: Nutritionix failed: ${error}. Using GPT fallback`);
+    } else {
+      // Not enough food-related terms detected, avoid hallucination
+      console.warn(`[${requestId}] fetchNutrition: Text doesn't contain enough food terms. Skipping analysis.`);
       
-      // If Nutritionix fails, fall back to GPT
-      const gptFallback = await callGptNutritionFallback(text, requestId);
-      
-      // Validate GPT fallback data
-      return validateNutritionData(gptFallback, requestId);
+      // Return a "no food detected" response instead of hallucinated results
+      return {
+        nutrients: [
+          { name: 'Calories', value: 0, unit: 'kcal', isHighlight: true },
+          { name: 'Protein', value: 0, unit: 'g', isHighlight: true },
+          { name: 'Carbohydrates', value: 0, unit: 'g', isHighlight: true },
+          { name: 'Fat', value: 0, unit: 'g', isHighlight: true }
+        ],
+        foods: [],
+        raw: {
+          description: "No food detected in this image",
+          feedback: ["We couldn't detect any food-related text in this image."],
+          suggestions: ["Try uploading a photo that clearly shows food or contains food-related text."],
+          goalScore: { overall: 0, specific: {} }
+        },
+        source: "no_food_detected",
+        noFoodDetected: true,
+        _meta: {
+          ocrText: text,
+          foodTerms: foodTermCheck.foodTerms, 
+          isNutritionLabel: isNutritionLabelText,
+          foodConfidence: foodTermCheck.confidence,
+          debugTrace: 'No valid food terms detected in OCR text'
+        }
+      };
     }
   } catch (error: any) {
     console.error(`[${requestId}] fetchNutrition: Both sources failed: ${error.message}`);
     
     // Return validated fallback nutrition data
-    return createFallbackNutritionData(requestId);
+    const fallbackData = createFallbackNutritionData(requestId);
+    
+    // Add meta debug info
+    return {
+      ...fallbackData,
+      _meta: {
+        ocrText: text,
+        debugTrace: `Error in fetchNutrition: ${error.message}`
+      }
+    };
   }
 }
 
@@ -800,7 +863,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       
       // Process the extracted text only if we have something meaningful
       // Otherwise, proceed with a fallback approach
-      let nutritionData: NutritionData;
+      let nutritionData: ExtendedNutritionData;
       let analysis: any = { 
         success: false, 
         feedback: ["Unable to analyze this image."], 
@@ -810,6 +873,60 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       if (extractedText.length > 0 && ocrResult.success) {
         // Get nutrition data from the extracted text
         nutritionData = await fetchNutrition(extractedText, requestId);
+        
+        // Check if no food was detected in the OCR text
+        if (nutritionData.noFoodDetected) {
+          console.warn(`[${requestId}] No food detected in OCR text, returning no-food response`);
+          
+          // Create a special no-food response that the frontend can handle
+          const noFoodResult: AnalysisResult = {
+            description: "No food detected in this image",
+            nutrients: [
+              { name: 'Calories', value: 0, unit: 'kcal', isHighlight: true },
+              { name: 'Protein', value: 0, unit: 'g', isHighlight: true },
+              { name: 'Carbohydrates', value: 0, unit: 'g', isHighlight: true },
+              { name: 'Fat', value: 0, unit: 'g', isHighlight: true }
+            ],
+            feedback: ["We couldn't identify any food in this image."],
+            suggestions: ["Try uploading a clearer photo of food."],
+            detailedIngredients: [],
+            goalScore: { overall: 0, specific: {} },
+            modelInfo: {
+              model: "ocr",
+              usedFallback: false,
+              ocrExtracted: true
+            },
+            _meta: nutritionData._meta || {
+              ocrText: extractedText,
+              debugTrace: "No food detected in OCR text"
+            },
+            no_result: true // Special flag to indicate no valid result
+          };
+          
+          // Clear the timeout since we're returning early
+          if (globalTimeoutId) clearTimeout(globalTimeoutId);
+          
+          // Create the no-food response
+          const noFoodResponse: AnalysisResponse = {
+            success: true, // Still successful from API perspective
+            fallback: true,
+            requestId,
+            message: "No food detected in the image",
+            result: noFoodResult,
+            elapsedTime: Date.now() - startTime,
+            error: null,
+            imageUrl: null,
+            diagnostics: {
+              ocrConfidence: ocrResult.confidence,
+              ocrText: extractedText,
+              textLength: extractedText.length,
+              processingTimeMs: Date.now() - startTime,
+              noFoodDetected: true
+            }
+          };
+          
+          return NextResponse.json(noFoodResponse);
+        }
         
         try {
           // Analyze the extracted text to get feedback and suggestions
@@ -829,51 +946,55 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
           };
         }
       } else {
-        // If OCR failed or returned no text, create a fallback response
-        console.warn(`[${requestId}] OCR failed or returned no text, using fallback response`);
-        nutritionData = {
+        // If OCR failed or returned no text, create a special no-text response
+        console.warn(`[${requestId}] OCR failed or returned no text, creating no-text response`);
+        
+        const noTextResult: AnalysisResult = {
+          description: "No text could be extracted from this image",
           nutrients: [
             { name: 'Calories', value: 0, unit: 'kcal', isHighlight: true },
             { name: 'Protein', value: 0, unit: 'g', isHighlight: true },
             { name: 'Carbohydrates', value: 0, unit: 'g', isHighlight: true },
             { name: 'Fat', value: 0, unit: 'g', isHighlight: true }
           ],
-          foods: [{
-            food_name: "Unknown food",
-            serving_qty: 1,
-            serving_unit: "serving",
-            serving_weight_grams: 100,
-            nf_calories: 0,
-            nf_total_fat: 0,
-            nf_saturated_fat: 0,
-            nf_cholesterol: 0,
-            nf_sodium: 0,
-            nf_total_carbohydrate: 0,
-            nf_dietary_fiber: 0,
-            nf_sugars: 0,
-            nf_protein: 0,
-            nf_potassium: 0,
-            nf_p: 0,
-            full_nutrients: [],
-            photo: {
-              thumb: '',
-              highres: '',
-              is_user_uploaded: false
-            }
-          }],
-          raw: {
-            description: "Could not identify food in this image.",
-            feedback: ["This doesn't appear to be a food image."],
-            suggestions: ["Try uploading a photo that clearly shows a meal."],
-            goalScore: {
-              overall: 0,
-              specific: {} as Record<string, number>
-            },
-            fallback: true,
-            error: "No food detected in image"
+          feedback: ["We couldn't detect any text in the image."],
+          suggestions: ["Try uploading a photo that clearly shows food or its label."],
+          detailedIngredients: [],
+          goalScore: { overall: 0, specific: {} },
+          modelInfo: {
+            model: "ocr_failed",
+            usedFallback: true,
+            ocrExtracted: false
           },
-          source: "error_fallback"
+          _meta: {
+            ocrText: "",
+            debugTrace: "OCR failed or returned no text"
+          },
+          no_result: true // Special flag to indicate no valid result
         };
+        
+        // Clear the timeout since we're returning early
+        if (globalTimeoutId) clearTimeout(globalTimeoutId);
+        
+        // Create the no-text response
+        const noTextResponse: AnalysisResponse = {
+          success: true, // Still successful from API perspective
+          fallback: true,
+          requestId,
+          message: "No text could be extracted from the image",
+          result: noTextResult,
+          elapsedTime: Date.now() - startTime,
+          error: null,
+          imageUrl: null,
+          diagnostics: {
+            ocrConfidence: ocrResult.confidence,
+            textLength: 0,
+            processingTimeMs: Date.now() - startTime,
+            ocrFailed: true
+          }
+        };
+        
+        return NextResponse.json(noTextResponse);
       }
       
       // Create analysis from the nutrition data
@@ -887,12 +1008,12 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
         ],
         feedback: (nutritionData.raw?.feedback || analysis.feedback) as string[],
         suggestions: (nutritionData.raw?.suggestions || analysis.suggestions) as string[],
-        detailedIngredients: nutritionData.foods.map(food => ({
+        detailedIngredients: nutritionData.foods?.map(food => ({
           name: food.food_name,
           category: 'food',
           confidence: 0.8,
           confidenceEmoji: '✅'
-        })),
+        })) || [],
         goalScore: {
           overall: nutritionData.raw?.goalScore?.overall || 0,
           specific: nutritionData.raw?.goalScore?.specific || {}
@@ -905,7 +1026,12 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
         },
         lowConfidence: nutritionData.raw?.fallback || false,
         fallback: nutritionData.raw?.fallback || false,
-        source: nutritionData.source || "fallback"
+        source: nutritionData.source || "fallback",
+        _meta: {
+          ocrText: extractedText,
+          ocrConfidence: ocrResult.confidence,
+          ...nutritionData._meta
+        }
       };
       
       // Debug log for analysis result structure
@@ -976,9 +1102,12 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
         imageUrl: null,
         diagnostics: {
           ocrConfidence: ocrResult.confidence,
+          ocrText: extractedText,
           usedFallback: (nutritionData as any).source !== 'nutritionix',
           source: (nutritionData as any).source,
           textLength: extractedText.length,
+          noFoodDetected: nutritionData.noFoodDetected || false,
+          foodTerms: nutritionData._meta?.foodTerms || [],
           processingTimeMs: elapsedTime
         }
       };
