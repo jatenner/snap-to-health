@@ -1062,7 +1062,22 @@ Do not return any explanation or text outside the JSON block. Your entire respon
                 } catch (extractError) {
                   console.error(`[${requestId}] Failed to extract JSON with regex (attempt ${attempt}):`, extractError);
                   // If both parse attempts fail, create a fallback JSON
-                  analysisJson = {
+                  const fallbackAnalysis: { 
+                    description: string; 
+                    detailedIngredients: any[]; 
+                    confidence: number; 
+                    basicNutrition: { 
+                      calories: string; 
+                      protein: string; 
+                      carbs: string; 
+                      fat: string; 
+                    }; 
+                    goalImpactScore: number; 
+                    feedback: string[]; 
+                    suggestions: string[]; 
+                    imageChallenges: string[];
+                    rawTextResponse?: string;
+                  } = {
                     description: analysisText.substring(0, 200),
                     detailedIngredients: [],
                     confidence: 2,
@@ -1079,12 +1094,29 @@ Do not return any explanation or text outside the JSON block. Your entire respon
                   };
                   
                   // Add a notice about the text response
-                  analysisJson.rawTextResponse = analysisText;
+                  fallbackAnalysis.rawTextResponse = analysisText;
                   console.log(`[${requestId}] Created fallback JSON object from text response`);
+                  
+                  analysisJson = fallbackAnalysis;
                 }
               } else {
                 // If regex doesn't work either, create a simple fallback
-                analysisJson = {
+                const secondFallbackAnalysis: { 
+                  description: string; 
+                  detailedIngredients: any[]; 
+                  confidence: number; 
+                  basicNutrition: { 
+                    calories: string; 
+                    protein: string; 
+                    carbs: string; 
+                    fat: string; 
+                  }; 
+                  goalImpactScore: number; 
+                  feedback: string[]; 
+                  suggestions: string[]; 
+                  imageChallenges: string[];
+                  rawTextResponse: string;
+                } = {
                   description: analysisText.substring(0, 200),
                   detailedIngredients: [],
                   confidence: 2,
@@ -1101,6 +1133,8 @@ Do not return any explanation or text outside the JSON block. Your entire respon
                   rawTextResponse: analysisText
                 };
                 console.log(`[${requestId}] Created fallback JSON object from text response`);
+                
+                analysisJson = secondFallbackAnalysis;
               }
             }
           }
