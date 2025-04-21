@@ -87,7 +87,7 @@ export function isValidAnalysis(data: any): boolean {
   const isValid = true;
   
   if (presentFields.description && presentFields.nutrients) {
-    console.log(`Analysis validation passed with all required fields:`, {
+    console.log(`Analysis validation passed with all core fields:`, {
       description: presentFields.description ? '✅' : '❌',
       nutrients: presentFields.nutrients ? '✅' : '❌',
       feedback: presentFields.feedback ? '✅' : '❌ (optional)',
@@ -100,7 +100,7 @@ export function isValidAnalysis(data: any): boolean {
       description: presentFields.description,
       nutrients: presentFields.nutrients
     });
-    console.info("[Test] Fallback result accepted ✅", data);
+    console.info("[Test] Partial result accepted ✅", data);
   }
   
   return isValid;
@@ -274,7 +274,7 @@ export function normalizeAnalysisResult(data: any): any {
   
   // Ensure goalScore structure exists
   if (!result.goalScore || typeof result.goalScore !== 'object') {
-    result.goalScore = { overall: 0, specific: {} };
+    result.goalScore = { overall: 5, specific: {} };
   } else if (typeof result.goalScore === 'number') {
     const scoreValue = result.goalScore;
     result.goalScore = { overall: scoreValue, specific: {} };
@@ -284,12 +284,19 @@ export function normalizeAnalysisResult(data: any): any {
   if (typeof result.goalScore.overall === 'string' && !isNaN(parseFloat(result.goalScore.overall))) {
     result.goalScore.overall = parseFloat(result.goalScore.overall);
   } else if (typeof result.goalScore.overall !== 'number') {
-    result.goalScore.overall = 0; // Default to 0 for invalid scores
+    result.goalScore.overall = 5; // Default to neutral 5 for invalid scores
   }
   
   // Ensure goalScore.specific exists and is an object
   if (!result.goalScore.specific || typeof result.goalScore.specific !== 'object') {
     result.goalScore.specific = {};
+  }
+  
+  // Ensure goalName is a string if present
+  if (result.goalName !== undefined && typeof result.goalName !== 'string') {
+    result.goalName = 'Health Impact';
+  } else if (result.goalName === undefined) {
+    result.goalName = 'Health Impact';
   }
   
   // Ensure modelInfo exists - OPTIONAL
@@ -302,6 +309,15 @@ export function normalizeAnalysisResult(data: any): any {
     };
   }
   
+  // Ensure positiveFoodFactors and negativeFoodFactors arrays exist
+  if (!Array.isArray(result.positiveFoodFactors)) {
+    result.positiveFoodFactors = [];
+  }
+  
+  if (!Array.isArray(result.negativeFoodFactors)) {
+    result.negativeFoodFactors = [];
+  }
+  
   // Mark as fallback if fields had to be normalized significantly
   if (!data.description || ((!data.nutrients || (Array.isArray(data.nutrients) && data.nutrients.length === 0)))) {
     result.fallback = true;
@@ -309,7 +325,7 @@ export function normalizeAnalysisResult(data: any): any {
   }
   
   // Add debug log for normalized results
-  console.info("[Test] Fallback result accepted after normalization ✅");
+  console.info("[Test] Result normalized and ready for rendering ✅");
   
   return result;
 } 

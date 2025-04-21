@@ -58,7 +58,12 @@ const deduplicateNutrients = (nutrients: Nutrient[]): Nutrient[] => {
 };
 
 // Helper function to categorize nutrients
-const categorizeNutrients = (nutrients: Nutrient[]) => {
+const categorizeNutrients = (nutrients: Nutrient[] = []) => {
+  // Skip categorization if nutrients is empty or not an array
+  if (!Array.isArray(nutrients) || nutrients.length === 0) {
+    return { macros: [], beneficialMicros: [], others: [] };
+  }
+  
   // First deduplicate the nutrients
   const uniqueNutrients = deduplicateNutrients(nutrients);
   
@@ -94,7 +99,12 @@ const categorizeNutrients = (nutrients: Nutrient[]) => {
 };
 
 // Calculate a sleep score based on sleep-supportive and sleep-negative nutrients
-const calculateSleepScore = (nutrients: Nutrient[]): number => {
+const calculateSleepScore = (nutrients: Nutrient[] = []): number => {
+  // Return a default mid-range score if no nutrients are provided
+  if (!Array.isArray(nutrients) || nutrients.length === 0) {
+    return 5;
+  }
+  
   let score = 5; // Start with a neutral score
   
   // Sleep supportive nutrients
@@ -104,6 +114,8 @@ const calculateSleepScore = (nutrients: Nutrient[]): number => {
   const sleepNegativeNutrients = ['caffeine', 'sugar', 'sodium'];
   
   nutrients.forEach(nutrient => {
+    if (!nutrient || !nutrient.name) return; // Skip invalid nutrient entries
+    
     const name = nutrient.name.toLowerCase();
     
     // Add points for sleep-supportive nutrients
@@ -141,8 +153,8 @@ const isNegativeNutrient = (nutrient: Nutrient): boolean => {
 };
 
 // Calculate nutrient score based on the nutrient content
-const calculateScore = (nutrients: Nutrient[], goalType?: string): number => {
-  if (!nutrients || nutrients.length === 0) return 5;
+const calculateScore = (nutrients: Nutrient[] = [], goalType?: string): number => {
+  if (!nutrients || !Array.isArray(nutrients) || nutrients.length === 0) return 5;
 
   // Default to a base score of 5
   let score = 5;
@@ -519,35 +531,49 @@ const IngredientsSection = ({ ingredients }: { ingredients: DetailedIngredient[]
 };
 
 const AnalysisCard: React.FC<AnalysisCardProps> = ({ result, previewUrl, isLoading }) => {
+  // Apply defaults to all optional fields to prevent null reference errors
   const { 
-    description, 
+    description = "No meal description available", 
     nutrients = [], 
     feedback = [], 
     suggestions = [], 
     sleepScore,
     goalScore,
-    goalName = 'Sleep Impact',
+    goalName = 'Health Impact',
     scoreExplanation = '',
     positiveFoodFactors = [],
     negativeFoodFactors = [],
-    rawGoal,
+    rawGoal = '',
     detailedIngredients = [],
     reasoningLogs = [],
     fallback = false,
     lowConfidence = false,
     message = ''
-  } = result;
+  } = result || {}; // Handle case where result is null or undefined
   
   // Animation state for score progress bars
   const [animatedGoalScore, setAnimatedGoalScore] = useState(0);
   const [animatedSleepScore, setAnimatedSleepScore] = useState(0);
   
-  // Categorize nutrients
-  const { macros, beneficialMicros, others } = categorizeNutrients(nutrients);
+  // Safely categorize nutrients 
+  const { macros, beneficialMicros, others } = categorizeNutrients(Array.isArray(nutrients) ? nutrients : []);
   
-  // Determine which scores to display
-  const displaySleepScore = sleepScore !== undefined && goalName?.toLowerCase() !== 'sleep impact';
-  const finalGoalScore = goalScore !== undefined ? goalScore : (!displaySleepScore && sleepScore) || calculateScore(nutrients, goalName);
+  // Safely determine which scores to display with fallbacks for undefined values
+  const displaySleepScore = typeof sleepScore === 'number' && goalName?.toLowerCase() !== 'sleep impact';
+  
+  // Handle goalScore as number or object
+  let goalScoreValue = 5; // Default neutral score
+  if (typeof goalScore === 'number') {
+    goalScoreValue = goalScore;
+  } else if (goalScore && typeof goalScore === 'object') {
+    // Handle the case where goalScore is an object with 'overall' property
+    const goalScoreObj = goalScore as { overall?: number, specific?: Record<string, number> };
+    if (typeof goalScoreObj.overall === 'number') {
+      goalScoreValue = goalScoreObj.overall;
+    }
+  }
+  
+  const finalGoalScore = goalScoreValue !== undefined ? goalScoreValue : (!displaySleepScore && sleepScore) || calculateScore(nutrients, goalName);
   const finalSleepScore = sleepScore || calculateScore(nutrients, 'sleep');
   
   // Animate the score progress bars
@@ -592,20 +618,20 @@ const AnalysisCard: React.FC<AnalysisCardProps> = ({ result, previewUrl, isLoadi
       {/* Content */}
       <div className="p-6">
         {/* Description */}
-        {result.description && (
+        {description && (
           <div className="mb-6">
             <h2 className="text-xl font-medium text-gray-800 mb-2">Your Mindful Meal</h2>
-            <p className="text-gray-600">{result.description}</p>
+            <p className="text-gray-600">{description}</p>
           </div>
         )}
 
         {/* Goal Score */}
-        {result.goalScore !== undefined && (
+        {typeof finalGoalScore === 'number' && (
           <div className="mb-6">
             <div className="flex items-center">
-              <span className="text-2xl mr-2">{getGoalIcon(result.goalName)}</span>
+              <span className="text-2xl mr-2">{getGoalIcon(goalName)}</span>
               <h3 className="text-lg font-medium text-gray-800">
-                {result.goalName || 'Holistic Wellness'} Harmony
+                {goalName || 'Holistic Wellness'} Harmony
               </h3>
             </div>
             
@@ -613,29 +639,29 @@ const AnalysisCard: React.FC<AnalysisCardProps> = ({ result, previewUrl, isLoadi
               <div className="flex-1 bg-gray-200 rounded-full h-2.5">
                 <div 
                   className="h-2.5 rounded-full bg-gradient-to-r from-leaf to-primary" 
-                  style={{ width: `${result.goalScore * 10}%` }}
+                  style={{ width: `${Math.max(0, Math.min(100, finalGoalScore * 10))}%` }}
                 ></div>
               </div>
-              <span className="ml-3 font-medium text-gray-700">{result.goalScore}/10</span>
+              <span className="ml-3 font-medium text-gray-700">{finalGoalScore}/10</span>
             </div>
             
             <p className="mt-2 text-sm text-gray-600">
-              <span className="font-medium">{getScoreLabel(result.goalScore)}</span>: {' '}
-              {result.scoreExplanation || getScoreExplanation(result.goalScore, result.goalName)}
+              <span className="font-medium">{getScoreLabel(finalGoalScore)}</span>: {' '}
+              {scoreExplanation || getScoreExplanation(finalGoalScore, goalName)}
             </p>
           </div>
         )}
 
         {/* Positive and negative influences */}
         <div className="grid grid-cols-1 gap-4 mb-6">
-          {result.positiveFoodFactors && result.positiveFoodFactors.length > 0 && (
+          {Array.isArray(positiveFoodFactors) && positiveFoodFactors.length > 0 && (
             <div className="bg-leaf bg-opacity-10 rounded-md p-4 border border-leaf border-opacity-30">
               <h3 className="font-medium text-gray-800 mb-2 flex items-center">
                 <span className="text-leaf mr-2">✨</span>
                 Nourishing Elements
               </h3>
               <ul className="space-y-1">
-                {result.positiveFoodFactors.map((factor, index) => (
+                {positiveFoodFactors.map((factor, index) => (
                   <li key={index} className="text-sm text-gray-600 flex items-start">
                     <span className="text-leaf text-xs mr-2 mt-1">●</span>
                     {factor}
@@ -645,14 +671,14 @@ const AnalysisCard: React.FC<AnalysisCardProps> = ({ result, previewUrl, isLoadi
             </div>
           )}
           
-          {result.negativeFoodFactors && result.negativeFoodFactors.length > 0 && (
+          {Array.isArray(negativeFoodFactors) && negativeFoodFactors.length > 0 && (
             <div className="bg-sand bg-opacity-10 rounded-md p-4 border border-sand border-opacity-30">
               <h3 className="font-medium text-gray-800 mb-2 flex items-center">
                 <span className="text-sand mr-2">⚠️</span>
                 Mindful Considerations
               </h3>
               <ul className="space-y-1">
-                {result.negativeFoodFactors.map((factor, index) => (
+                {negativeFoodFactors.map((factor, index) => (
                   <li key={index} className="text-sm text-gray-600 flex items-start">
                     <span className="text-sand text-xs mr-2 mt-1">●</span>
                     {factor}
@@ -664,76 +690,70 @@ const AnalysisCard: React.FC<AnalysisCardProps> = ({ result, previewUrl, isLoadi
         </div>
 
         {/* Nutritional Insights */}
-        {result.nutrients && result.nutrients.length > 0 && (
+        {Array.isArray(nutrients) && nutrients.length > 0 && (
           <div className="mb-6">
             <h3 className="font-medium text-gray-800 mb-3 flex items-center">
               <span className="text-primary mr-2">🍃</span>
               Nutritional Harmony
             </h3>
             
-            {(() => {
-              const { macros, beneficialMicros, others } = categorizeNutrients(result.nutrients);
-              
-              return (
-                <div className="space-y-4">
-                  {/* Macronutrients */}
-                  {macros.length > 0 && (
-                    <div>
-                      <h4 className="text-sm font-medium text-gray-700 mb-2">Foundation Elements</h4>
-                      <div className="flex flex-wrap gap-2">
-                        {macros.map((nutrient, index) => (
-                          <span 
-                            key={index}
-                            className={`px-2 py-1 rounded-full text-xs ${getNutrientBadgeStyle(nutrient, result.rawGoal || '')}`}
-                          >
-                            {nutrient.name}: {nutrient.value}{nutrient.unit}
-                          </span>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-                  
-                  {/* Beneficial Micronutrients */}
-                  {beneficialMicros.length > 0 && (
-                    <div>
-                      <h4 className="text-sm font-medium text-gray-700 mb-2">Beneficial Essentials</h4>
-                      <div className="flex flex-wrap gap-2">
-                        {beneficialMicros.map((nutrient, index) => (
-                          <span 
-                            key={index}
-                            className={`px-2 py-1 rounded-full text-xs ${getNutrientBadgeStyle(nutrient, result.rawGoal || '')}`}
-                          >
-                            {nutrient.name}: {nutrient.value}{nutrient.unit}
-                          </span>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-                  
-                  {/* Other Nutrients */}
-                  {others.length > 0 && (
-                    <div>
-                      <h4 className="text-sm font-medium text-gray-700 mb-2">Additional Elements</h4>
-                      <div className="flex flex-wrap gap-2">
-                        {others.map((nutrient, index) => (
-                          <span 
-                            key={index}
-                            className={`px-2 py-1 rounded-full text-xs ${getNutrientBadgeStyle(nutrient, result.rawGoal || '')}`}
-                          >
-                            {nutrient.name}: {nutrient.value}{nutrient.unit}
-                          </span>
-                        ))}
-                      </div>
-                    </div>
-                  )}
+            <div className="space-y-4">
+              {/* Macronutrients */}
+              {macros.length > 0 && (
+                <div>
+                  <h4 className="text-sm font-medium text-gray-700 mb-2">Foundation Elements</h4>
+                  <div className="flex flex-wrap gap-2">
+                    {macros.map((nutrient, index) => (
+                      <span 
+                        key={index}
+                        className={`px-2 py-1 rounded-full text-xs ${getNutrientBadgeStyle(nutrient, rawGoal)}`}
+                      >
+                        {nutrient.name}: {nutrient.value}{nutrient.unit}
+                      </span>
+                    ))}
+                  </div>
                 </div>
-              );
-            })()}
+              )}
+              
+              {/* Beneficial Micronutrients */}
+              {beneficialMicros.length > 0 && (
+                <div>
+                  <h4 className="text-sm font-medium text-gray-700 mb-2">Beneficial Essentials</h4>
+                  <div className="flex flex-wrap gap-2">
+                    {beneficialMicros.map((nutrient, index) => (
+                      <span 
+                        key={index}
+                        className={`px-2 py-1 rounded-full text-xs ${getNutrientBadgeStyle(nutrient, rawGoal)}`}
+                      >
+                        {nutrient.name}: {nutrient.value}{nutrient.unit}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
+              
+              {/* Other Nutrients */}
+              {others.length > 0 && (
+                <div>
+                  <h4 className="text-sm font-medium text-gray-700 mb-2">Additional Elements</h4>
+                  <div className="flex flex-wrap gap-2">
+                    {others.map((nutrient, index) => (
+                      <span 
+                        key={index}
+                        className={`px-2 py-1 rounded-full text-xs ${getNutrientBadgeStyle(nutrient, rawGoal)}`}
+                      >
+                        {nutrient.name}: {nutrient.value}{nutrient.unit}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
           </div>
         )}
 
         {/* Ingredients Section */}
-        {detailedIngredients && detailedIngredients.length > 0 && (
+        {Array.isArray(detailedIngredients) && detailedIngredients.length > 0 && (
           <IngredientsSection ingredients={detailedIngredients} />
         )}
 
