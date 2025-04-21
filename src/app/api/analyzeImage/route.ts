@@ -89,36 +89,62 @@ function createUniversalFallbackResult(reason: string = "unknown", partial: Part
     }
   };
 
+  // Track which fields are present in the partial data for better debugging
+  const presentFields: Record<string, boolean> = {
+    description: false,
+    nutrients: false,
+    feedback: false,
+    suggestions: false
+  };
+
   // Selectively merge partial data if it exists and is valid
   if (partial && typeof partial === 'object') {
     // Only use partial description if it's a non-empty string
     if (typeof partial.description === 'string' && partial.description.trim()) {
       fallback.description = partial.description;
+      presentFields.description = true;
     }
 
-    // Only use partial nutrients if it's a valid array with at least one item
-    if (Array.isArray(partial.nutrients) && partial.nutrients.length > 0) {
-      fallback.nutrients = partial.nutrients.map(n => ({
-        name: n.name || "Unknown",
-        value: typeof n.value === 'string' ? parseFloat(n.value) || 0 : (n.value ?? 0),
-        unit: n.unit || "g",
-        isHighlight: n.isHighlight ?? false
-      }));
+    // Accept partial nutrients if it's a valid array (can be empty in our new validation approach)
+    if (Array.isArray(partial.nutrients)) {
+      fallback.nutrients = partial.nutrients.length > 0 
+        ? partial.nutrients.map(n => ({
+            name: n.name || "Unknown",
+            value: typeof n.value === 'string' ? parseFloat(n.value) || 0 : (n.value ?? 0),
+            unit: n.unit || "g",
+            isHighlight: n.isHighlight ?? false
+          }))
+        : fallback.nutrients; // Keep default nutrients if array is empty
+      
+      presentFields.nutrients = partial.nutrients.length > 0;
     }
 
-    // Only use feedback if it's a valid array with at least one item
-    if (Array.isArray(partial.feedback) && partial.feedback.length > 0) {
-      fallback.feedback = partial.feedback;
+    // Accept feedback if it's a valid array (can be empty)
+    if (Array.isArray(partial.feedback)) {
+      fallback.feedback = partial.feedback.length > 0 
+        ? partial.feedback 
+        : fallback.feedback; // Keep default feedback if array is empty
+      
+      presentFields.feedback = partial.feedback.length > 0;
     }
 
-    // Only use suggestions if it's a valid array with at least one item
-    if (Array.isArray(partial.suggestions) && partial.suggestions.length > 0) {
-      fallback.suggestions = partial.suggestions;
+    // Accept suggestions if it's a valid array (can be empty)
+    if (Array.isArray(partial.suggestions)) {
+      fallback.suggestions = partial.suggestions.length > 0 
+        ? partial.suggestions 
+        : fallback.suggestions; // Keep default suggestions if array is empty
+      
+      presentFields.suggestions = partial.suggestions.length > 0;
     }
 
-    // Only use detailedIngredients if it's a valid array (can be empty)
+    // Accept detailedIngredients if it's a valid array (can be empty)
     if (Array.isArray(partial.detailedIngredients)) {
       fallback.detailedIngredients = partial.detailedIngredients;
+    }
+
+    // Accept source if provided
+    if (typeof partial.source === 'string' && partial.source.trim()) {
+      fallback.source = partial.source;
     }
   }
 
@@ -127,12 +153,17 @@ function createUniversalFallbackResult(reason: string = "unknown", partial: Part
     fallback.goalScore = { overall: 0, specific: {} };
   }
   
-  // Log for debugging
+  // Enhanced logging for debugging
+  const presentFieldsCount = Object.values(presentFields).filter(Boolean).length;
   console.log(`[Universal Fallback] Created for reason: ${reason}`, {
-    description: fallback.description ? 'present' : 'missing',
-    nutrients: fallback.nutrients?.length || 0,
-    feedback: fallback.nutrients?.length || 0,
-    suggestions: fallback.suggestions?.length || 0
+    fieldsPresent: presentFields,
+    presentFieldsCount: presentFieldsCount,
+    totalFieldsNeeded: Object.keys(presentFields).length,
+    description: presentFields.description ? fallback.description.substring(0, 30) + '...' : 'using default',
+    nutrientsCount: fallback.nutrients?.length || 0,
+    feedbackCount: fallback.feedback?.length || 0,
+    suggestionsCount: fallback.suggestions?.length || 0,
+    source: fallback.source
   });
 
   return fallback;
