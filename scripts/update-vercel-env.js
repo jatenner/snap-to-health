@@ -1,79 +1,67 @@
 #!/usr/bin/env node
+const fs = require('fs');
+const path = require('path');
+const { execSync } = require('child_process');
+const dotenv = require('dotenv');
 
-/**
- * Script to update Vercel environment variables
- * Run this script to output commands for updating Vercel environment variables
- */
+console.log('🚀 Starting Vercel environment update process...');
 
-// Load environment variables
-require('dotenv').config({ path: '.env.local' });
+// Load environment variables from .env.local
+const envPath = path.resolve(process.cwd(), '.env.local');
+const envContent = fs.readFileSync(envPath, 'utf8');
+const env = dotenv.parse(envContent);
 
-console.log('Vercel Environment Variables Update Commands');
-console.log('===========================================');
-console.log('Run these commands to update your production environment:');
-console.log('\n');
+// Critical environment variables that often cause 401 errors
+const criticalVars = [
+  'OPENAI_API_KEY',
+  'FIREBASE_PRIVATE_KEY_BASE64',
+  'FIREBASE_CLIENT_EMAIL',
+  'FIREBASE_CLIENT_ID',
+  'NUTRITIONIX_API_KEY',
+  'NUTRITIONIX_APP_ID'
+];
 
-// OpenAI API Key
-const openaiKey = process.env.OPENAI_API_KEY;
-if (openaiKey) {
-  console.log(`vercel env add OPENAI_API_KEY production`);
-  console.log(`# Use this value: ${openaiKey}`);
-  console.log('\n');
+console.log('🔑 Updating critical API keys and credentials...');
+
+// Update each critical environment variable
+for (const key of criticalVars) {
+  if (!env[key]) {
+    console.log(`⚠️ ${key} not found in .env.local, skipping...`);
+    continue;
+  }
+  
+  console.log(`📝 Updating ${key}...`);
+  
+  try {
+    // Write value to a temporary file to avoid command line length issues and special character problems
+    const tempFile = path.join(process.cwd(), `temp-${key}.txt`);
+    fs.writeFileSync(tempFile, env[key]);
+    
+    // Execute vercel env rm first to remove existing variable
+    try {
+      execSync(`vercel env rm ${key} --yes`, { stdio: 'inherit' });
+    } catch (error) {
+      // Ignore errors if the variable doesn't exist yet
+      console.log(`  Variable doesn't exist yet or couldn't be removed`);
+    }
+    
+    // Add the new variable value - specify production environment
+    execSync(`vercel env add ${key} production < ${tempFile}`, { stdio: 'inherit' });
+    console.log(`✅ ${key} updated successfully`);
+    
+    // Clean up temp file
+    fs.unlinkSync(tempFile);
+  } catch (error) {
+    console.error(`❌ Failed to update ${key}: ${error.message}`);
+  }
 }
 
-// Nutritionix API credentials
-const nutritionixAppId = process.env.NUTRITIONIX_APP_ID;
-const nutritionixApiKey = process.env.NUTRITIONIX_API_KEY;
-
-if (nutritionixAppId) {
-  console.log(`vercel env add NUTRITIONIX_APP_ID production`);
-  console.log(`# Use this value: ${nutritionixAppId}`);
-  console.log('\n');
-}
-
-if (nutritionixApiKey) {
-  console.log(`vercel env add NUTRITIONIX_API_KEY production`);
-  console.log(`# Use this value: ${nutritionixApiKey}`);
-  console.log('\n');
-}
-
-// Firebase environment variables
-const firebasePrivateKeyBase64 = process.env.FIREBASE_PRIVATE_KEY_BASE64;
-const firebaseClientEmail = process.env.FIREBASE_CLIENT_EMAIL;
-const firebaseClientId = process.env.FIREBASE_CLIENT_ID;
-
-if (firebasePrivateKeyBase64) {
-  console.log(`vercel env add FIREBASE_PRIVATE_KEY_BASE64 production`);
-  console.log(`# Use this value (note: it's very long):`);
-  console.log(`${firebasePrivateKeyBase64}`);
-  console.log('\n');
-}
-
-if (firebaseClientEmail) {
-  console.log(`vercel env add FIREBASE_CLIENT_EMAIL production`);
-  console.log(`# Use this value: ${firebaseClientEmail}`);
-  console.log('\n');
-}
-
-if (firebaseClientId) {
-  console.log(`vercel env add FIREBASE_CLIENT_ID production`);
-  console.log(`# Use this value: ${firebaseClientId}`);
-  console.log('\n');
-}
-
-// OCR Configuration
-console.log(`vercel env add USE_OCR_EXTRACTION production`);
-console.log(`# Use this value: true`);
-console.log('\n');
-
-console.log(`vercel env add OCR_CONFIDENCE_THRESHOLD production`);
-console.log(`# Use this value: 0.7`);
-console.log('\n');
-
-// API Timeout
-console.log(`vercel env add OPENAI_TIMEOUT_MS production`);
-console.log(`# Use this value: 30000`);
-console.log('\n');
-
-console.log(`Once you've updated all environment variables, deploy the application:`);
-console.log(`vercel --prod`); 
+// Deploy to apply changes
+console.log('🚀 Deploying to apply environment changes...');
+try {
+  execSync('vercel --prod', { stdio: 'inherit' });
+  console.log('✅ Deployment initiated successfully');
+} catch (error) {
+  console.error(`❌ Deployment failed: ${error.message}`);
+  process.exit(1);
+} 

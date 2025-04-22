@@ -100,4 +100,16 @@ export async function processImageAnalysisRequest(req: NextRequest): Promise<Nex
       imageUrl: null
     }, { status: 500 });
   }
+}
+
+/**
+ * Handler function for the /api/analyzeImage endpoint
+ * Processes image analysis requests by extracting image data and health goals
+ * 
+ * @param req The incoming NextRequest object
+ * @returns A NextResponse with the analysis results or error
+ */
+export async function analyzeImageHandler(req: NextRequest): Promise<NextResponse> {
+  // Use the more robust implementation
+  return processImageAnalysisRequest(req);
 } 
