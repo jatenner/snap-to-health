@@ -25,7 +25,7 @@ beforeEach(() => {
 });
 
 // Import the function after setting up all mocks
-import { analyzeWithGPT4Vision } from '../src/app/api/analyzeImage/route';
+import { analyzeWithGPT4Vision } from '@/lib/gptVision';
 
 describe('analyzeWithGPT4Vision', () => {
   const mockBase64Image = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
