@@ -14,13 +14,16 @@ export function isValidAnalysis(data: any): boolean {
     return false;
   }
 
+  // If result.success is explicitly true, prioritize this signal
+  if (data.success === true) {
+    console.log('Analysis validation passed: result.success is true');
+    return true;
+  }
+
   // Track which fields are present or missing for better debugging
   const presentFields = {
     description: false,
-    nutrients: false,
-    feedback: false,
-    suggestions: false,
-    modelInfo: false
+    nutrients: false
   };
   
   // Check if this is a fallback result (either explicitly marked or indicating low confidence)
@@ -29,22 +32,17 @@ export function isValidAnalysis(data: any): boolean {
                            (data.modelInfo?.usedFallback === true) || 
                            (data.modelInfo?.model === "fallback" || data.modelInfo?.model === "gpt_error");
   
-  // Check description - accept any non-empty string for fallback results
-  if (typeof data.description === 'string' && data.description.trim()) {
+  // Check description - accept any string, even empty ones
+  if (typeof data.description === 'string') {
     presentFields.description = true;
   } else {
     console.warn('Analysis validation warning: missing or invalid description');
   }
 
-  // Check for nutrients - more flexible validation for fallback results
+  // Check for nutrients - more flexible validation
   if (Array.isArray(data.nutrients)) {
-    // For fallback results, accept any array, even empty ones
-    // For regular results, require at least one nutrient
-    if (data.nutrients.length > 0 || isFallbackResult) {
-      presentFields.nutrients = true;
-    } else {
-      console.warn('Analysis validation warning: nutrients array is empty', data.nutrients);
-    }
+    // Accept any array, even empty ones
+    presentFields.nutrients = true;
   } else if (typeof data.nutrients === 'object' && data.nutrients !== null) {
     // New format - nutrients as object
     // Accept any structure - we'll normalize later
@@ -53,88 +51,24 @@ export function isValidAnalysis(data: any): boolean {
     console.warn('Analysis validation warning: missing or invalid nutrients', data.nutrients);
   }
 
-  // Validate that feedback is an array if present - OPTIONAL
-  if (Array.isArray(data.feedback) && data.feedback.length > 0) {
-    presentFields.feedback = true;
-  } else if (data.feedback !== undefined && !Array.isArray(data.feedback)) {
-    console.warn('Analysis validation warning: feedback is present but not an array, will normalize');
-  } else if (!isFallbackResult) {
-    // Only warn for non-fallback results
-    console.warn('Analysis validation warning: missing feedback, will use default');
-  }
-
-  // Validate that suggestions is an array if present - OPTIONAL
-  if (Array.isArray(data.suggestions) && data.suggestions.length > 0) {
-    presentFields.suggestions = true;
-  } else if (data.suggestions !== undefined && !Array.isArray(data.suggestions)) {
-    console.warn('Analysis validation warning: suggestions is present but not an array, will normalize');
-  } else if (!isFallbackResult) {
-    // Only warn for non-fallback results
-    console.warn('Analysis validation warning: missing suggestions, will use default');
-  }
-
-  // Check if modelInfo is present - OPTIONAL, but important for identifying fallback results
-  if (data.modelInfo && typeof data.modelInfo === 'object') {
-    presentFields.modelInfo = true;
-  } else if (!isFallbackResult) {
-    // Only warn for non-fallback results
-    console.warn('Analysis validation warning: missing modelInfo, will use default');
-  }
-
-  // Validate that detailedIngredients is an array if present
-  if (data.detailedIngredients !== undefined && !Array.isArray(data.detailedIngredients)) {
-    console.warn('Analysis validation warning: detailedIngredients is present but not an array, will normalize');
-  }
-
-  // Less strict validation for numeric fields - accept any value that can be interpreted
-  if (data.goalScore !== undefined) {
-    if (typeof data.goalScore !== 'number' && 
-        typeof data.goalScore !== 'string' && 
-        typeof data.goalScore !== 'object') {
-      console.warn('Analysis validation warning: goalScore has invalid type, will use default', typeof data.goalScore);
-    }
-  }
+  // VALIDATION CRITERIA
+  // 1. Accept if data has a valid structure (description and nutrients)
+  const hasRequiredStructure = presentFields.description && presentFields.nutrients;
   
-  // TOLERANCE-BASED VALIDATION
-  // 1. Critical fields: description and nutrients must always be present or able to be normalized
-  const hasCriticalFields = presentFields.description && presentFields.nutrients;
-  
-  // 2. Insight fields: at least one of feedback, suggestions, or goalScore should be present for non-fallback results
-  const hasAnyInsightField = presentFields.feedback || presentFields.suggestions || (data.goalScore !== undefined);
-  
-  // 3. Fallback tolerance: allow missing insight fields for fallback results
-  const hasMinimumViableStructure = hasCriticalFields && (hasAnyInsightField || isFallbackResult);
-  
-  // 4. Final validation result - accept if coherent structure or explicitly flagged as fallback
-  const isValid = hasMinimumViableStructure || isFallbackResult;
+  // 2. Accept if it's a fallback result
+  const isValid = hasRequiredStructure || isFallbackResult;
   
   // Detailed logging based on validation outcome
   if (isValid) {
-    if (hasCriticalFields && hasAnyInsightField) {
-      console.log(`Analysis validation passed with all core fields:`, {
-        description: presentFields.description ? '✅' : '❌',
-        nutrients: presentFields.nutrients ? '✅' : '❌',
-        feedback: presentFields.feedback ? '✅' : '❌ (optional)',
-        suggestions: presentFields.suggestions ? '✅' : '❌ (optional)',
-        modelInfo: presentFields.modelInfo ? '✅' : '❌ (optional)',
-        fallback: isFallbackResult ? 'FALLBACK RESULT' : 'NORMAL RESULT'
-      });
-    } else {
-      // Fallback or minimal result accepted
-      console.log(`Analysis validation passed with fallback tolerance:`, {
-        description: presentFields.description ? '✅' : '❌',
-        nutrients: presentFields.nutrients ? '✅' : '❌',
-        anyInsightField: hasAnyInsightField ? '✅' : '❌',
-        isFallback: isFallbackResult ? '✅' : '❌',
-        modelInfo: presentFields.modelInfo ? '✅' : '❌ (optional)'
-      });
-    }
-    console.info("[Test] Fallback result accepted ✅");
+    console.log(`Analysis validation passed`, {
+      description: presentFields.description ? '✅' : '❌',
+      nutrients: presentFields.nutrients ? '✅' : '❌',
+      fallback: isFallbackResult ? 'FALLBACK RESULT' : 'NORMAL RESULT'
+    });
   } else {
     console.warn('Analysis validation failed: insufficient structure for rendering', {
       description: presentFields.description,
       nutrients: presentFields.nutrients,
-      anyInsightField: hasAnyInsightField,
       isFallback: isFallbackResult
     });
   }
@@ -215,7 +149,7 @@ export function normalizeAnalysisResult(data: any): any {
   }
   
   // Ensure description exists - REQUIRED
-  if (!result.description || typeof result.description !== 'string' || !result.description.trim()) {
+  if (!result.description || typeof result.description !== 'string') {
     console.warn('Normalizing missing or invalid description');
     result.description = isFallbackResult 
       ? defaultDescription 
@@ -320,9 +254,8 @@ export function normalizeAnalysisResult(data: any): any {
     result.nutrients = nutrientArray;
   }
   
-  // Ensure feedback array exists - OPTIONAL
+  // Ensure feedback array exists - OPTIONAL but provide defaults if missing
   if (!result.feedback || !Array.isArray(result.feedback)) {
-    console.warn('Normalizing missing or invalid feedback');
     if (hasValidLabelDetection) {
       result.feedback = [`Detected food item: ${result._meta.detectedLabel} with ${Math.round(result._meta.labelConfidence * 100)}% confidence.`];
     } else {
@@ -331,7 +264,6 @@ export function normalizeAnalysisResult(data: any): any {
         : ["No feedback generated."];
     }
   } else if (result.feedback.length === 0) {
-    console.warn('Normalizing empty feedback array');
     if (hasValidLabelDetection) {
       result.feedback = [`Detected food item: ${result._meta.detectedLabel} with ${Math.round(result._meta.labelConfidence * 100)}% confidence.`];
     } else {
@@ -341,9 +273,8 @@ export function normalizeAnalysisResult(data: any): any {
     }
   }
   
-  // Ensure suggestions array exists - OPTIONAL
+  // Ensure suggestions array exists - OPTIONAL but provide defaults if missing
   if (!result.suggestions || !Array.isArray(result.suggestions)) {
-    console.warn('Normalizing missing or invalid suggestions');
     if (hasValidLabelDetection) {
       result.suggestions = ["Complete nutritional information based on detected food."];
     } else {
@@ -352,7 +283,6 @@ export function normalizeAnalysisResult(data: any): any {
         : ["No suggestions available."];
     }
   } else if (result.suggestions.length === 0) {
-    console.warn('Normalizing empty suggestions array');
     if (hasValidLabelDetection) {
       result.suggestions = ["Complete nutritional information based on detected food."];
     } else {
@@ -364,7 +294,6 @@ export function normalizeAnalysisResult(data: any): any {
   
   // Ensure detailedIngredients array exists
   if (!result.detailedIngredients || !Array.isArray(result.detailedIngredients)) {
-    console.warn('Normalizing missing or invalid detailedIngredients');
     if (hasValidLabelDetection) {
       // If we have successful label detection, add the detected item as the main ingredient
       result.detailedIngredients = [{
@@ -378,16 +307,15 @@ export function normalizeAnalysisResult(data: any): any {
     }
   }
   
-  // Check if we should set fallback=true based on result characteristics
+  // Only mark as fallback if explicitly missing required fields, not for optional ones
   if (!isFallbackResult) {
-    // If we don't have enough data to be useful, mark as fallback
+    // Only set fallback=true if we're missing absolutely critical components
     const hasNoNutrients = !result.nutrients || (Array.isArray(result.nutrients) && result.nutrients.length === 0);
-    const hasNoDescription = !result.description || typeof result.description !== 'string' || !result.description.trim();
-    const hasNoIngredients = !result.detailedIngredients || !Array.isArray(result.detailedIngredients) || result.detailedIngredients.length === 0;
+    const hasNoDescription = !result.description || typeof result.description !== 'string';
     
-    // Set fallback if we're missing critical components, UNLESS we have label detection success
-    if ((hasNoNutrients || hasNoDescription || hasNoIngredients) && !hasValidLabelDetection) {
-      console.log('Setting fallback=true due to detected fallback characteristics');
+    // Set fallback ONLY if we're missing BOTH critical components AND we don't have label detection
+    if ((hasNoNutrients && hasNoDescription) && !hasValidLabelDetection) {
+      console.log('Setting fallback=true due to detected completely missing critical data');
       result.fallback = true;
       
       // Also update modelInfo
@@ -399,8 +327,6 @@ export function normalizeAnalysisResult(data: any): any {
   
   // Ensure goalScore structure exists
   if (!result.goalScore || typeof result.goalScore !== 'object') {
-    console.warn('Normalizing missing or invalid goalScore');
-    
     // Adapt score based on label detection confidence
     let score = isFallbackResult ? 3 : 5;
     if (hasValidLabelDetection) {
