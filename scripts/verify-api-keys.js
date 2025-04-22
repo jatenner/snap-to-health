@@ -12,19 +12,69 @@ const { execSync } = require('child_process');
 
 // Load environment variables
 const envPath = '.env.local';
-dotenv.config({ path: envPath });
+let envExists = false;
 
-console.log('🔍 Verifying API keys and sensitive information...');
+// Check if .env.local exists
+try {
+  fs.accessSync(envPath, fs.constants.F_OK);
+  envExists = true;
+  dotenv.config({ path: envPath });
+  console.log('🔍 Verifying API keys and sensitive information...');
+} catch (error) {
+  console.warn(`⚠️ WARNING: ${envPath} file not found. Creating a template...`);
+  
+  // Create a template .env.local file
+  const templateContent = `# Environment Variables - IMPORTANT: Replace all [REDACTED_*] values with actual API keys
+# OpenAI Configuration
+OPENAI_API_KEY="[REDACTED_OPENAI_API_KEY]"
+OPENAI_MODEL="gpt-4o"
 
-// Define the keys that should be checked
-const sensitiveKeys = [
-  'OPENAI_API_KEY',
-  'NUTRITIONIX_API_KEY',
-  'NUTRITIONIX_APP_ID',
-  'GOOGLE_VISION_PRIVATE_KEY_BASE64',
-  'FIREBASE_PRIVATE_KEY_BASE64',
-  'VERCEL_OIDC_TOKEN'
-];
+# Nutritionix API (for food database queries)
+NUTRITIONIX_API_KEY="[REDACTED_NUTRITIONIX_API_KEY]"
+NUTRITIONIX_APP_ID="[REDACTED_NUTRITIONIX_APP_ID]"
+
+# OCR Configuration
+OCR_PROVIDER="google-vision"
+OCR_CONFIDENCE_THRESHOLD="0.7"
+USE_OCR_EXTRACTION="true"
+
+# Google Vision API for OCR
+GOOGLE_APPLICATION_CREDENTIALS="./keys/snaphealth-39b14-3f3253d44b6c.json"
+GOOGLE_VISION_PRIVATE_KEY_BASE64="[REDACTED_GOOGLE_VISION_KEY]"
+
+# Firebase Configuration - Client (public)
+NEXT_PUBLIC_FIREBASE_API_KEY=AIzaSyAUvJPkN2H44CCayUX9S2QEr268hykmXKc
+NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN=snaphealth-39b14.firebaseapp.com
+NEXT_PUBLIC_FIREBASE_PROJECT_ID=snaphealth-39b14
+NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET=snaphealth-39b14.appspot.com
+NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID=740672895155
+NEXT_PUBLIC_FIREBASE_APP_ID=1:740672895155:web:f088e585daca6460e9d8c6
+NEXT_PUBLIC_FIREBASE_MEASUREMENT_ID=G-HXH2KSSJPQ
+
+# Firebase Configuration - Server (private)
+FIREBASE_CLIENT_EMAIL=firebase-adminsdk-fbsvc@snaphealth-39b14.iam.gserviceaccount.com
+FIREBASE_CLIENT_ID=115934821794605256140
+FIREBASE_PRIVATE_KEY_BASE64="[REDACTED_FIREBASE_PRIVATE_KEY]"
+
+# Vercel Configuration
+NEXT_PUBLIC_VERCEL_URL="snap-to-health-kcj35mgim-jonah-tenner-s-projects.vercel.app"
+VERCEL="1"
+VERCEL_OIDC_TOKEN="[REDACTED_VERCEL_OIDC_TOKEN]"
+
+# Feature Flags
+USE_GPT4_VISION="true"
+`;
+
+  try {
+    fs.writeFileSync(envPath, templateContent);
+    console.log(`✅ Created template ${envPath} file. Please edit it to add your actual API keys.`);
+    console.log('   Then run this script again to verify the keys.');
+    process.exit(0);
+  } catch (writeError) {
+    console.error(`❌ ERROR: Could not create ${envPath} template: ${writeError.message}`);
+    process.exit(1);
+  }
+}
 
 // Check if .env.local is being tracked by Git
 try {
@@ -62,6 +112,16 @@ try {
 // Check for placeholders in the file content
 const placeholderRegex = /\[(REDACTED|PLACEHOLDER).*\]/i;
 let containsPlaceholders = false;
+
+// Define the keys that should be checked
+const sensitiveKeys = [
+  'OPENAI_API_KEY',
+  'NUTRITIONIX_API_KEY',
+  'NUTRITIONIX_APP_ID',
+  'GOOGLE_VISION_PRIVATE_KEY_BASE64',
+  'FIREBASE_PRIVATE_KEY_BASE64',
+  'VERCEL_OIDC_TOKEN'
+];
 
 // Check each sensitive key
 let hasErrors = false;
