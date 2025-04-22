@@ -1,8 +1,8 @@
 import { OpenAI } from 'openai';
 import { GPT_MODEL, API_CONFIG, FEATURE_FLAGS } from './constants';
 
-// Initialize OpenAI client
-const oai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+// Remove the global OpenAI client initialization
+// const oai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
 /**
  * Analyzes an image using OpenAI's GPT-4 Vision API to provide meal analysis
@@ -13,6 +13,16 @@ const oai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
  * @returns Analysis result from GPT-4 Vision
  */
 export async function analyzeWithGPT4Vision(base64Image: string, healthGoal: string, requestId: string) {
+  // Validate API key first
+  const apiKey = process.env.OPENAI_API_KEY;
+  if (!apiKey) {
+    console.error(`[${requestId}] No OpenAI API key found in environment variables`);
+    throw new Error('OpenAI API key not configured. Please check server environment.');
+  }
+  
+  // Initialize OpenAI client inside the function
+  const oai = new OpenAI({ apiKey });
+  
   // Get the GPT-4 Vision prompt specific to the health goal
   const goalSpecificPrompt = getGoalSpecificPrompt(healthGoal);
   
@@ -119,6 +129,14 @@ IMPORTANT: Return ONLY valid JSON with no surrounding text.`
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error);
     console.error(`[${requestId}] GPT-4 Vision analysis failed:`, errorMessage);
+    
+    // Check if this is an API key or authentication issue
+    if (errorMessage.includes('API key') || 
+        errorMessage.includes('authentication') || 
+        errorMessage.includes('401')) {
+      console.error(`[${requestId}] API key authentication error detected.`);
+    }
+    
     throw error;
   } finally {
     clearTimeout(timeoutId);
