@@ -2,7 +2,6 @@ import { initializeApp, getApps, cert } from 'firebase-admin/app';
 import { getFirestore } from 'firebase-admin/firestore';
 import { getAuth } from 'firebase-admin/auth';
 import { getStorage } from 'firebase-admin/storage';
-import { assertFirebasePrivateKey } from '../utils/validateEnv';
 
 // Initialize Firebase Admin only if the required environment variables are available
 const apps = getApps();
@@ -29,36 +28,31 @@ if (!apps.length) {
     // Continue execution but Firebase Admin services won't be available
   } else {
     try {
-      // Validate the Firebase private key using our new validation function
-      try {
-        assertFirebasePrivateKey();
-        console.log('✅ Firebase private key validation passed');
-      } catch (error: any) {
-        console.error('❌ Firebase private key validation failed:', error.message);
-        throw error; // Re-throw to prevent initialization
+      // Decode the base64 private key
+      const privateKey = Buffer.from(privateKeyBase64!, 'base64').toString('utf8');
+      
+      // Simple validation for private key format
+      const hasPemHeader = privateKey.includes('-----BEGIN PRIVATE KEY-----');
+      const hasPemFooter = privateKey.includes('-----END PRIVATE KEY-----');
+      
+      if (!hasPemHeader || !hasPemFooter) {
+        throw new Error('Invalid private key format. It should be in PEM format with proper BEGIN/END markers.');
       }
       
-      // Decode the base64 encoded service account JSON
-      const decodedServiceAccount = Buffer.from(privateKeyBase64!, 'base64').toString('utf8');
-      
-      // Parse the JSON string into an object
-      const serviceAccount = JSON.parse(decodedServiceAccount);
-      
-      // Add diagnostic logging for the base64 key (without revealing the full key)
-      const keyLength = privateKeyBase64?.length || 0;
-      console.log(`Processing Firebase service account (base64 length: ${keyLength} chars)`);
-      
-      // Simple logging (without revealing sensitive key information)
-      console.log(`Initializing Firebase Admin with: 
-        - Project ID: ${serviceAccount.project_id || projectId}
-        - Client Email: ${serviceAccount.client_email ? serviceAccount.client_email.substring(0, 5) + '...' : 'missing'}
-        - Service Account Type: ${serviceAccount.type || 'unknown'}
+      console.log(`Processing Firebase credentials:
+        - Project ID: ${projectId}
+        - Client Email: ${clientEmail ? clientEmail.substring(0, 5) + '...' : 'missing'}
+        - Private Key: Valid PEM format detected
         - Storage Bucket: ${storageBucket || 'not specified'}`);
 
-      // Initialize Firebase Admin with the service account
+      // Initialize Firebase Admin with direct credentials
       initializeApp({
-        credential: cert(serviceAccount),
-        storageBucket,
+        credential: cert({
+          projectId,
+          clientEmail,
+          privateKey
+        }),
+        storageBucket
       });
       
       // Initialize services
@@ -70,12 +64,12 @@ if (!apps.length) {
     } catch (error: any) {
       console.error('❌ Firebase Admin initialization error:', error?.message || error);
       
-      // Provide specific guidance for base64 key issues
-      if (error.message?.includes('private key') || error.message?.includes('Firebase') || error.message?.includes('JSON')) {
+      // Provide specific guidance for key issues
+      if (error.message?.includes('private key')) {
         console.error('Please check that your FIREBASE_PRIVATE_KEY_BASE64 environment variable:');
-        console.error('1. Contains a valid base64-encoded Firebase service account JSON');
+        console.error('1. Contains a valid base64-encoded private key');
         console.error('2. Is complete (not truncated)');
-        console.error('3. Was generated with: cat firebase-service-account.json | base64');
+        console.error('3. Decodes to a proper PEM format private key with -----BEGIN PRIVATE KEY----- and -----END PRIVATE KEY-----');
       }
     }
   }
