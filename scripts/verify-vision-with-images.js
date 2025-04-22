@@ -25,7 +25,7 @@ const baseUrl = process.argv[2] || 'http://localhost:3000';
 const customImageUrl = process.argv[3];
 
 // Test images to try
-const TEST_IMAGES = ['orange', 'green', 'blue', 'red'];
+const TEST_IMAGES = ['apple', 'red', 'green', 'blue', 'orange'];
 // Health goals to test with
 const TEST_GOALS = ['general health', 'weight loss', 'muscle gain'];
 
@@ -177,8 +177,16 @@ async function runAllTests() {
   let failedTests = 0;
   let passedTests = 0;
   
-  // First test the default goal with all test images
-  for (const image of TEST_IMAGES) {
+  // First test with the apple image
+  const success = await runTest('apple', 'general health');
+  if (success) {
+    passedTests++;
+  } else {
+    failedTests++;
+  }
+  
+  // Test just two more images (red and green) to minimize token usage
+  for (const image of ['red', 'green']) {
     const success = await runTest(image, 'general health');
     if (success) {
       passedTests++;
@@ -187,10 +195,9 @@ async function runAllTests() {
     }
   }
   
-  // Then test one image with different goals
-  const testImage = TEST_IMAGES[0]; // Use the first test image
+  // Then test apple with different goals
   for (const goal of TEST_GOALS.slice(1)) { // Skip 'general health' as we already tested it
-    const success = await runTest(testImage, goal);
+    const success = await runTest('apple', goal);
     if (success) {
       passedTests++;
     } else {

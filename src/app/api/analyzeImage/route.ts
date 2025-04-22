@@ -457,11 +457,9 @@ Do not return any explanation or text outside the JSON block.`
 }
 
 /**
- * POST handler for the /api/analyzeImage endpoint
- * Tries Nutritionix first, falls back to GPT if Nutritionix fails
- * Implements caching with a 1-hour TTL
+ * Process and analyze an image using GPT-4 Vision
  */
-export async function POST(request: NextRequest): Promise<NextResponse> {
+async function processImageAnalysis(request: Request) {
   const requestId = crypto.randomUUID();
   const startTime = Date.now();
   
@@ -832,4 +830,11 @@ function ensureCriticalFields(result: any): any {
   
   console.info("[Test] Fallback result with partial data accepted ✅");
   return normalized;
+}
+
+/**
+ * POST handler for the /api/analyzeImage endpoint
+ */
+export async function POST(req: Request) {
+  return processImageAnalysis(req);
 }

@@ -1,116 +1,139 @@
 #!/usr/bin/env node
 
 /**
- * Verify GPT-4 Vision Integration in Deployed Environment
- * 
- * This script makes a request to the deployed application's
- * /api/test-vision endpoint to verify that the GPT-4 Vision
- * integration is properly configured and working in the deployed environment.
+ * Script to verify GPT-4 Vision is working in a deployed environment
+ * Uses a public image URL of an apple to test the integration
  * 
  * Usage:
- *   node scripts/verify-deployed-vision.js [deployment-url]
+ *   node verify-deployed-vision.js [baseUrl]
  * 
- * If no deployment URL is provided, it defaults to https://snap2health.vercel.app
+ * Parameters:
+ *   baseUrl - Optional base URL of the deployed app (defaults to http://localhost:3000)
  */
 
 const https = require('https');
-const url = require('url');
+const http = require('http');
 
-// Get deployment URL from command line argument or use default
-const deploymentUrl = process.argv[2] || 'https://snap2health.vercel.app';
-const apiPath = '/api/test-vision';
+// Default URL is localhost:3000
+const baseUrl = process.argv[2] || 'http://localhost:3000';
 
-console.log(`\n🔍 Verifying GPT-4 Vision integration on: ${deploymentUrl}\n`);
+// Public image of an apple for testing (using Unsplash which is more reliable)
+const TEST_IMAGE_URL = 'https://images.unsplash.com/photo-1568702846914-96b305d2aaeb?ixlib=rb-4.0.3&ixid=MnwxMjA3fDB8MHxwaG90by1wYWdlfHx8fGVufDB8fHx8&auto=format&fit=crop&w=500&q=80';
 
-// Parse the URL to get hostname and path
-const parsedUrl = url.parse(`${deploymentUrl}${apiPath}`);
-
-const options = {
-  hostname: parsedUrl.hostname,
-  path: parsedUrl.path,
-  method: 'GET',
-  headers: {
-    'Accept': 'application/json'
-  }
-};
-
-const req = https.request(options, (res) => {
-  let data = '';
-  
-  res.on('data', (chunk) => {
-    data += chunk;
-  });
-  
-  res.on('end', () => {
-    try {
-      const response = JSON.parse(data);
+/**
+ * Makes an HTTP/HTTPS request and returns a promise with the response
+ */
+function makeRequest(url) {
+  return new Promise((resolve, reject) => {
+    const client = url.startsWith('https') ? https : http;
+    
+    client.get(url, (res) => {
+      const { statusCode } = res;
+      const contentType = res.headers['content-type'];
       
-      if (response.success) {
-        console.log('✅ GPT-4 Vision integration verification SUCCESSFUL!');
-        console.log(`\nResponse Details:`);
-        if (response.requestId) {
-          console.log(`- Request ID: ${response.requestId}`);
-        }
-        if (response.processingTimeMs) {
-          console.log(`- Processing Time: ${response.processingTimeMs}ms`);
-        }
-        
-        if (response.result) {
-          console.log(`\nAnalysis Result:`);
-          console.log(`- Description: ${response.result.description || 'N/A'}`);
-          
-          if (response.result.nutrients && response.result.nutrients.length > 0) {
-            console.log(`- Nutrients: ${response.result.nutrients.length} found`);
-            response.result.nutrients.slice(0, 3).forEach(nutrient => {
-              console.log(`  • ${nutrient.name}: ${nutrient.value}${nutrient.unit}`);
-            });
-            if (response.result.nutrients.length > 3) {
-              console.log(`  • ... and ${response.result.nutrients.length - 3} more`);
-            }
-          }
-          
-          if (response.result.foods && response.result.foods.length > 0) {
-            console.log(`- Foods: ${response.result.foods.length} detected`);
-            response.result.foods.forEach(food => {
-              console.log(`  • ${food.name}`);
-            });
-          }
-        }
-        
-        if (response.usedLabelDetection) {
-          console.log(`\nLabel Detection:`);
-          console.log(`- Used Label Detection: ${response.usedLabelDetection}`);
-          if (response.detectedLabel) {
-            console.log(`- Detected Label: ${response.detectedLabel}`);
-          }
-          if (response.labelConfidence) {
-            console.log(`- Confidence: ${response.labelConfidence}`);
-          }
-          if (response.labelMatchCandidates && response.labelMatchCandidates.length > 0) {
-            console.log(`- Candidates: ${response.labelMatchCandidates.join(', ')}`);
-          }
-        }
-      } else {
-        console.error('❌ GPT-4 Vision integration verification FAILED!');
-        console.error(`Error: ${response.error || 'Unknown error'}`);
-        if (response.errorType) {
-          console.error(`Error type: ${response.errorType}`);
-        }
-        process.exit(1);
+      let error;
+      if (statusCode !== 200) {
+        error = new Error(`Request Failed.\nStatus Code: ${statusCode}`);
+      } else if (!/^application\/json/.test(contentType)) {
+        error = new Error(`Invalid content-type.\nExpected application/json but received ${contentType}`);
       }
-    } catch (error) {
-      console.error('❌ Failed to parse response:', error);
-      console.error('Raw response:', data);
-      process.exit(1);
-    }
+      
+      if (error) {
+        console.error(error.message);
+        res.resume(); // Consume response to free up memory
+        reject(error);
+        return;
+      }
+      
+      res.setEncoding('utf8');
+      let rawData = '';
+      
+      res.on('data', (chunk) => { rawData += chunk; });
+      res.on('end', () => {
+        try {
+          const parsedData = JSON.parse(rawData);
+          resolve(parsedData);
+        } catch (e) {
+          console.error(e.message);
+          reject(e);
+        }
+      });
+    }).on('error', (e) => {
+      console.error(`Got error: ${e.message}`);
+      reject(e);
+    });
   });
-});
+}
 
-req.on('error', (error) => {
-  console.error('❌ Request failed:', error.message);
-  process.exit(1);
-});
+/**
+ * Runs the test with the apple image
+ */
+async function runTest() {
+  console.log(`Verifying GPT-4 Vision integration on ${baseUrl} with a real apple image`);
+  
+  const url = `${baseUrl}/api/test-vision-with-image?url=${encodeURIComponent(TEST_IMAGE_URL)}&goal=general health`;
+  
+  console.log(`Testing with URL: ${TEST_IMAGE_URL}`);
+  
+  try {
+    const data = await makeRequest(url);
+    
+    if (!data.success) {
+      console.log('❌ Test FAILED');
+      console.log(`Error: ${data.error}`);
+      console.log(`Error Detail: ${data.errorDetail || 'No additional details'}`);
+      process.exit(1);
+      return;
+    }
+    
+    console.log('✅ Test SUCCESSFUL');
+    console.log(`Request ID: ${data.requestId}`);
+    console.log(`Processing Time: ${data.processingTimeMs}ms`);
+    
+    const result = data.result;
+    if (result) {
+      console.log('\nAnalysis Results:');
+      console.log(`- Description: ${result.description || 'Not provided'}`);
+      
+      if (result.nutrients && result.nutrients.length > 0) {
+        console.log('\nDetected Nutrients:');
+        result.nutrients.forEach(nutrient => {
+          console.log(`- ${nutrient.name}: ${nutrient.amount}${nutrient.unit}`);
+        });
+      } else {
+        console.log('No nutrients detected');
+      }
+      
+      if (result.foods && result.foods.length > 0) {
+        console.log('\nDetected Foods:');
+        result.foods.forEach(food => {
+          console.log(`- ${food.name} (Confidence: ${food.confidence || 'unknown'})`);
+        });
+      } else {
+        console.log('No foods detected');
+      }
+      
+      if (result.feedback && result.feedback.length > 0) {
+        console.log('\nFeedback:');
+        result.feedback.forEach(item => {
+          console.log(`- ${item}`);
+        });
+      }
+      
+      if (result.suggestions && result.suggestions.length > 0) {
+        console.log('\nSuggestions:');
+        result.suggestions.forEach(item => {
+          console.log(`- ${item}`);
+        });
+      }
+    }
+    
+    process.exit(0);
+  } catch (error) {
+    console.error(`Failed to test vision integration:`, error.message);
+    process.exit(1);
+  }
+}
 
-req.end();
-
-console.log('Sending request to verify GPT-4 Vision integration...'); 
+// Run the test
+runTest(); 
