@@ -8,6 +8,20 @@ export function middleware(request: NextRequest) {
   const corsResponse = corsMiddleware(request);
   if (corsResponse) return corsResponse;
 
+  // Public API routes - bypass authentication
+  const url = request.nextUrl.pathname;
+  const publicRoutes = [
+    '/api/public-test-openai',
+    '/api/ping-openai',
+    '/api/test-openai',
+    '/api/test-env',
+    '/api/test-vision',
+    '/api/test-validator'
+  ];
+  
+  if (publicRoutes.some(route => url.startsWith(route))) {
+    return NextResponse.next();
+  }
 
   // For now, we'll just let client-side authentication handle redirects
   // This can be expanded later for server-side auth checks
@@ -18,6 +32,7 @@ export function middleware(request: NextRequest) {
 export const config = {
   matcher: [
     // Add protected routes here if needed
+    '/api/:path*',
     // '/meals/:path*',
     // '/upload/:path*',
   ],

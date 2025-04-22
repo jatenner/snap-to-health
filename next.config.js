@@ -15,6 +15,47 @@ const nextConfig = {
       },
     ],
   },
+  // Add headers configuration to bypass authentication for public API routes
+  async headers() {
+    return [
+      {
+        source: '/api/public-test-openai',
+        headers: [
+          {
+            key: 'x-vercel-skip-authorization',
+            value: 'true',
+          },
+        ],
+      },
+      {
+        source: '/api/ping-openai',
+        headers: [
+          {
+            key: 'x-vercel-skip-authorization',
+            value: 'true',
+          },
+        ],
+      },
+      {
+        source: '/api/test-vision',
+        headers: [
+          {
+            key: 'x-vercel-skip-authorization',
+            value: 'true',
+          },
+        ],
+      },
+      {
+        source: '/api/test-validator',
+        headers: [
+          {
+            key: 'x-vercel-skip-authorization',
+            value: 'true',
+          },
+        ],
+      },
+    ];
+  },
   // Runtime environment variables for the client
   env: {
     // Nutritionix API credentials - public since they're used on the client

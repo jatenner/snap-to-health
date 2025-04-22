@@ -5,11 +5,49 @@
   "installCommand": "npm install",
   "framework": "nextjs",
   "regions": ["iad1"],
+  "public": false,
   "env": {
     "OPENAI_API_KEY": "env OPENAI_API_KEY",
     "NUTRITIONIX_APP_ID": "env NUTRITIONIX_APP_ID",
     "NUTRITIONIX_API_KEY": "env NUTRITIONIX_API_KEY",
     "FIREBASE_CLIENT_EMAIL": "env FIREBASE_CLIENT_EMAIL",
     "FIREBASE_PRIVATE_KEY_BASE64": "env FIREBASE_PRIVATE_KEY_BASE64"
-  }
+  },
+  "headers": [
+    {
+      "source": "/api/public-test-openai",
+      "headers": [
+        { "key": "x-vercel-skip-auth", "value": "1" },
+        { "key": "x-vercel-skip-authorization", "value": "true" }
+      ]
+    },
+    {
+      "source": "/api/ping-openai",
+      "headers": [
+        { "key": "x-vercel-skip-auth", "value": "1" },
+        { "key": "x-vercel-skip-authorization", "value": "true" }
+      ]
+    },
+    {
+      "source": "/api/test-openai",
+      "headers": [
+        { "key": "x-vercel-skip-auth", "value": "1" },
+        { "key": "x-vercel-skip-authorization", "value": "true" }
+      ]
+    },
+    {
+      "source": "/api/test-vision",
+      "headers": [
+        { "key": "x-vercel-skip-auth", "value": "1" },
+        { "key": "x-vercel-skip-authorization", "value": "true" }
+      ]
+    },
+    {
+      "source": "/api/test-validator",
+      "headers": [
+        { "key": "x-vercel-skip-auth", "value": "1" },
+        { "key": "x-vercel-skip-authorization", "value": "true" }
+      ]
+    }
+  ]
 } 
