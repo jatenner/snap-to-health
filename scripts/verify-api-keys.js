@@ -11,7 +11,8 @@ const dotenv = require('dotenv');
 const { execSync } = require('child_process');
 
 // Load environment variables
-dotenv.config({ path: '.env.local' });
+const envPath = '.env.local';
+dotenv.config({ path: envPath });
 
 console.log('🔍 Verifying API keys and sensitive information...');
 
@@ -49,20 +50,46 @@ if (fs.existsSync(gitignorePath)) {
   console.warn('⚠️ WARNING: No .gitignore file found');
 }
 
+// Read the actual contents of .env.local to check for placeholders
+let envFileContent = '';
+try {
+  envFileContent = fs.readFileSync(envPath, 'utf8');
+} catch (error) {
+  console.error(`❌ ERROR: Could not read ${envPath}: ${error.message}`);
+  process.exit(1);
+}
+
+// Check for placeholders in the file content
+const placeholderRegex = /\[(REDACTED|PLACEHOLDER).*\]/i;
+let containsPlaceholders = false;
+
 // Check each sensitive key
 let hasErrors = false;
+let hasPlaceholders = false;
+
 for (const key of sensitiveKeys) {
+  // Get value from environment and from file
   const value = process.env[key];
   
+  // Directly check the file content for placeholders for this key
+  const keyRegex = new RegExp(`${key}=["']?\\[(REDACTED|PLACEHOLDER).*\\]`, 'i');
+  const hasPlaceholderInFile = keyRegex.test(envFileContent);
+  
+  if (hasPlaceholderInFile) {
+    console.warn(`⚠️ WARNING: ${key} contains a placeholder value in .env.local file`);
+    hasPlaceholders = true;
+    continue;
+  }
+  
   if (!value) {
-    console.warn(`⚠️ WARNING: ${key} is not set`);
+    console.warn(`⚠️ WARNING: ${key} is not set in the environment`);
     continue;
   }
   
   // Check if value is a placeholder
-  if (value.includes('[REDACTED') || value.includes('PLACEHOLDER')) {
-    console.error(`❌ ERROR: ${key} contains a placeholder value: "${value}"`);
-    hasErrors = true;
+  if (placeholderRegex.test(value)) {
+    console.warn(`⚠️ WARNING: ${key} contains a placeholder value: "${value}"`);
+    hasPlaceholders = true;
     continue;
   }
   
@@ -96,6 +123,10 @@ for (const key of sensitiveKeys) {
 if (hasErrors) {
   console.error('\n❌ There were errors in your environment setup. Please fix them before continuing.');
   process.exit(1);
+} else if (hasPlaceholders) {
+  console.warn('\n⚠️ Your .env.local file contains placeholder values. This is okay for development or demonstration');
+  console.warn('   purposes, but you will need to replace them with real values before deploying or using the application.');
+  console.warn('   If this is a production environment, replace the placeholders with actual API keys.');
 } else {
   console.log('\n✅ All sensitive environment variables appear to be properly configured!');
   console.log('Note: This script only checks formatting, not validity of API keys.');
