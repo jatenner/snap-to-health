@@ -1,6 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { v4 as uuidv4 } from 'uuid';
-import { analyzeWithGPT4Vision } from '../analyzeImage/route';
+import { analyzeWithGPT4Vision } from '@/lib/gptVision';
+
+// Use Node.js runtime for consistency with other API routes
+export const runtime = 'nodejs';
 
 /**
  * Creates a simple test image (orange color) for testing GPT-4 Vision
@@ -19,7 +22,7 @@ export async function GET(request: NextRequest) {
     const base64Image = createTestImage();
     console.log(`[${requestId}] Created test image, sending to GPT-4 Vision...`);
     
-    // Use the actual analyzeWithGPT4Vision function from route.ts
+    // Use the analyzeWithGPT4Vision function from gptVision.ts
     const result = await analyzeWithGPT4Vision(base64Image, 'general health', requestId);
     
     console.log(`[${requestId}] GPT-4 Vision analysis complete:`, result);
