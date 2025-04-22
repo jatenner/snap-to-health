@@ -35,7 +35,11 @@ export const getFirestoreBaseUrl = (): string => {
   }
   
   // Use direct Firestore API in production
-  const projectId = process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID || 'snaphealth-39b14';
+  const projectId = process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID;
+  if (!projectId) {
+    console.error('NEXT_PUBLIC_FIREBASE_PROJECT_ID is not set');
+    throw new Error('Firebase Project ID not configured. Check your environment variables.');
+  }
   return `https://firestore.googleapis.com/v1/projects/${projectId}/databases/(default)/documents`;
 };
 
@@ -92,7 +96,10 @@ export const getDocument = async (
       return await response.json();
     } else {
       // Direct API call for production
-      const projectId = process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID || 'snaphealth-39b14';
+      const projectId = process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID;
+      if (!projectId) {
+        throw new Error('NEXT_PUBLIC_FIREBASE_PROJECT_ID is not set');
+      }
       const url = `https://firestore.googleapis.com/v1/projects/${projectId}/databases/(default)/documents/${path}`;
       
       const response = await fetch(url, {
@@ -168,7 +175,10 @@ export const createDocument = async (
       return await response.json();
     } else {
       // Direct API call for production
-      const projectId = process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID || 'snaphealth-39b14';
+      const projectId = process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID;
+      if (!projectId) {
+        throw new Error('NEXT_PUBLIC_FIREBASE_PROJECT_ID is not set');
+      }
       const url = `https://firestore.googleapis.com/v1/projects/${projectId}/databases/(default)/documents/${path}`;
       
       const response = await fetch(url, {
@@ -251,7 +261,10 @@ export const updateDocument = async (
       return await response.json();
     } else {
       // Direct API call for production
-      const projectId = process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID || 'snaphealth-39b14';
+      const projectId = process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID;
+      if (!projectId) {
+        throw new Error('NEXT_PUBLIC_FIREBASE_PROJECT_ID is not set');
+      }
       const url = `https://firestore.googleapis.com/v1/projects/${projectId}/databases/(default)/documents/${path}`;
       
       const response = await fetch(url, {
@@ -328,7 +341,10 @@ export const deleteDocument = async (
       return true;
     } else {
       // Direct API call for production
-      const projectId = process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID || 'snaphealth-39b14';
+      const projectId = process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID;
+      if (!projectId) {
+        throw new Error('NEXT_PUBLIC_FIREBASE_PROJECT_ID is not set');
+      }
       const url = `https://firestore.googleapis.com/v1/projects/${projectId}/databases/(default)/documents/${path}`;
       
       const response = await fetch(url, {

@@ -43,8 +43,11 @@ export const uploadMealImage = async (
   console.log('Firebase Storage bucket in use:', storage.app.options.storageBucket);
   
   // Check if bucket is correctly set
-  const expectedBucket = process.env.NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET || 'snaphealth-39b14.firebasestorage.app';
-  if (storage.app.options.storageBucket !== expectedBucket) {
+  const expectedBucket = process.env.NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET;
+  if (!expectedBucket) {
+    console.error('⚠️ NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET environment variable is not set');
+  } 
+  else if (storage.app.options.storageBucket !== expectedBucket) {
     console.error('⚠️ STORAGE BUCKET MISMATCH in uploadMealImage');
     console.error(`Expected: ${expectedBucket}`);
     console.error(`Actual: ${storage.app.options.storageBucket}`);
