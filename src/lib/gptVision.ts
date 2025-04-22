@@ -170,4 +170,185 @@ When analyzing this meal, consider balanced nutrition including:
 3. Balance of healthy fats, complex carbohydrates, and lean proteins
 4. Presence of antioxidants and phytonutrients
 5. Potential inflammatory or anti-inflammatory properties`;
+}
+
+/**
+ * Helper function to format health goal to a standardized display name
+ */
+export function formatGoalName(healthGoal: string): string {
+  if (!healthGoal) return 'General Health';
+  
+  const goal = healthGoal.toLowerCase();
+  
+  if (goal.includes('weight loss') || goal.includes('lose weight')) {
+    return 'Weight Loss';
+  } else if (goal.includes('muscle') || goal.includes('strength')) {
+    return 'Build Muscle';
+  } else if (goal.includes('keto') || goal.includes('low carb')) {
+    return 'Low Carb';
+  } else if (goal.includes('heart') || goal.includes('blood pressure')) {
+    return 'Heart Health';
+  } else if (goal.includes('diabetes') || goal.includes('blood sugar')) {
+    return 'Blood Sugar Management';
+  } else {
+    // Capitalize first letter of each word
+    return healthGoal
+      .split(' ')
+      .map(word => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
+      .join(' ');
+  }
+}
+
+/**
+ * Function to convert GPT-4 Vision result to the standard AnalysisResult format
+ */
+export interface AnalysisResult {
+  description: string;
+  nutrients: Array<{
+    name: string;
+    value: string | number;
+    unit: string;
+    isHighlight: boolean;
+    percentOfDailyValue?: number;
+    amount?: number;
+  }>;
+  feedback: string[];
+  suggestions: string[];
+  detailedIngredients: Array<{
+    name: string;
+    category: string;
+    confidence: number;
+    confidenceEmoji?: string;
+  }>;
+  goalScore: {
+    overall: number;
+    specific: Record<string, number>;
+  };
+  goalName?: string;
+  modelInfo?: {
+    model: string;
+    usedFallback: boolean;
+    ocrExtracted: boolean;
+    usedLabelDetection?: boolean;
+    detectedLabel?: string | null;
+    labelConfidence?: number;
+  };
+  lowConfidence?: boolean;
+  fallback?: boolean;
+  source?: string;
+  saved?: boolean;
+  savedMealId?: string;
+  saveError?: string;
+  rawTextResponse?: string;
+  _meta?: {
+    ocrText?: string;
+    foodTerms?: string[];
+    isNutritionLabel?: boolean;
+    foodConfidence?: number;
+    debugTrace?: string;
+    ocrConfidence?: number;
+    usedLabelDetection?: boolean;
+    detectedLabel?: string | null;
+    labelConfidence?: number;
+  };
+  no_result?: boolean;
+}
+
+export function convertVisionResultToAnalysisResult(
+  visionResult: any, 
+  requestId: string, 
+  healthGoal: string
+): AnalysisResult {
+  console.log(`[${requestId}] Converting GPT-4 Vision result to AnalysisResult format`);
+  
+  // Extract basic nutrition values from the Vision API response
+  const basicNutrition = visionResult.basicNutrition || {};
+  
+  // Helper function to parse a nutrition value that might be a string with units
+  const parseNutritionValue = (value: string | number): number => {
+    if (typeof value === 'number') return value;
+    if (typeof value !== 'string') return 0;
+    
+    // Extract the numeric portion from strings like "500 kcal" or "25g"
+    const match = value.match(/(\d+(\.\d+)?)/);
+    return match ? parseFloat(match[1]) : 0;
+  };
+  
+  // Convert nutrient values
+  const nutrients = [
+    { 
+      name: 'Calories', 
+      value: parseNutritionValue(basicNutrition.calories || '0'), 
+      unit: 'kcal', 
+      isHighlight: true 
+    },
+    { 
+      name: 'Protein', 
+      value: parseNutritionValue(basicNutrition.protein || '0'), 
+      unit: 'g', 
+      isHighlight: true 
+    },
+    { 
+      name: 'Carbohydrates', 
+      value: parseNutritionValue(basicNutrition.carbs || '0'), 
+      unit: 'g', 
+      isHighlight: true 
+    },
+    { 
+      name: 'Fat', 
+      value: parseNutritionValue(basicNutrition.fat || '0'), 
+      unit: 'g', 
+      isHighlight: true 
+    }
+  ];
+  
+  // Convert detailed ingredients adding confidence emojis
+  const detailedIngredients = (visionResult.detailedIngredients || []).map((ingredient: any) => {
+    // Calculate emoji based on confidence level
+    let confidenceEmoji = '❓'; // Default/unknown
+    const confidence = ingredient.confidence || 0;
+    
+    if (confidence >= 8) confidenceEmoji = '✅'; // High confidence
+    else if (confidence >= 5) confidenceEmoji = '🟡'; // Medium confidence
+    else confidenceEmoji = '❓'; // Low confidence
+    
+    return {
+      name: ingredient.name,
+      category: ingredient.category || 'food',
+      confidence: confidence,
+      confidenceEmoji
+    };
+  });
+  
+  // Combine feedback from multiple sources if available
+  const combinedFeedback = [
+    ...(visionResult.feedback || []),
+    ...(visionResult.positiveFoodFactors || []).map((item: string) => `✅ ${item}`),
+    ...(visionResult.negativeFoodFactors || []).map((item: string) => `⚠️ ${item}`)
+  ];
+  
+  // Create the standardized analysis result
+  const result: AnalysisResult = {
+    description: visionResult.description || `Analysis of meal for ${formatGoalName(healthGoal)}`,
+    nutrients,
+    feedback: combinedFeedback,
+    suggestions: visionResult.suggestions || [],
+    detailedIngredients,
+    goalScore: {
+      overall: visionResult.goalImpactScore || 5,
+      specific: {}
+    },
+    goalName: formatGoalName(healthGoal),
+    modelInfo: {
+      model: "gpt-4o",
+      usedFallback: false,
+      ocrExtracted: false
+    },
+    source: 'gpt-4o',
+    _meta: {
+      debugTrace: `Analyzed directly with GPT-4o Vision${visionResult.imageChallenges ? '. Image challenges: ' + visionResult.imageChallenges.join(', ') : ''}`
+    }
+  };
+  
+  return result;
 } 

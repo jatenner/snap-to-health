@@ -10,7 +10,7 @@ import { API_CONFIG } from '@/lib/constants';
 import { GPT_MODEL } from '@/lib/constants';
 import { saveMealToFirestore } from '@/lib/mealUtils';
 import { isValidAnalysis, normalizeAnalysisResult } from '@/lib/utils/analysisValidator';
-import { analyzeWithGPT4Vision } from '@/lib/gptVision';
+import { analyzeWithGPT4Vision, convertVisionResultToAnalysisResult, AnalysisResult } from '@/lib/gptVision';
 
 // Use Node.js runtime since we depend on Node.js specific modules
 export const runtime = 'nodejs';
@@ -253,58 +253,6 @@ interface AnalysisResponse {
   };
 }
 
-interface AnalysisResult {
-  description: string;
-  nutrients: Array<{
-    name: string;
-    value: string | number;
-    unit: string;
-    isHighlight: boolean;
-    percentOfDailyValue?: number;
-    amount?: number;
-  }>;
-  feedback: string[];
-  suggestions: string[];
-  detailedIngredients: Array<{
-    name: string;
-    category: string;
-    confidence: number;
-    confidenceEmoji?: string;
-  }>;
-  goalScore: {
-    overall: number;
-    specific: Record<string, number>;
-  };
-  goalName?: string;
-  modelInfo?: {
-    model: string;
-    usedFallback: boolean;
-    ocrExtracted: boolean;
-    usedLabelDetection?: boolean;
-    detectedLabel?: string | null;
-    labelConfidence?: number;
-  };
-  lowConfidence?: boolean;
-  fallback?: boolean;
-  source?: string;
-  saved?: boolean;
-  savedMealId?: string;
-  saveError?: string;
-  rawTextResponse?: string;
-  _meta?: {
-    ocrText?: string;
-    foodTerms?: string[];
-    isNutritionLabel?: boolean;
-    foodConfidence?: number;
-    debugTrace?: string;
-    ocrConfidence?: number;
-    usedLabelDetection?: boolean;
-    detectedLabel?: string | null;
-    labelConfidence?: number;
-  };
-  no_result?: boolean;
-}
-
 interface NutrientAnalysisResult {
   success: boolean;
   feedback: string[];
@@ -509,533 +457,211 @@ Do not return any explanation or text outside the JSON block.`
 }
 
 /**
- * Function to convert GPT-4 Vision result to the standard AnalysisResult format
- */
-function convertVisionResultToAnalysisResult(
-  visionResult: any, 
-  requestId: string, 
-  healthGoal: string
-): AnalysisResult {
-  console.log(`[${requestId}] Converting GPT-4 Vision result to AnalysisResult format`);
-  
-  // Extract basic nutrition values from the Vision API response
-  const basicNutrition = visionResult.basicNutrition || {};
-  
-  // Helper function to parse a nutrition value that might be a string with units
-  const parseNutritionValue = (value: string | number): number => {
-    if (typeof value === 'number') return value;
-    if (typeof value !== 'string') return 0;
-    
-    // Extract the numeric portion from strings like "500 kcal" or "25g"
-    const match = value.match(/(\d+(\.\d+)?)/);
-    return match ? parseFloat(match[1]) : 0;
-  };
-  
-  // Convert nutrient values
-  const nutrients = [
-    { 
-      name: 'Calories', 
-      value: parseNutritionValue(basicNutrition.calories || '0'), 
-      unit: 'kcal', 
-      isHighlight: true 
-    },
-    { 
-      name: 'Protein', 
-      value: parseNutritionValue(basicNutrition.protein || '0'), 
-      unit: 'g', 
-      isHighlight: true 
-    },
-    { 
-      name: 'Carbohydrates', 
-      value: parseNutritionValue(basicNutrition.carbs || '0'), 
-      unit: 'g', 
-      isHighlight: true 
-    },
-    { 
-      name: 'Fat', 
-      value: parseNutritionValue(basicNutrition.fat || '0'), 
-      unit: 'g', 
-      isHighlight: true 
-    }
-  ];
-  
-  // Convert detailed ingredients adding confidence emojis
-  const detailedIngredients = (visionResult.detailedIngredients || []).map((ingredient: any) => {
-    // Calculate emoji based on confidence level
-    let confidenceEmoji = '❓'; // Default/unknown
-    const confidence = ingredient.confidence || 0;
-    
-    if (confidence >= 8) confidenceEmoji = '✅'; // High confidence
-    else if (confidence >= 5) confidenceEmoji = '🟡'; // Medium confidence
-    else confidenceEmoji = '❓'; // Low confidence
-    
-    return {
-      name: ingredient.name,
-      category: ingredient.category || 'food',
-      confidence: confidence,
-      confidenceEmoji
-    };
-  });
-  
-  // Combine feedback from multiple sources if available
-  const combinedFeedback = [
-    ...(visionResult.feedback || []),
-    ...(visionResult.positiveFoodFactors || []).map((item: string) => `✅ ${item}`),
-    ...(visionResult.negativeFoodFactors || []).map((item: string) => `⚠️ ${item}`)
-  ];
-  
-  // Create the standardized analysis result
-  const result: AnalysisResult = {
-    description: visionResult.description || `Analysis of meal for ${formatGoalName(healthGoal)}`,
-    nutrients,
-    feedback: combinedFeedback,
-    suggestions: visionResult.suggestions || [],
-    detailedIngredients,
-    goalScore: {
-      overall: visionResult.goalImpactScore || 5,
-      specific: {}
-    },
-    goalName: formatGoalName(healthGoal),
-    modelInfo: {
-      model: "gpt-4o",
-      usedFallback: false,
-      ocrExtracted: false
-    },
-    source: 'gpt-4o',
-    _meta: {
-      debugTrace: `Analyzed directly with GPT-4o Vision${visionResult.imageChallenges ? '. Image challenges: ' + visionResult.imageChallenges.join(', ') : ''}`
-    }
-  };
-  
-  return result;
-}
-
-/**
- * Simple POST handler for the /api/analyzeImage endpoint
+ * POST handler for the /api/analyzeImage endpoint
  * Tries Nutritionix first, falls back to GPT if Nutritionix fails
  * Implements caching with a 1-hour TTL
  */
 export async function POST(request: NextRequest): Promise<NextResponse> {
-  console.log('[analyzeImage] handler start');
   const requestId = crypto.randomUUID();
   const startTime = Date.now();
   
-  // Validate critical API credentials first to fail fast
-  const credentialValidation = validateApiCredentials();
-  if (!credentialValidation.valid) {
-    console.error(`[${requestId}] API credential validation failed: ${credentialValidation.error}`);
-    
-    // Create a clear error response with detailed information
-    const errorResponse: AnalysisResponse = {
-      success: false,
-      fallback: true,
-      requestId,
-      message: `API credential error: ${credentialValidation.error || "Unknown credential error"}`,
-      imageUrl: null,
-      elapsedTime: Date.now() - startTime,
-      result: createUniversalErrorFallback("api_credential_error"),
-      error: credentialValidation.error || "Unknown credential error",
-      diagnostics: {
-        validationErrors: credentialValidation.details,
-        timestamp: new Date().toISOString()
-      }
-    };
-    
-    return NextResponse.json(errorResponse, { status: 500 });
+  // Define interfaces for type checking
+  interface AnalysisResponse {
+    success: boolean;
+    fallback: boolean;
+    requestId: string;
+    message: string;
+    imageUrl: string | null;
+    result: AnalysisResult | null;
+    error: string | null;
+    elapsedTime: number;
+    diagnostics: any | null;
   }
   
-  // Set global timeout for the entire request
-  const GLOBAL_TIMEOUT_MS = 30000; // 30 seconds max for the entire request
-  let globalTimeoutId: NodeJS.Timeout | null = null;
-  
-  // Function to validate essential API credentials
-  function validateApiCredentials(): { valid: boolean; error?: string; details: Record<string, string> } {
-    interface ValidationObject {
-      googleVisionValid: boolean;
-      nutritionixValid: boolean;
-      openaiValid: boolean;
-      details: Record<string, string>;
-    }
+  try {
+    console.log(`[${requestId}] Processing image analysis request`);
     
-    const validation: ValidationObject = {
-      googleVisionValid: true, // Always set to true since we're not using Google Vision
-      nutritionixValid: false,
-      openaiValid: false,
-      details: {}
-    };
-    
-    // Check OpenAI API key - CRITICAL, must be valid
+    // Check critical API credentials
     if (!process.env.OPENAI_API_KEY) {
-      console.error(`OpenAI API key not found in environment variables`);
-      validation.details.openai = "Missing OpenAI API key";
-    } else if (process.env.OPENAI_API_KEY.length < 20) {
-      console.error(`OpenAI API key is too short: ${process.env.OPENAI_API_KEY.length} characters`);
-      validation.details.openai = "OpenAI API key appears invalid (too short)";
-    } else {
-      console.log(`OpenAI API key found - length: ${process.env.OPENAI_API_KEY.length} chars, starting with: ${process.env.OPENAI_API_KEY.substring(0, 7)}...`);
-      validation.openaiValid = true;
+      console.error(`[${requestId}] Missing OpenAI API key`);
+      return createErrorResponse("Missing OpenAI API key", "api_credential_error", requestId, startTime);
     }
     
-    // Check Nutritionix API credentials (kept for backward compatibility but not critical)
-    if (!process.env.NUTRITIONIX_APP_ID || !process.env.NUTRITIONIX_API_KEY) {
-      validation.details.nutritionix = "Missing Nutritionix credentials";
-    } else if (process.env.NUTRITIONIX_APP_ID.length < 5 || process.env.NUTRITIONIX_API_KEY.length < 10) {
-      validation.details.nutritionix = "Nutritionix credentials appear invalid (too short)";
+    // Parse the request
+    let imageBase64 = '';
+    let healthGoal = 'general health';
+    let userId = null;
+    
+    // Handle different content types
+    const contentType = request.headers.get('content-type') || '';
+    
+    if (contentType.includes('multipart/form-data')) {
+      // Process form data
+      const formData = await request.formData();
+      imageBase64 = await extractBase64Image(formData, requestId);
+      healthGoal = formData.get('healthGoal')?.toString() || healthGoal;
+      userId = formData.get('userId')?.toString() || null;
+    } 
+    else if (contentType.includes('application/json')) {
+      // Process JSON data
+      const jsonData = await request.json();
+      
+      if (jsonData.healthGoal) {
+        healthGoal = jsonData.healthGoal;
+      }
+      
+      if (jsonData.userId) {
+        userId = jsonData.userId;
+      }
+      
+      if (jsonData.image || jsonData.base64Image) {
+        imageBase64 = jsonData.image || jsonData.base64Image;
+      } else {
+        throw new Error('No image data provided in JSON');
+      }
     } else {
-      validation.nutritionixValid = true;
+      console.error(`[${requestId}] Unsupported content type: ${contentType}`);
+      throw new Error(`Unsupported content type: ${contentType}`);
     }
     
-    // Nutritionix is no longer required since we're using GPT-4o exclusively
-    validation.googleVisionValid = true;
-    validation.details.googleVision = "Google Vision not required - using GPT-4o exclusively";
-    
-    // Determine overall validity - only OpenAI API key is required
-    const valid = validation.openaiValid;
-    
-    let error: string | undefined;
-    if (!valid) {
-      const missingServices = [];
-      if (!validation.openaiValid) missingServices.push("OpenAI");
-      
-      error = `Missing or invalid OpenAI API key is required for GPT-4o Vision analysis`;
-      console.error(`API validation failed: ${error}`);
-      
-      // Log environment variables status (securely)
-      console.log("Environment variables status:");
-      console.log(`- USE_GPT4_VISION: ${process.env.USE_GPT4_VISION || 'not set'}`);
-      console.log(`- OPENAI_MODEL: ${process.env.OPENAI_MODEL || 'not set'}`);
-      console.log(`- USE_OCR_EXTRACTION: ${process.env.USE_OCR_EXTRACTION || 'not set'}`);
-    } else {
-      console.log(`API validation passed. OpenAI API key is valid.`);
+    // Validate the image
+    if (!imageBase64 || imageBase64.length < 100) {
+      console.error(`[${requestId}] Invalid or missing image data`);
+      throw new Error('Invalid or missing image data');
     }
     
-    return {
-      valid,
-      error,
-      details: validation.details
-    };
-  }
-  
-  // Create timeout promise for the entire request
-  const timeoutPromise = new Promise<NextResponse>((_, reject) => {
-    globalTimeoutId = setTimeout(() => {
-      console.error(`[${requestId}] Request timed out after ${GLOBAL_TIMEOUT_MS}ms`);
+    // Check cache first
+    const cacheKey = createMD5Hash(`${imageBase64.substring(0, 1000)}:${healthGoal}`);
+    const cachedResult = cache.get(cacheKey);
+    
+    if (cachedResult) {
+      console.log(`[${requestId}] Cache hit, returning cached analysis`);
       
-      // Create a consistent timeout response
-      const timeoutResponse: AnalysisResponse = {
-        success: false,
-        fallback: true,
+      const response: AnalysisResponse = {
+        success: true,
+        fallback: false,
         requestId,
-        message: `Analysis timed out after ${GLOBAL_TIMEOUT_MS}ms`,
+        message: "Analysis loaded from cache",
+        result: cachedResult as AnalysisResult,
+        elapsedTime: Date.now() - startTime,
+        error: null,
         imageUrl: null,
-        elapsedTime: GLOBAL_TIMEOUT_MS,
-        result: createUniversalErrorFallback("request_timeout"),
-        error: "Analysis request timed out",
         diagnostics: {
-          timeoutReason: "global_timeout",
-          timeoutMs: GLOBAL_TIMEOUT_MS
+          cached: true,
+          cacheKey
         }
       };
       
-      // Log the final timeout fallback structure
-      console.log(`⏱️ [${requestId}] Final timeout response structure:`, {
-        result_present: Boolean(timeoutResponse.result),
-        result_description: timeoutResponse.result?.description,
-        nutrients_count: timeoutResponse.result?.nutrients?.length || 0,
-        feedback_count: timeoutResponse.result?.feedback?.length || 0
-      });
-
-      reject(NextResponse.json(timeoutResponse, { status: 408 }));
-    }, GLOBAL_TIMEOUT_MS);
-  });
-  
-  // Create the main processing promise
-  const processingPromise = (async (): Promise<NextResponse> => {
+      return NextResponse.json(response);
+    }
+    
+    // Analyze the image with GPT-4 Vision
     try {
-      // Extract image and health goal from request
-      let formData: FormData | null = null;
-      let imageBase64: string = '';
-      let healthGoal: string = 'general health';
-      let userId: string | null = null;
+      console.log(`[${requestId}] Starting GPT-4 Vision analysis`);
       
-      const contentType = request.headers.get('content-type') || '';
-      console.log(`[analyzeImage] Content-Type: ${contentType}`);
+      // Create a timeout for the vision analysis
+      const timeoutMs = 45000; // 45 seconds
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => {
+        console.warn(`[${requestId}] GPT-4 Vision timeout reached (${timeoutMs/1000}s), aborting`);
+        controller.abort();
+      }, timeoutMs);
       
-      // Handle multipart/form-data (from forms)
-      if (contentType.includes('multipart/form-data')) {
-        formData = await request.formData();
-        console.log(`[analyzeImage] Form data keys:`, Array.from(formData.keys()));
+      try {
+        // Run vision analysis
+        const visionResult = await analyzeWithGPT4Vision(imageBase64, healthGoal, requestId);
         
-        // Get health goal
-        const healthGoalRaw = formData.get('healthGoal')?.toString();
-        if (healthGoalRaw) {
-          healthGoal = healthGoalRaw;
-        }
+        // Clear timeout
+        clearTimeout(timeoutId);
         
-        // Get user ID if provided
-        const userIdRaw = formData.get('userId')?.toString();
-        if (userIdRaw) {
-          userId = userIdRaw;
-        }
+        // Convert to standard format
+        const analysisResult = convertVisionResultToAnalysisResult(visionResult, requestId, healthGoal);
         
-        // Extract base64 from image file
-        const imageFile = formData.get('image');
-        if (imageFile instanceof File) {
-          try {
-            imageBase64 = await extractBase64Image(imageFile, requestId);
-            console.log(`[analyzeImage] Extracted base64 image (${imageBase64.length} chars)`);
-          } catch (extractError) {
-            console.error(`[analyzeImage] Failed to extract base64 from image:`, extractError);
-            throw new Error('Failed to process image');
-          }
-        } else {
-          throw new Error('No image file provided');
-        }
-      } 
-      // Handle JSON
-      else if (contentType.includes('application/json')) {
-        const jsonData = await request.json();
-        console.log(`[analyzeImage] JSON data keys:`, Object.keys(jsonData));
+        console.log(`[${requestId}] GPT-4 Vision analysis successful`);
         
-        if (jsonData.healthGoal) {
-          healthGoal = jsonData.healthGoal;
-        }
+        // Cache the result
+        cache.set(cacheKey, analysisResult);
         
-        if (jsonData.userId) {
-          userId = jsonData.userId;
-        }
-        
-        if (jsonData.image || jsonData.base64Image) {
-          imageBase64 = jsonData.image || jsonData.base64Image;
-          console.log(`[analyzeImage] Got base64 image from JSON (${imageBase64.length} chars)`);
-        } else {
-          throw new Error('No image data provided in JSON');
-        }
-      } else {
-        console.error(`[analyzeImage] Unsupported content type: ${contentType}`);
-        throw new Error(`Unsupported content type: ${contentType}`);
-      }
-      
-      // Check if the provided image is valid
-      if (!imageBase64 || imageBase64.length < 100) {
-        console.error(`[analyzeImage] Invalid or missing image data`);
-        throw new Error('Invalid or missing image data');
-      }
-      
-      // Create a unique cache key based on image and health goal
-      const cacheKey = createMD5Hash(`${imageBase64.substring(0, 1000)}:${healthGoal}`);
-      const cachedResult = cache.get(cacheKey);
-      
-      if (cachedResult) {
-        console.log(`[${requestId}] Cache hit, returning cached analysis`);
-        
-        // Ensure cached result is a valid AnalysisResult
-        const validatedResult = ensureValidResponseStructure(cachedResult);
-        
-        // Prepare the response with cached result
+        // Create the successful response
         const elapsedTime = Date.now() - startTime;
-        const cacheResponse: AnalysisResponse = {
+        const response: AnalysisResponse = {
           success: true,
           fallback: false,
           requestId,
-          message: "Analysis loaded from cache",
-          result: validatedResult,
+          message: "Analysis completed successfully with GPT-4o",
+          result: analysisResult,
           elapsedTime,
           error: null,
           imageUrl: null,
           diagnostics: {
-            cached: true,
-            cacheKey
+            visionConfidence: visionResult.confidence,
+            modelUsed: "gpt-4o",
+            processingTimeMs: elapsedTime
           }
         };
         
-        return NextResponse.json(cacheResponse);
+        return NextResponse.json(response);
+      } catch (visionError: any) {
+        // Clear timeout
+        clearTimeout(timeoutId);
+        
+        console.error(`[${requestId}] GPT-4 Vision analysis failed:`, visionError.message);
+        return createErrorResponse(
+          "Image analysis failed. Please upload a clearer image.", 
+          "vision_analysis_error", 
+          requestId, 
+          startTime, 
+          visionError.message
+        );
       }
-      
-      // Check image quality
-      const qualityCheck = assessImageQuality(imageBase64, requestId);
-      if (!qualityCheck.isValid) {
-        console.error(`[${requestId}] Image quality check failed: ${qualityCheck.reason}`);
-        
-        // Return a clear error response for invalid images
-        const qualityErrorResponse: AnalysisResponse = {
-          success: false,
-          fallback: true,
-          requestId,
-          message: qualityCheck.warning || "The image couldn't be analyzed",
-          imageUrl: null,
-          elapsedTime: Date.now() - startTime,
-          result: createUniversalFallbackResult("image_quality", {
-            feedback: [qualityCheck.warning || "The image couldn't be analyzed"],
-            suggestions: ["Try uploading a clearer photo of your food"]
-          }),
-          error: qualityCheck.reason || "Image quality too low",
-          diagnostics: {
-            qualityError: qualityCheck
-          }
-        };
-        
-        return NextResponse.json(qualityErrorResponse);
-      }
-      
-      // Analyze the image with GPT-4 Vision or using OCR-based analysis
-      let analysisResult: AnalysisResult;
-      
-      // Always use GPT-4o Vision regardless of env setting (forced to true)
-      console.log(`[${requestId}] Using GPT-4o for direct image analysis`);
-      
-      try {
-        // Create AbortController for managing timeout
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => {
-          console.warn(`[${requestId}] GPT-4 Vision timeout reached (45s), aborting`);
-          controller.abort();
-        }, 45000);
-        
-        try {
-          // Run vision analysis - sending raw base64 image directly to GPT-4o
-          const visionResult = await analyzeWithGPT4Vision(imageBase64, healthGoal, requestId);
-          
-          // Clear timeout
-          clearTimeout(timeoutId);
-          
-          // Convert to standard format
-          analysisResult = convertVisionResultToAnalysisResult(visionResult, requestId, healthGoal);
-          
-          console.log(`[${requestId}] GPT-4 Vision analysis successful`);
-          
-          // Clear the timeout since we're returning early
-          if (globalTimeoutId) clearTimeout(globalTimeoutId);
-          
-          // Prepare the final response
-          const elapsedTime = Date.now() - startTime;
-          console.log(`[analyzeImage] Completed GPT-4 Vision analysis in ${elapsedTime}ms`);
-          
-          // Cache the result for future requests
-          cache.set(cacheKey, analysisResult);
-          
-          // Create the final response
-          const response: AnalysisResponse = {
-            success: true,
-            fallback: false,
-            requestId,
-            message: "Analysis completed successfully with GPT-4o",
-            result: analysisResult,
-            elapsedTime,
-            error: null,
-            imageUrl: null,
-            diagnostics: {
-              visionConfidence: visionResult.confidence,
-              modelUsed: "gpt-4o",
-              processingTimeMs: elapsedTime
-            }
-          };
-          
-          return NextResponse.json(response);
-        } catch (visionError: any) {
-          // Clear timeout
-          clearTimeout(timeoutId);
-          
-          // Create an error response if GPT-4o analysis fails
-          console.error(`[${requestId}] GPT-4o Vision analysis failed:`, visionError.message);
-          
-          // Return a clear error response without falling back to OCR
-          const errorResponse: AnalysisResponse = {
-            success: false,
-            fallback: true,
-            requestId,
-            message: "Image analysis failed. Please upload a clearer image.",
-            result: createUniversalErrorFallback("vision_analysis_error"),
-            elapsedTime: Date.now() - startTime,
-            error: visionError.message,
-            imageUrl: null,
-            diagnostics: {
-              error: visionError.message,
-              errorType: "gpt4o_vision_error"
-            }
-          };
-          
-          return NextResponse.json(errorResponse);
-        }
-      } catch (visionSetupError: any) {
-        console.error(`[${requestId}] Error setting up GPT-4 Vision analysis:`, visionSetupError.message);
-        
-        // Return a clear error response without falling back to OCR
-        const setupErrorResponse: AnalysisResponse = {
-          success: false,
-          fallback: true,
-          requestId,
-          message: "Failed to set up image analysis. Please try again.",
-          result: createUniversalErrorFallback("vision_setup_error"),
-          elapsedTime: Date.now() - startTime,
-          error: visionSetupError.message,
-          imageUrl: null,
-          diagnostics: {
-            error: visionSetupError.message,
-            errorType: "gpt4o_setup_error"
-          }
-        };
-        
-        return NextResponse.json(setupErrorResponse);
-      }
-    } catch (error: any) {
-      console.error(`[${requestId}] Processing error:`, error);
-      
-      // Create a universal error response
-      const errorResponse: AnalysisResponse = {
-        success: false,
-        fallback: true,
-        requestId,
-        message: error.message || "An error occurred during analysis",
-        result: createUniversalErrorFallback("processing_error"),
-        elapsedTime: Date.now() - startTime,
-        error: error.message,
-        imageUrl: null,
-        diagnostics: {
-          errorType: error.name,
-          errorMessage: error.message,
-          errorStack: error.stack,
-          timestamp: new Date().toISOString()
-        }
-      };
-      
-      return NextResponse.json(errorResponse, { status: 500 });
+    } catch (setupError: any) {
+      console.error(`[${requestId}] Error setting up analysis:`, setupError.message);
+      return createErrorResponse(
+        "Failed to set up image analysis. Please try again.", 
+        "setup_error", 
+        requestId, 
+        startTime, 
+        setupError.message
+      );
     }
-  });
-  
-  // Race the processing against the global timeout
-  try {
-    return await Promise.race([processingPromise(), timeoutPromise]);
-  } catch (raceError: any) {
-    if (globalTimeoutId) clearTimeout(globalTimeoutId);
-    
-    // If the error came from our timeout promise, it's already a NextResponse
-    if (raceError instanceof NextResponse) {
-      return raceError;
-    }
-    
-    // Otherwise create an error response
-    console.error(`[${requestId}] Racing error:`, raceError);
-    
-    const raceErrorResponse: AnalysisResponse = {
-      success: false,
-      fallback: true,
-      requestId,
-      message: raceError.message || "An error occurred during analysis",
-      result: createUniversalErrorFallback("race_condition_error"),
-      elapsedTime: Date.now() - startTime,
-      error: raceError.message,
-      imageUrl: null,
-      diagnostics: {
-        errorType: raceError.name,
-        errorMessage: raceError.message,
-        errorStack: raceError.stack,
-        timestamp: new Date().toISOString()
-      }
-    };
-    
-    return NextResponse.json(raceErrorResponse, { status: 500 });
+  } catch (error: any) {
+    console.error(`[${requestId}] Processing error:`, error);
+    return createErrorResponse(
+      error.message || "An error occurred during analysis", 
+      "processing_error", 
+      requestId, 
+      startTime, 
+      error.message
+    );
   }
+}
+
+/**
+ * Create a standard error response
+ */
+function createErrorResponse(
+  message: string, 
+  reason: string, 
+  requestId: string, 
+  startTime: number, 
+  errorDetails?: string
+): NextResponse {
+  const errorResponse = {
+    success: false,
+    fallback: true,
+    requestId,
+    message,
+    result: createUniversalErrorFallback(reason),
+    elapsedTime: Date.now() - startTime,
+    error: errorDetails || message,
+    imageUrl: null,
+    diagnostics: {
+      error: errorDetails,
+      errorType: reason
+    }
+  };
+  
+  return NextResponse.json(errorResponse);
 }
 
 // Helper function to format goal name
