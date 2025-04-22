@@ -696,6 +696,23 @@ export async function runFoodDetection(
   foodDetected: boolean;
   knownFoodWords: string[];
 }> {
+  // Short-circuit when using GPT-4 Vision to skip label detection and OCR completely
+  if (process.env.USE_GPT4_VISION === 'true') {
+    console.log(`🔍 [${requestId}] Food detection skipped - using GPT-4o Vision exclusively`);
+    return {
+      success: false,
+      text: "GPT-4o Vision mode enabled - food detection skipped",
+      confidence: 0,
+      foodLabels: [],
+      topFoodLabel: null,
+      detectionMethod: 'fallback',
+      processingTimeMs: 0,
+      error: "Food detection disabled when USE_GPT4_VISION=true",
+      foodDetected: false,
+      knownFoodWords: []
+    };
+  }
+
   const startTime = Date.now();
   console.log(`🔎 [${requestId}] Starting food detection...`);
   

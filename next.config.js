@@ -18,8 +18,8 @@ const nextConfig = {
   // Runtime environment variables for the client
   env: {
     // Nutritionix API credentials - public since they're used on the client
-    NEXT_PUBLIC_NUTRITIONIX_APP_ID: process.env.NEXT_PUBLIC_NUTRITIONIX_APP_ID,
-    NEXT_PUBLIC_NUTRITIONIX_API_KEY: process.env.NEXT_PUBLIC_NUTRITIONIX_API_KEY,
+    NEXT_PUBLIC_NUTRITIONIX_APP_ID: process.env.NUTRITIONIX_APP_ID || '',
+    NEXT_PUBLIC_NUTRITIONIX_API_KEY: process.env.NUTRITIONIX_API_KEY || '',
     // Firebase public config
     NEXT_PUBLIC_FIREBASE_API_KEY: process.env.NEXT_PUBLIC_FIREBASE_API_KEY,
     NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN: process.env.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN,
@@ -31,7 +31,7 @@ const nextConfig = {
     // Flag to easily enable/disable features in different environments
     NEXT_PUBLIC_ENVIRONMENT: process.env.NODE_ENV,
     // Vercel deployment indicator
-    VERCEL: process.env.VERCEL
+    VERCEL: process.env.VERCEL || '1'
   },
   // Configure webpack to handle Tesseract.js worker scripts correctly
   webpack: (config, { isServer, dev }) => {
