@@ -4,12 +4,8 @@ import { nanoid } from 'nanoid';
 
 export const runtime = 'nodejs';
 
-// Mark this as a public route
-export const config = {
-  api: {
-    bodyParser: false,
-  },
-};
+// New format for route segment config in App Router
+export const dynamic = 'force-dynamic';
 
 export async function GET(req: NextRequest) {
   const requestId = nanoid();

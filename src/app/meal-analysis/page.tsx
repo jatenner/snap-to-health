@@ -303,6 +303,30 @@ const FallbackWarningBanner = ({ fallback }: { fallback?: boolean }) => {
   );
 };
 
+// Utility function to process feedback/suggestions of different formats
+const processFeedback = (input: any): string[] => {
+  if (Array.isArray(input)) {
+    return input.length > 0 ? input.filter(Boolean) : ["No information available."];
+  }
+  
+  if (typeof input === 'string' && input.trim()) {
+    return [input];
+  }
+  
+  return ["No information available."];
+};
+
+// Helper function to format nutrient values for display
+const formatNutrientValue = (value: string | number, isFallback: boolean = false): string => {
+  if (typeof value === 'string') {
+    return value;
+  } else if (typeof value === 'number') {
+    return value.toString();
+  } else {
+    return 'N/A';
+  }
+};
+
 export default function MealAnalysisPage() {
   const [analysisResult, setAnalysisResult] = useState<AnalysisResult | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
@@ -795,7 +819,7 @@ export default function MealAnalysisPage() {
             )}
 
             {/* Expert Suggestions Section */}
-            {Array.isArray(suggestions) && suggestions.length > 0 && (
+            {suggestions && (
               <div className="mb-6">
                 <h2 className="font-bold text-navy text-lg mb-3 flex items-center">
                   <span className="text-indigo mr-2">💡</span>
@@ -803,10 +827,30 @@ export default function MealAnalysisPage() {
                 </h2>
                 <div className="bg-indigo/5 border border-indigo/20 rounded-xl p-4">
                   <ul className="space-y-2.5">
-                    {suggestions.map((suggestion, index) => (
+                    {processFeedback(suggestions).map((suggestion, index) => (
                       <li key={index} className="flex">
                         <span className="text-indigo mr-2.5 mt-0.5 shrink-0">{index + 1}.</span>
                         <span className="text-slate">{suggestion}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              </div>
+            )}
+
+            {/* Feedback section */}
+            {feedback && (
+              <div className="mb-6">
+                <h2 className="font-bold text-navy text-lg mb-3 flex items-center">
+                  <span className="text-indigo mr-2">📝</span>
+                  Feedback
+                </h2>
+                <div className="bg-indigo/5 border border-indigo/20 rounded-xl p-4">
+                  <ul className="space-y-2.5">
+                    {processFeedback(feedback).map((item, index) => (
+                      <li key={index} className="flex">
+                        <span className="text-indigo mr-2.5 mt-0.5">•</span>
+                        <span className="text-slate">{item}</span>
                       </li>
                     ))}
                   </ul>
@@ -832,7 +876,10 @@ export default function MealAnalysisPage() {
                         className="bg-gray-50 rounded-lg p-3 transition-all hover:shadow-sm"
                       >
                         <p className="text-xs font-medium text-slate uppercase">{nutrient?.name || 'Nutrient'}</p>
-                        <p className="text-lg font-bold text-navy">{nutrient?.value || 0}<span className="text-xs ml-1">{nutrient?.unit || 'g'}</span></p>
+                        <p className="text-md font-bold text-navy">
+                          {formatNutrientValue(nutrient?.value || 0, fallback)}
+                          <span className="text-xs ml-1">{nutrient?.unit || 'g'}</span>
+                        </p>
                       </div>
                     ))}
                   </div>
@@ -862,7 +909,10 @@ export default function MealAnalysisPage() {
                         className="bg-green-50 rounded-lg p-3 border border-green-100"
                       >
                         <p className="text-xs font-medium text-slate uppercase">{nutrient?.name || 'Nutrient'}</p>
-                        <p className="text-md font-bold text-navy">{nutrient?.value || 0}<span className="text-xs ml-1">{nutrient?.unit || 'g'}</span></p>
+                        <p className="text-md font-bold text-navy">
+                          {formatNutrientValue(nutrient?.value || 0, fallback)}
+                          <span className="text-xs ml-1">{nutrient?.unit || 'g'}</span>
+                        </p>
                       </div>
                     ))}
                   </div>
@@ -890,7 +940,10 @@ export default function MealAnalysisPage() {
                             <p className="text-xs font-medium text-slate uppercase">{nutrient?.name || 'Nutrient'}</p>
                             {isNegative && <span className="w-2 h-2 rounded-full bg-amber-500"></span>}
                           </div>
-                          <p className="text-md font-bold text-navy">{nutrient?.value || 0}<span className="text-xs ml-1">{nutrient?.unit || 'g'}</span></p>
+                          <p className="text-md font-bold text-navy">
+                            {formatNutrientValue(nutrient?.value || 0, fallback)}
+                            <span className="text-xs ml-1">{nutrient?.unit || 'g'}</span>
+                          </p>
                         </div>
                       );
                     })}

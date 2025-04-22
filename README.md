@@ -72,13 +72,23 @@ These improvements help users understand not just what's in their meal, but how 
 
 ### Environment Setup
 
-Create a `.env.local` file in the root directory with the following variables:
+We've created a comprehensive environment setup guide with automated scripts to help you configure all the necessary environment variables.
+
+Please refer to [SETUP.md](SETUP.md) for detailed instructions on how to:
+
+1. Set up base environment variables
+2. Configure Firebase Admin credentials
+3. Set up your OpenAI API key
+4. Verify your configuration
+5. Create backups of your environment
+
+For quick reference, here are the key environment variables needed:
 
 ```
 # OpenAI API key for GPT-4 Vision
 OPENAI_API_KEY=your_openai_api_key_here
 
-# Nutritionix API credentials
+# Nutritionix API credentials (optional)
 NUTRITIONIX_APP_ID=your_nutritionix_app_id
 NUTRITIONIX_API_KEY=your_nutritionix_api_key_here
 
@@ -93,23 +103,10 @@ NEXT_PUBLIC_FIREBASE_MEASUREMENT_ID=your_measurement_id
 
 # Firebase Admin Configuration 
 FIREBASE_CLIENT_EMAIL=firebase-adminsdk-xxxx@your-project-id.iam.gserviceaccount.com
-FIREBASE_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----\nYour...\n-----END PRIVATE KEY-----\n"
-
-### Firebase Private Key
-
-For Firebase Admin SDK to work correctly, the private key must be properly formatted with actual newlines. To ensure consistent behavior across different environments (local development, Vercel, etc.), we now use base64 encoding for the private key.
-
-**Steps to set up your Firebase private key:**
-
-1. Obtain your Firebase service account key from the Firebase console
-2. Use the provided script to encode it: `node src/scripts/encodePrivateKey.js --paste`
-3. Add the base64 encoded key to your `.env.local` file:
-   ```
-   FIREBASE_PRIVATE_KEY_BASE64=your_base64_encoded_key
-   ```
-
-This approach prevents issues with newline handling across different platforms and deployment environments.
+FIREBASE_PRIVATE_KEY_BASE64=your_base64_encoded_private_key
 ```
+
+The helper scripts will guide you through setting up these variables and ensuring they're in the correct format.
 
 ### Firebase Security Rules
 
