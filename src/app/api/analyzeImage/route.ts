@@ -848,9 +848,12 @@ async function analyzeWithGPT4Vision(base64Image: string, healthGoal: string, re
   const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
   
   if (!OPENAI_API_KEY) {
+    console.error(`[${requestId}] OpenAI API key not found in environment variables`);
     console.timeEnd(`⏱️ [${requestId}] analyzeWithGPT4Vision`);
     throw new Error('OpenAI API key is not configured');
   }
+
+  console.log(`[${requestId}] OpenAI API key found - length: ${OPENAI_API_KEY.length} chars, starting with: ${OPENAI_API_KEY.substring(0, 7)}...`);
 
   // Try with primary prompt first, then fallback to simpler prompt if needed
   let attempt = 1;
@@ -871,22 +874,8 @@ async function analyzeWithGPT4Vision(base64Image: string, healthGoal: string, re
 
       console.log(`[${requestId}] Sending request to OpenAI API...`);
       
-      // Get goal-specific prompt
-      const goalPrompt = getGoalSpecificPrompt(healthGoal);
-      
       // Updated system prompt focused on accurate food description
-      const primarySystemPrompt = `You are a nutrition-focused food vision expert. 
-Your task is to accurately describe the meal or food in this image, based solely on what is visually present.
-Be clear, specific, and avoid hallucination. Return only what's visually present in the image.
-
-Please identify:
-- All visible food items with your confidence level for each
-- Food categories (protein, carb, vegetable, etc.)
-- Approximate portion sizes
-- Visible cooking methods (grilled, fried, steamed, etc.)
-- Any identifiable seasonings, sauces, or toppings
-
-${goalPrompt}`;
+      const primarySystemPrompt = `This is an image of a meal. Please identify the food(s) in the image with specificity. Return a short description, the main ingredients, and an estimate of calories, protein, carbs, and fat. Be as accurate and visual-specific as possible.`;
 
       // Improved fallback prompt for retry attempts
       const fallbackSystemPrompt = attempt === 1 ? primarySystemPrompt 
@@ -909,6 +898,8 @@ IMPORTANT: Even if the image is blurry or poorly lit, provide your best assessme
         'Authorization': `Bearer ${OPENAI_API_KEY}`,
         'OpenAI-Beta': 'assistants=v1'  // Use latest API features
       };
+      
+      console.log(`[${requestId}] Authorization header set with Bearer token`);
       
       // Generate request payload with the appropriate system prompt based on attempt
       const requestPayload = {
@@ -994,6 +985,7 @@ Do not return any explanation or text outside the JSON block. Your entire respon
       
       try {
         // Use native fetch with the AbortController signal for timeout management
+        console.log(`[${requestId}] Sending fetch request to OpenAI API with ${requestPayload.model} model`);
         const response = await fetch('https://api.openai.com/v1/chat/completions', {
           method: 'POST',
           headers,
@@ -1005,7 +997,7 @@ Do not return any explanation or text outside the JSON block. Your entire respon
         clearTimeout(timeoutId);
         
         const endTime = Date.now();
-        console.log(`[${requestId}] OpenAI API request completed in ${(endTime - startTime) / 1000}s`);
+        console.log(`[${requestId}] OpenAI API request completed in ${(endTime - startTime) / 1000}s with status: ${response.status}`);
         
         if (!response.ok) {
           const errorText = await response.text();
@@ -1315,15 +1307,25 @@ function convertVisionResultToAnalysisResult(
     goalName: formatGoalName(healthGoal),
     modelInfo: {
       model: "gpt-4o",
-      usedFallback: false,
-      ocrExtracted: false // Not using OCR - direct vision analysis
+      usedFallback: false, // Never using fallback when in GPT-4o Vision mode
+      ocrExtracted: false, // Direct vision analysis, no OCR
+      usedLabelDetection: false // Not using label detection in GPT-4o Vision mode
     },
-    source: 'gpt-4o', // Explicitly mark this as coming from GPT-4o
+    // Don't include fallback-related fields
+    source: 'gpt-4o', // Explicitly mark as coming from GPT-4o
+    lowConfidence: false, // Don't flag as low confidence even if score is low
     _meta: {
       debugTrace: `Analyzed directly with GPT-4o model${visionResult.imageChallenges ? '. Image challenges: ' + visionResult.imageChallenges.join(', ') : ''}`,
-      ocrConfidence: visionResult.confidence // Storing confidence here for compatibility
     }
   };
+  
+  // Ensure confidence is stored but nothing related to OCR/label detection
+  if (visionResult.confidence) {
+    result._meta = {
+      ...result._meta,
+      ocrConfidence: visionResult.confidence
+    };
+  }
   
   return result;
 }
@@ -1619,7 +1621,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
           }, 45000);
           
           try {
-            // Run vision analysis
+            // Run vision analysis - sending raw base64 image directly to GPT-4o
             const visionResult = await analyzeWithGPT4Vision(imageBase64, healthGoal, requestId);
             
             // Clear timeout
@@ -1665,7 +1667,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
             // Create an error response if GPT-4o analysis fails
             console.error(`[${requestId}] GPT-4o Vision analysis failed:`, visionError.message);
             
-            // Return a clear error response
+            // Return a clear error response without falling back to OCR
             const errorResponse: AnalysisResponse = {
               success: false,
               fallback: true,
@@ -1686,7 +1688,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
         } catch (visionSetupError: any) {
           console.error(`[${requestId}] Error setting up GPT-4 Vision analysis:`, visionSetupError.message);
           
-          // Return a clear error response
+          // Return a clear error response without falling back to OCR
           const setupErrorResponse: AnalysisResponse = {
             success: false,
             fallback: true,
