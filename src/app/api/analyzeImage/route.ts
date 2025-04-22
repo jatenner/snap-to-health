@@ -1,7 +1,7 @@
-import { NextResponse } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 import { v4 as uuidv4 } from 'uuid';
-import { extractBase64Image } from '@/lib/imageProcessing';
 import { analyzeWithGPT4Vision, convertVisionResultToAnalysisResult } from '@/lib/gptVision';
+import { extractBase64Image } from '@/lib/imageProcessing';
 
 // Use Node.js runtime since we depend on Node.js specific modules
 export const runtime = 'nodejs';
@@ -10,7 +10,7 @@ export const runtime = 'nodejs';
  * POST handler for the /api/analyzeImage endpoint
  * Processes an image and returns a nutritional analysis using GPT-4o vision
  */
-export async function POST(req: Request) {
+export async function POST(req: NextRequest): Promise<NextResponse> {
   const requestId = uuidv4();
   const startTime = Date.now();
   
@@ -31,7 +31,6 @@ export async function POST(req: Request) {
     // Parse the request
     let imageBase64 = '';
     let healthGoal = 'general health';
-    let userId = null;
     
     // Handle different content types
     const contentType = req.headers.get('content-type') || '';
@@ -41,14 +40,12 @@ export async function POST(req: Request) {
       const formData = await req.formData();
       imageBase64 = await extractBase64Image(formData, requestId);
       healthGoal = formData.get('healthGoal')?.toString() || healthGoal;
-      userId = formData.get('userId')?.toString() || null;
     } 
     else if (contentType.includes('application/json')) {
       // Process JSON data
       const jsonData = await req.json();
       imageBase64 = jsonData.image || jsonData.base64Image;
       healthGoal = jsonData.healthGoal || healthGoal;
-      userId = jsonData.userId || null;
       
       if (!imageBase64) {
         throw new Error('No image data provided in JSON');
