@@ -1,23 +1,15 @@
 import { NextRequest, NextResponse } from 'next/server';
 import NodeCache from 'node-cache'
 import { OpenAI } from 'openai'
-import axios from 'axios';
 import crypto from 'crypto';
 import { adminStorage } from '@/lib/firebaseAdmin';
 import { trySaveMealServer } from '@/lib/serverMealUtils';
 import { uploadImageToFirebase } from '@/lib/firebaseStorage';
 import { extractBase64Image } from '@/lib/imageProcessing';
-import { getNutritionData, createNutrientAnalysis, NutritionData, NutritionixFood } from '@/lib/nutritionixApi';
-import { callGptNutritionFallback } from '@/lib/gptNutrition';
-import { createEmptyFallbackAnalysis } from '@/lib/analyzeImageWithOCR';
-import { runOCR, OCRResult, runFoodDetection, detectFoodLabels } from '@/lib/runOCR';
-import { analyzeMealTextOnly, MealAnalysisResult } from '@/lib/analyzeMealTextOnly';
 import { API_CONFIG } from '@/lib/constants';
-import { createAnalysisDiagnostics, checkOCRConfig, checkNutritionixCredentials } from '@/lib/diagnostics';
 import { GPT_MODEL } from '@/lib/constants';
 import { saveMealToFirestore } from '@/lib/mealUtils';
 import { isValidAnalysis, normalizeAnalysisResult } from '@/lib/utils/analysisValidator';
-import { containsFoodRelatedTerms, isNutritionLabel } from '@/lib/utils/foodDetection';
 
 const cache = new NodeCache({ stdTTL: 60 * 60 })  // 1 hour
 const oai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
@@ -309,18 +301,6 @@ interface AnalysisResult {
   no_result?: boolean;
 }
 
-interface ExtendedNutritionData extends NutritionData {
-  source: string;
-  noFoodDetected?: boolean;
-  _meta?: {
-    ocrText?: string;
-    foodTerms?: string[];
-    isNutritionLabel?: boolean;
-    foodConfidence?: number;
-    debugTrace?: string;
-  };
-}
-
 interface NutrientAnalysisResult {
   success: boolean;
   feedback: string[];
@@ -357,292 +337,6 @@ function createFallbackResponse(
 // Function to create an MD5 hash
 function createMD5Hash(data: string): string {
   return crypto.createHash('md5').update(data).digest('hex');
-}
-
-/**
- * Validates nutrition data to ensure it has all required fields
- * @param data The nutrition data to validate
- * @param requestId Request identifier for logging
- * @returns Validated nutrition data with all required fields
- */
-function validateNutritionData(data: any, requestId: string): ExtendedNutritionData {
-  console.log(`[${requestId}] Validating nutrition data`);
-  
-  if (!data || typeof data !== 'object') {
-    console.error(`[${requestId}] Invalid nutrition data: data is not an object`);
-    return createFallbackNutritionData(requestId);
-  }
-  
-  const validated: ExtendedNutritionData = {
-    nutrients: [],
-    foods: [],
-    raw: {},
-    source: data.source || 'fallback'
-  };
-  
-  // Validate nutrients
-  if (!Array.isArray(data.nutrients) || data.nutrients.length === 0) {
-    console.warn(`[${requestId}] Missing or invalid nutrients array, creating default nutrients`);
-    validated.nutrients = [
-      { name: 'Calories', value: 0, unit: 'kcal', isHighlight: true },
-      { name: 'Protein', value: 0, unit: 'g', isHighlight: true },
-      { name: 'Carbohydrates', value: 0, unit: 'g', isHighlight: true },
-      { name: 'Fat', value: 0, unit: 'g', isHighlight: true }
-    ];
-  } else {
-    // Copy existing nutrients but ensure they have all required properties
-    validated.nutrients = data.nutrients.map((nutrient: any, index: number) => {
-      if (!nutrient || typeof nutrient !== 'object') {
-        console.warn(`[${requestId}] Invalid nutrient at index ${index}, creating default nutrient`);
-        return { name: 'Calories', value: 0, unit: 'kcal', isHighlight: true };
-      }
-      
-      return {
-        name: nutrient.name || `Nutrient ${index + 1}`,
-        value: nutrient.value !== undefined ? nutrient.value : 0,
-        unit: nutrient.unit || 'g',
-        isHighlight: nutrient.isHighlight !== undefined ? nutrient.isHighlight : false,
-        percentOfDailyValue: nutrient.percentOfDailyValue,
-        amount: nutrient.amount
-      };
-    });
-  }
-  
-  // Validate foods
-  if (!Array.isArray(data.foods) || data.foods.length === 0) {
-    console.warn(`[${requestId}] Missing or invalid foods array, creating default food`);
-    validated.foods = [{
-      food_name: "Unknown food",
-      serving_qty: 1,
-      serving_unit: "serving",
-      serving_weight_grams: 100,
-      nf_calories: 0,
-      nf_total_fat: 0,
-      nf_saturated_fat: 0,
-      nf_cholesterol: 0,
-      nf_sodium: 0,
-      nf_total_carbohydrate: 0,
-      nf_dietary_fiber: 0,
-      nf_sugars: 0,
-      nf_protein: 0,
-      nf_potassium: 0,
-      nf_p: 0,
-      full_nutrients: [],
-      photo: {
-        thumb: '',
-        highres: '',
-        is_user_uploaded: false
-      }
-    }];
-  } else {
-    validated.foods = data.foods;
-  }
-  
-  // Validate raw data
-  if (!data.raw || typeof data.raw !== 'object') {
-    console.warn(`[${requestId}] Missing or invalid raw data, creating default raw data`);
-    validated.raw = {
-      description: "Could not analyze this meal properly.",
-      feedback: ["Unable to analyze the image."],
-      suggestions: ["Try a clearer photo with more lighting."],
-      goalScore: {
-        overall: 0,
-        specific: {}
-      }
-    };
-  } else {
-    validated.raw = { ...data.raw };
-    
-    // Ensure raw.description exists
-    if (!validated.raw.description || typeof validated.raw.description !== 'string') {
-      console.warn(`[${requestId}] Missing or invalid description in raw data, setting default`);
-      validated.raw.description = "Could not analyze this meal properly.";
-    }
-    
-    // Ensure raw.feedback exists as an array
-    if (!Array.isArray(validated.raw.feedback)) {
-      console.warn(`[${requestId}] Missing or invalid feedback in raw data, setting default`);
-      validated.raw.feedback = ["Unable to analyze the image."];
-    }
-    
-    // Ensure raw.suggestions exists as an array
-    if (!Array.isArray(validated.raw.suggestions)) {
-      console.warn(`[${requestId}] Missing or invalid suggestions in raw data, setting default`);
-      validated.raw.suggestions = ["Try a clearer photo with more lighting."];
-    }
-    
-    // Ensure raw.goalScore exists
-    if (!validated.raw.goalScore || typeof validated.raw.goalScore !== 'object') {
-      console.warn(`[${requestId}] Missing or invalid goalScore in raw data, setting default`);
-      validated.raw.goalScore = {
-        overall: 0,
-        specific: {}
-      };
-    }
-  }
-  
-  console.log(`[${requestId}] Nutrition data validation complete`);
-  return validated;
-}
-
-/**
- * Creates a fallback nutrition data structure with valid defaults
- * @param requestId Request identifier for logging
- * @returns A valid fallback nutrition data object
- */
-function createFallbackNutritionData(requestId: string): ExtendedNutritionData {
-  console.log(`[${requestId}] Creating fallback nutrition data`);
-  
-  return {
-    nutrients: [
-      { name: 'Calories', value: 0, unit: 'kcal', isHighlight: true },
-      { name: 'Protein', value: 0, unit: 'g', isHighlight: true },
-      { name: 'Carbohydrates', value: 0, unit: 'g', isHighlight: true },
-      { name: 'Fat', value: 0, unit: 'g', isHighlight: true }
-    ],
-    foods: [{
-      food_name: "Unknown food",
-      serving_qty: 1,
-      serving_unit: "serving",
-      serving_weight_grams: 100,
-      nf_calories: 0,
-      nf_total_fat: 0,
-      nf_saturated_fat: 0,
-      nf_cholesterol: 0,
-      nf_sodium: 0,
-      nf_total_carbohydrate: 0,
-      nf_dietary_fiber: 0,
-      nf_sugars: 0,
-      nf_protein: 0,
-      nf_potassium: 0,
-      nf_p: 0,
-      full_nutrients: [],
-      photo: {
-        thumb: '',
-        highres: '',
-        is_user_uploaded: false
-      }
-    }],
-    raw: {
-      description: "Could not analyze this meal properly.",
-      feedback: ["Unable to analyze the image."],
-      suggestions: ["Try a clearer photo with more lighting."],
-      goalScore: {
-        overall: 0,
-        specific: {}
-      }
-    },
-    source: 'fallback'
-  };
-}
-
-/**
- * Fetch nutrition data from Nutritionix API with GPT fallback
- * Enhanced with food text validation to prevent hallucinated results
- */
-async function fetchNutrition(
-  text: string,
-  requestId: string
-): Promise<ExtendedNutritionData & { noFoodDetected?: boolean }> {
-  console.log(`[${requestId}] fetchNutrition: Starting. Text: ${text.substring(0, 50)}...`);
-  
-  try {
-    // First, check if the text contains enough food-related terms
-    const foodTermCheck = containsFoodRelatedTerms(text);
-    const isNutritionLabelText = isNutritionLabel(text);
-    
-    // Log food term detection results
-    console.log(`[${requestId}] Food term detection: isValid=${foodTermCheck.isValid}, terms=${foodTermCheck.foodTermCount}, confidence=${foodTermCheck.confidence.toFixed(2)}`);
-    console.log(`[${requestId}] Is nutrition label: ${isNutritionLabelText}`);
-    
-    // If it's a nutrition label or contains enough food terms, continue with processing
-    if (foodTermCheck.isValid || isNutritionLabelText) {
-      console.log(`[${requestId}] fetchNutrition: Trying Nutritionix API`);
-      
-      // Try Nutritionix API first
-      const nutritionixData = await getNutritionData(text, requestId);
-      
-      if (nutritionixData.success && nutritionixData.data) {
-        // Add meta debug info to track OCR text and food terms
-        const enhancedData: ExtendedNutritionData = {
-          ...nutritionixData.data,
-          source: 'nutritionix',
-          _meta: {
-            ocrText: text,
-            foodTerms: foodTermCheck.foodTerms,
-            isNutritionLabel: isNutritionLabelText,
-            foodConfidence: foodTermCheck.confidence,
-            debugTrace: 'Used Nutritionix API successfully'
-          }
-        };
-        
-        return enhancedData;
-      } else {
-        console.warn(`[${requestId}] fetchNutrition: Nutritionix failed: ${nutritionixData.error}. Using GPT fallback`);
-        
-        // If Nutritionix fails, fall back to GPT only if we have valid food terms
-        const gptFallback = await callGptNutritionFallback(text, requestId);
-        
-        // Add meta debug info
-        const enhancedGptData = {
-          ...gptFallback,
-          _meta: {
-            ocrText: text,
-            foodTerms: foodTermCheck.foodTerms,
-            isNutritionLabel: isNutritionLabelText,
-            foodConfidence: foodTermCheck.confidence,
-            debugTrace: 'Used GPT fallback after Nutritionix failure'
-          }
-        };
-        
-        // Validate GPT fallback data
-        return validateNutritionData(enhancedGptData, requestId);
-      }
-    } else {
-      // Not enough food-related terms detected, avoid hallucination
-      console.warn(`[${requestId}] fetchNutrition: Text doesn't contain enough food terms. Skipping analysis.`);
-      
-      // Return a "no food detected" response instead of hallucinated results
-      return {
-        nutrients: [
-          { name: 'Calories', value: 0, unit: 'kcal', isHighlight: true },
-          { name: 'Protein', value: 0, unit: 'g', isHighlight: true },
-          { name: 'Carbohydrates', value: 0, unit: 'g', isHighlight: true },
-          { name: 'Fat', value: 0, unit: 'g', isHighlight: true }
-        ],
-        foods: [],
-        raw: {
-          description: "No food detected in this image",
-          feedback: ["We couldn't detect any food-related text in this image."],
-          suggestions: ["Try uploading a photo that clearly shows food or contains food-related text."],
-          goalScore: { overall: 0, specific: {} }
-        },
-        source: "no_food_detected",
-        noFoodDetected: true,
-        _meta: {
-          ocrText: text,
-          foodTerms: foodTermCheck.foodTerms, 
-          isNutritionLabel: isNutritionLabelText,
-          foodConfidence: foodTermCheck.confidence,
-          debugTrace: 'No valid food terms detected in OCR text'
-        }
-      };
-    }
-  } catch (error: any) {
-    console.error(`[${requestId}] fetchNutrition: Both sources failed: ${error.message}`);
-    
-    // Return validated fallback nutrition data
-    const fallbackData = createFallbackNutritionData(requestId);
-    
-    // Add meta debug info
-    return {
-      ...fallbackData,
-      _meta: {
-        ocrText: text,
-        debugTrace: `Error in fetchNutrition: ${error.message}`
-      }
-    };
-  }
 }
 
 /**
@@ -870,7 +564,7 @@ async function analyzeWithGPT4Vision(base64Image: string, healthGoal: string, re
       const timeoutId = setTimeout(() => {
         controller.abort();
         console.error(`[${requestId}] OpenAI request aborted due to timeout (45s)`);
-      }, 45000); // 45 second timeout (to stay within Vercel's limits)
+      }, 45000);
 
       console.log(`[${requestId}] Sending request to OpenAI API...`);
       
@@ -1307,25 +1001,14 @@ function convertVisionResultToAnalysisResult(
     goalName: formatGoalName(healthGoal),
     modelInfo: {
       model: "gpt-4o",
-      usedFallback: false, // Never using fallback when in GPT-4o Vision mode
-      ocrExtracted: false, // Direct vision analysis, no OCR
-      usedLabelDetection: false // Not using label detection in GPT-4o Vision mode
+      usedFallback: false,
+      ocrExtracted: false
     },
-    // Don't include fallback-related fields
-    source: 'gpt-4o', // Explicitly mark as coming from GPT-4o
-    lowConfidence: false, // Don't flag as low confidence even if score is low
+    source: 'gpt-4o',
     _meta: {
-      debugTrace: `Analyzed directly with GPT-4o model${visionResult.imageChallenges ? '. Image challenges: ' + visionResult.imageChallenges.join(', ') : ''}`,
+      debugTrace: `Analyzed directly with GPT-4o Vision${visionResult.imageChallenges ? '. Image challenges: ' + visionResult.imageChallenges.join(', ') : ''}`
     }
   };
-  
-  // Ensure confidence is stored but nothing related to OCR/label detection
-  if (visionResult.confidence) {
-    result._meta = {
-      ...result._meta,
-      ocrConfidence: visionResult.confidence
-    };
-  }
   
   return result;
 }
@@ -1378,22 +1061,25 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     }
     
     const validation: ValidationObject = {
-      googleVisionValid: false,
+      googleVisionValid: true, // Always set to true since we're not using Google Vision
       nutritionixValid: false,
       openaiValid: false,
       details: {}
     };
     
-    // Check OpenAI API key
+    // Check OpenAI API key - CRITICAL, must be valid
     if (!process.env.OPENAI_API_KEY) {
+      console.error(`OpenAI API key not found in environment variables`);
       validation.details.openai = "Missing OpenAI API key";
     } else if (process.env.OPENAI_API_KEY.length < 20) {
+      console.error(`OpenAI API key is too short: ${process.env.OPENAI_API_KEY.length} characters`);
       validation.details.openai = "OpenAI API key appears invalid (too short)";
     } else {
+      console.log(`OpenAI API key found - length: ${process.env.OPENAI_API_KEY.length} chars, starting with: ${process.env.OPENAI_API_KEY.substring(0, 7)}...`);
       validation.openaiValid = true;
     }
     
-    // Check Nutritionix API credentials
+    // Check Nutritionix API credentials (kept for backward compatibility but not critical)
     if (!process.env.NUTRITIONIX_APP_ID || !process.env.NUTRITIONIX_API_KEY) {
       validation.details.nutritionix = "Missing Nutritionix credentials";
     } else if (process.env.NUTRITIONIX_APP_ID.length < 5 || process.env.NUTRITIONIX_API_KEY.length < 10) {
@@ -1402,36 +1088,28 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       validation.nutritionixValid = true;
     }
     
-    // Check Google Vision API credentials
-    const useOcr = process.env.USE_OCR_EXTRACTION === 'true';
-    if (useOcr) {
-      const hasBase64Creds = !!process.env.GOOGLE_VISION_PRIVATE_KEY_BASE64 && 
-                         process.env.GOOGLE_VISION_PRIVATE_KEY_BASE64.length > 100;
-      const hasFileCreds = !!process.env.GOOGLE_APPLICATION_CREDENTIALS;
-      
-      if (!hasBase64Creds && !hasFileCreds) {
-        validation.details.googleVision = "Missing Google Vision API credentials";
-      } else {
-        validation.googleVisionValid = true;
-      }
-    } else {
-      // OCR is disabled, so Vision credentials aren't critical
-      validation.googleVisionValid = true;
-      validation.details.googleVision = "OCR extraction disabled, skipping validation";
-    }
+    // Nutritionix is no longer required since we're using GPT-4o exclusively
+    validation.googleVisionValid = true;
+    validation.details.googleVision = "Google Vision not required - using GPT-4o exclusively";
     
-    // Determine overall validity and error message
-    const valid = validation.nutritionixValid && 
-                (validation.openaiValid || validation.googleVisionValid);
+    // Determine overall validity - only OpenAI API key is required
+    const valid = validation.openaiValid;
     
     let error: string | undefined;
     if (!valid) {
       const missingServices = [];
-      if (!validation.nutritionixValid) missingServices.push("Nutritionix");
       if (!validation.openaiValid) missingServices.push("OpenAI");
-      if (!validation.googleVisionValid) missingServices.push("Google Vision");
       
-      error = `Missing or invalid API credentials for: ${missingServices.join(", ")}`;
+      error = `Missing or invalid OpenAI API key is required for GPT-4o Vision analysis`;
+      console.error(`API validation failed: ${error}`);
+      
+      // Log environment variables status (securely)
+      console.log("Environment variables status:");
+      console.log(`- USE_GPT4_VISION: ${process.env.USE_GPT4_VISION || 'not set'}`);
+      console.log(`- OPENAI_MODEL: ${process.env.OPENAI_MODEL || 'not set'}`);
+      console.log(`- USE_OCR_EXTRACTION: ${process.env.USE_OCR_EXTRACTION || 'not set'}`);
+    } else {
+      console.log(`API validation passed. OpenAI API key is valid.`);
     }
     
     return {
@@ -1606,403 +1284,103 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       // Analyze the image with GPT-4 Vision or using OCR-based analysis
       let analysisResult: AnalysisResult;
       
-      // Check if GPT-4 Vision is enabled
-      const useGpt4Vision = process.env.USE_GPT4_VISION === 'true';
+      // Always use GPT-4o Vision regardless of env setting (forced to true)
+      console.log(`[${requestId}] Using GPT-4o for direct image analysis`);
       
-      if (useGpt4Vision) {
-        console.log(`[${requestId}] Using GPT-4o for direct image analysis`);
+      try {
+        // Create AbortController for managing timeout
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => {
+          console.warn(`[${requestId}] GPT-4 Vision timeout reached (45s), aborting`);
+          controller.abort();
+        }, 45000);
         
         try {
-          // Create AbortController for managing timeout
-          const controller = new AbortController();
-          const timeoutId = setTimeout(() => {
-            console.warn(`[${requestId}] GPT-4 Vision timeout reached (45s), aborting`);
-            controller.abort();
-          }, 45000);
+          // Run vision analysis - sending raw base64 image directly to GPT-4o
+          const visionResult = await analyzeWithGPT4Vision(imageBase64, healthGoal, requestId);
           
-          try {
-            // Run vision analysis - sending raw base64 image directly to GPT-4o
-            const visionResult = await analyzeWithGPT4Vision(imageBase64, healthGoal, requestId);
-            
-            // Clear timeout
-            clearTimeout(timeoutId);
-            
-            // Convert to standard format
-            analysisResult = convertVisionResultToAnalysisResult(visionResult, requestId, healthGoal);
-            
-            console.log(`[${requestId}] GPT-4 Vision analysis successful`);
-            
-            // Clear the timeout since we're returning early
-            if (globalTimeoutId) clearTimeout(globalTimeoutId);
-            
-            // Prepare the final response
-            const elapsedTime = Date.now() - startTime;
-            console.log(`[analyzeImage] Completed GPT-4 Vision analysis in ${elapsedTime}ms`);
-            
-            // Cache the result for future requests
-            cache.set(cacheKey, analysisResult);
-            
-            // Create the final response
-            const response: AnalysisResponse = {
-              success: true,
-              fallback: false,
-              requestId,
-              message: "Analysis completed successfully with GPT-4o",
-              result: analysisResult,
-              elapsedTime,
-              error: null,
-              imageUrl: null,
-              diagnostics: {
-                visionConfidence: visionResult.confidence,
-                modelUsed: "gpt-4o",
-                processingTimeMs: elapsedTime
-              }
-            };
-            
-            return NextResponse.json(response);
-          } catch (visionError: any) {
-            // Clear timeout
-            clearTimeout(timeoutId);
-            
-            // Create an error response if GPT-4o analysis fails
-            console.error(`[${requestId}] GPT-4o Vision analysis failed:`, visionError.message);
-            
-            // Return a clear error response without falling back to OCR
-            const errorResponse: AnalysisResponse = {
-              success: false,
-              fallback: true,
-              requestId,
-              message: "Image analysis failed. Please upload a clearer image.",
-              result: createUniversalErrorFallback("vision_analysis_error"),
-              elapsedTime: Date.now() - startTime,
-              error: visionError.message,
-              imageUrl: null,
-              diagnostics: {
-                error: visionError.message,
-                errorType: "gpt4o_vision_error"
-              }
-            };
-            
-            return NextResponse.json(errorResponse);
-          }
-        } catch (visionSetupError: any) {
-          console.error(`[${requestId}] Error setting up GPT-4 Vision analysis:`, visionSetupError.message);
-          
-          // Return a clear error response without falling back to OCR
-          const setupErrorResponse: AnalysisResponse = {
-            success: false,
-            fallback: true,
-            requestId,
-            message: "Failed to set up image analysis. Please try again.",
-            result: createUniversalErrorFallback("vision_setup_error"),
-            elapsedTime: Date.now() - startTime,
-            error: visionSetupError.message,
-            imageUrl: null,
-            diagnostics: {
-              error: visionSetupError.message,
-              errorType: "gpt4o_setup_error"
-            }
-          };
-          
-          return NextResponse.json(setupErrorResponse);
-        }
-      } else {
-        // USE_GPT4_VISION is false, fall back to OCR-based analysis
-        console.log(`[${requestId}] GPT-4 Vision is disabled, using OCR-based analysis`);
-        
-        // Run food detection with error handling and timeout
-        console.log(`[${requestId}] Running food detection on image...`);
-        let foodDetectionResult;
-        let labelDetectionMetadata = {
-          usedLabelDetection: false,
-          detectedLabel: null as string | null,
-          labelConfidence: 0,
-          labelMatchCandidates: [] as Array<{label: string, score: number}>
-        };
-        
-        try {
-          // Add explicit timeout for food detection to avoid hanging requests
-          const controller = new AbortController();
-          const timeoutId = setTimeout(() => {
-            console.warn(`[${requestId}] Food detection timeout reached (10s), aborting`);
-            controller.abort();
-          }, 10000);
-
-          // Run food detection with the specified timeout
-          foodDetectionResult = await Promise.race([
-            runFoodDetection(imageBase64, requestId),
-            new Promise<never>((_, reject) => 
-              setTimeout(() => reject(new Error('FOOD_DETECTION_TIMEOUT')), 10000)
-            )
-          ]);
+          // Clear timeout
           clearTimeout(timeoutId);
-        } catch (detectionError: any) {
-          // Handle detection timeout or other errors
-          console.error(`[${requestId}] Food detection error:`, detectionError.message);
-          foodDetectionResult = {
-            success: false,
-            text: "",
-            confidence: 0,
-            foodLabels: [],
-            topFoodLabel: null,
-            detectionMethod: 'fallback' as 'fallback',
-            processingTimeMs: 0,
-            error: detectionError.message
-          };
-        }
-        
-        // Extract information from food detection result
-        let extractedText = foodDetectionResult.text || "";
-        const detectedFoodLabels = foodDetectionResult.foodLabels || [];
-        const topFoodLabel = foodDetectionResult.topFoodLabel;
-        const detectionMethod = foodDetectionResult.detectionMethod;
-        
-        // Set metadata for the response
-        labelDetectionMetadata = {
-          usedLabelDetection: detectionMethod === 'label',
-          detectedLabel: topFoodLabel?.label || null,
-          labelConfidence: topFoodLabel?.score || 0,
-          labelMatchCandidates: detectedFoodLabels
-        };
-        
-        // Debug logs for food detection output
-        console.log(`[${requestId}] Food detection complete: method=${detectionMethod}, confidence=${foodDetectionResult.confidence}`);
-        if (detectionMethod === 'label') {
-          console.log(`[${requestId}] Using high-confidence label: ${topFoodLabel?.label} (${(topFoodLabel?.score || 0) * 100}%)`);
-        } else {
-          console.log(`[${requestId}] Extracted text (${extractedText.length} chars): ${extractedText.substring(0, 100)}`);
-        }
-        
-        // Process the detected food information
-        let nutritionData: ExtendedNutritionData;
-        let analysis: any = { 
-          success: false, 
-          feedback: ["Unable to analyze this image."], 
-          suggestions: ["Try uploading a photo of food."] 
-        };
-        
-        if (extractedText.length > 0 && foodDetectionResult.success) {
-          // Special handling for high-confidence labels detected by Vision API
-          if (detectionMethod === 'label' && topFoodLabel && topFoodLabel.score > 0.8) {
-            console.log(`[${requestId}] Using direct label analysis for detected food: ${topFoodLabel.label}`);
-            
-            // Call Nutritionix directly with the detected food label
-            const nutritionixData = await getNutritionData(topFoodLabel.label, requestId);
-            
-            if (nutritionixData.success && nutritionixData.data) {
-              // Add meta debug info to track label detection data
-              nutritionData = {
-                ...nutritionixData.data,
-                source: 'nutritionix',
-                _meta: {
-                  ocrText: extractedText,
-                  foodTerms: [topFoodLabel.label],
-                  foodConfidence: topFoodLabel.score,
-                  debugTrace: `Used direct label detection: ${topFoodLabel.label} (confidence: ${(topFoodLabel.score * 100).toFixed(1)}%)`
-                }
-              };
-            } else {
-              console.warn(`[${requestId}] Label-based Nutritionix lookup failed for "${topFoodLabel.label}". Using GPT fallback`);
-              
-              // Fall back to GPT using the detected label
-              const gptFallback = await callGptNutritionFallback(topFoodLabel.label, requestId);
-              
-              // Add meta debug info
-              nutritionData = {
-                ...gptFallback,
-                source: 'gpt_label_fallback',
-                _meta: {
-                  ocrText: extractedText,
-                  foodTerms: [topFoodLabel.label],
-                  foodConfidence: topFoodLabel.score,
-                  debugTrace: `Used GPT fallback after label-based Nutritionix failure for "${topFoodLabel.label}"`
-                }
-              };
-              
-              // Validate GPT fallback data
-              nutritionData = validateNutritionData(nutritionData, requestId);
-            }
-          }
-          // Regular OCR-based text analysis
-          else {
-            // Get nutrition data from the extracted text
-            nutritionData = await fetchNutrition(extractedText, requestId);
-          }
           
-          // Check if no food was detected in the OCR text
-          if (nutritionData.noFoodDetected) {
-            console.warn(`[${requestId}] No food detected in OCR text, returning no-food response`);
-            
-            // Create a special no-food response that the frontend can handle
-            const noFoodResult: AnalysisResult = {
-              description: "No food detected in this image",
-              nutrients: [
-                { name: 'Calories', value: 0, unit: 'kcal', isHighlight: true },
-                { name: 'Protein', value: 0, unit: 'g', isHighlight: true },
-                { name: 'Carbohydrates', value: 0, unit: 'g', isHighlight: true },
-                { name: 'Fat', value: 0, unit: 'g', isHighlight: true }
-              ],
-              feedback: ["We couldn't identify any food in this image."],
-              suggestions: ["Try uploading a clearer photo of food."],
-              detailedIngredients: [],
-              goalScore: { overall: 0, specific: {} },
-              modelInfo: {
-                model: "ocr",
-                usedFallback: false,
-                ocrExtracted: true
-              },
-              _meta: nutritionData._meta || {
-                ocrText: extractedText,
-                debugTrace: "No food detected in OCR text"
-              },
-              no_result: true // Special flag to indicate no valid result
-            };
-            
-            // Clear the timeout since we're returning early
-            if (globalTimeoutId) clearTimeout(globalTimeoutId);
-            
-            // Create the no-food response
-            const noFoodResponse: AnalysisResponse = {
-              success: true, // Still successful from API perspective
-              fallback: true,
-              requestId,
-              message: "No food detected in the image",
-              result: noFoodResult,
-              elapsedTime: Date.now() - startTime,
-              error: null,
-              imageUrl: null,
-              diagnostics: {
-                ocrConfidence: foodDetectionResult.confidence,
-                ocrText: extractedText,
-                textLength: extractedText.length,
-                processingTimeMs: Date.now() - startTime,
-                noFoodDetected: true
-              }
-            };
-            
-            return NextResponse.json(noFoodResponse);
-          }
+          // Convert to standard format
+          analysisResult = convertVisionResultToAnalysisResult(visionResult, requestId, healthGoal);
           
-          try {
-            // Analyze the extracted text to get feedback and suggestions
-            analysis = await createNutrientAnalysis(
-              nutritionData.nutrients,
-              [healthGoal],
-              requestId
-            );
-          } catch (analysisError: any) {
-            console.error(`[${requestId}] Error analyzing extracted text:`, analysisError.message);
-            // Provide fallback analysis
-            analysis = {
-              success: false,
-              feedback: ["Unable to analyze the text extracted from this image."],
-              suggestions: ["Try a clearer photo with better lighting."],
-              goalScore: { overall: 0, specific: {} }
-            };
-          }
+          console.log(`[${requestId}] GPT-4 Vision analysis successful`);
           
-          // Get a formatted goal name for display
-          const formattedGoalName = formatGoalName(healthGoal);
-          
-          // Create the result
-          analysisResult = {
-            description: nutritionData.source === 'nutritionix' 
-              ? `Analysis of ${topFoodLabel?.label || 'meal'} for ${formattedGoalName}` 
-              : `Analysis of meal for ${formattedGoalName}`,
-            nutrients: nutritionData.nutrients,
-            feedback: analysis.feedback || ["Unable to generate feedback."],
-            suggestions: analysis.suggestions || ["Try uploading a clearer photo of your food."],
-            detailedIngredients: [],  // Will be populated below if available
-            goalScore: analysis.goalScore || { overall: 5, specific: {} },
-            goalName: formattedGoalName,
-            modelInfo: {
-              model: 'nutrition-api',
-              usedFallback: nutritionData.source !== 'nutritionix',
-              ocrExtracted: detectionMethod === 'ocr',
-              usedLabelDetection: detectionMethod === 'label',
-              detectedLabel: labelDetectionMetadata.detectedLabel,
-              labelConfidence: labelDetectionMetadata.labelConfidence
-            },
-            source: nutritionData.source,
-            _meta: {
-              ...nutritionData._meta,
-              usedLabelDetection: labelDetectionMetadata.usedLabelDetection,
-              detectedLabel: labelDetectionMetadata.detectedLabel,
-              labelConfidence: labelDetectionMetadata.labelConfidence,
-              ocrConfidence: foodDetectionResult.confidence
-            }
-          };
-          
-          // Normalize the analyzed result to ensure all required fields
-          analysisResult = ensureValidResponseStructure(analysisResult);
-          
-          // Cache the result
-          cache.set(cacheKey, analysisResult);
-          
-          // Clear the global timeout
+          // Clear the timeout since we're returning early
           if (globalTimeoutId) clearTimeout(globalTimeoutId);
           
-          // Create the response
+          // Prepare the final response
+          const elapsedTime = Date.now() - startTime;
+          console.log(`[analyzeImage] Completed GPT-4 Vision analysis in ${elapsedTime}ms`);
+          
+          // Cache the result for future requests
+          cache.set(cacheKey, analysisResult);
+          
+          // Create the final response
           const response: AnalysisResponse = {
             success: true,
-            fallback: nutritionData.source !== 'nutritionix',
+            fallback: false,
             requestId,
-            message: "Analysis completed successfully",
+            message: "Analysis completed successfully with GPT-4o",
             result: analysisResult,
-            elapsedTime: Date.now() - startTime,
+            elapsedTime,
             error: null,
             imageUrl: null,
             diagnostics: {
-              ocrConfidence: foodDetectionResult.confidence,
-              ocrText: extractedText.substring(0, 200),
-              textLength: extractedText.length,
-              processingTimeMs: Date.now() - startTime,
-              detectionMethod,
-              usedLabelDetection: labelDetectionMetadata.usedLabelDetection,
-              detectedLabel: labelDetectionMetadata.detectedLabel, 
-              labelConfidence: labelDetectionMetadata.labelConfidence
+              visionConfidence: visionResult.confidence,
+              modelUsed: "gpt-4o",
+              processingTimeMs: elapsedTime
             }
           };
           
           return NextResponse.json(response);
-        } else {
-          // Handle the case where no text was extracted or food detection failed
-          console.warn(`[${requestId}] Food detection failed or no text extracted`);
+        } catch (visionError: any) {
+          // Clear timeout
+          clearTimeout(timeoutId);
           
-          // Create a fallback response
-          analysisResult = createUniversalFallbackResult("ocr_failed", {
-            modelInfo: {
-              model: 'ocr-fallback',
-              usedFallback: true,
-              ocrExtracted: false
-            },
-            _meta: {
-              ocrText: extractedText,
-              ocrConfidence: foodDetectionResult.confidence,
-              debugTrace: 'OCR extraction failed or returned empty text'
-            }
-          });
+          // Create an error response if GPT-4o analysis fails
+          console.error(`[${requestId}] GPT-4o Vision analysis failed:`, visionError.message);
           
-          // Create the response
-          const fallbackResponse: AnalysisResponse = {
+          // Return a clear error response without falling back to OCR
+          const errorResponse: AnalysisResponse = {
             success: false,
             fallback: true,
             requestId,
-            message: "Could not extract text from image",
-            result: analysisResult,
+            message: "Image analysis failed. Please upload a clearer image.",
+            result: createUniversalErrorFallback("vision_analysis_error"),
             elapsedTime: Date.now() - startTime,
-            error: "OCR extraction failed",
+            error: visionError.message,
             imageUrl: null,
             diagnostics: {
-              ocrConfidence: foodDetectionResult.confidence,
-              error: foodDetectionResult.error || "No text extracted from image",
-              processingTimeMs: Date.now() - startTime
+              error: visionError.message,
+              errorType: "gpt4o_vision_error"
             }
           };
           
-          return NextResponse.json(fallbackResponse);
+          return NextResponse.json(errorResponse);
         }
-      } // End of OCR-based analysis path
+      } catch (visionSetupError: any) {
+        console.error(`[${requestId}] Error setting up GPT-4 Vision analysis:`, visionSetupError.message);
+        
+        // Return a clear error response without falling back to OCR
+        const setupErrorResponse: AnalysisResponse = {
+          success: false,
+          fallback: true,
+          requestId,
+          message: "Failed to set up image analysis. Please try again.",
+          result: createUniversalErrorFallback("vision_setup_error"),
+          elapsedTime: Date.now() - startTime,
+          error: visionSetupError.message,
+          imageUrl: null,
+          diagnostics: {
+            error: visionSetupError.message,
+            errorType: "gpt4o_setup_error"
+          }
+        };
+        
+        return NextResponse.json(setupErrorResponse);
+      }
     } catch (error: any) {
       console.error(`[${requestId}] Processing error:`, error);
       
@@ -2201,12 +1579,13 @@ function ensureValidResponseStructure(result: any): AnalysisResult {
 function ensureCriticalFields(result: any): any {
   if (!result) {
     console.error('CRITICAL: Result is null or undefined before save');
-    return createUniversalFallbackResult("ensure_critical_null");
+    return createUniversalErrorFallback("ensure_critical_null");
   }
   
   // Use our dedicated analysis validator
   if (!isValidAnalysis(result)) {
     console.error('CRITICAL: Analysis validation failed before save, using universal fallback but preserving partial data');
+    // Use createUniversalFallbackResult which accepts partial data
     return createUniversalFallbackResult("invalid_analysis", result);
   }
   
@@ -2220,6 +1599,7 @@ function ensureCriticalFields(result: any): any {
   
   if (!hasNutrients && !hasDescription) {
     console.error('CRITICAL: Normalized result still missing both description and nutrients, using guaranteed fallback with partial data');
+    // Use createUniversalFallbackResult which accepts partial data
     return createUniversalFallbackResult("post_normalization_invalid", normalized);
   }
   

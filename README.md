@@ -211,8 +211,24 @@ The application includes several endpoints for testing and debugging:
 - `/test-upload` - A simple page for testing image uploads and verifying base64 conversion
 - `/api/debug-image` - API endpoint that processes image uploads and returns file info and base64 preview
 - `/api/api-test` - API endpoint that verifies OpenAI and Nutritionix API connections
+- `/api/test-vision` - API endpoint that tests the GPT-4 Vision integration with a simple test image
 
 For image upload issues, check the server logs for detailed error messages related to file processing and API responses.
+
+### Validating GPT-4 Vision Integration
+
+To verify that the GPT-4 Vision integration is working correctly in a deployed environment, use the provided script:
+
+```bash
+node scripts/verify-deployed-vision.js [deployment-url]
+```
+
+This script calls the `/api/test-vision` endpoint on your deployment and validates the response. It will display:
+- Request details (ID, processing time)
+- Analysis results (description, nutrients, detected foods)
+- Label detection information (if available)
+
+If no deployment URL is provided, the script defaults to `https://snap2health.vercel.app`.
 
 ### Troubleshooting Image Upload
 
