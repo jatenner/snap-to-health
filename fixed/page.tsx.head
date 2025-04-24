@@ -1,0 +1,20 @@
+// *** ENHANCED MEAL-ANALYSIS PAGE WITH HEALTH IMPACT PANEL ***
+'use client';
+
+import React, { useState, useEffect } from 'react';
+import { useRouter } from 'next/navigation';
+import Image from 'next/image';
+import Link from 'next/link';
+import { useAuth } from '@/lib/authContext';
+import { trySaveMeal } from '@/lib/mealUtils';
+import { isValidAnalysis, createFallbackAnalysis, normalizeAnalysisResult } from '@/lib/utils/analysisValidator';
+import ErrorCard from '@/components/ErrorCard';
+import FallbackAlert from '@/components/FallbackAlert';
+import { generateNutritionInsights } from '@/utils/formatNutrientInsights';
+import NutrientInsightsSection from '@/components/NutrientInsightsSection';
+import PrecisionNutrientPanel from '@/components/PrecisionNutrientPanel';
+import HealthImpactPanel from '@/components/HealthImpactPanel';
+import EnhancedHealthImpact from '@/components/EnhancedHealthImpact';
+import { analyzeMealWithPrecision } from '@/utils/precisionNutrients';
+import { v4 as uuidv4 } from 'uuid';
+import { 

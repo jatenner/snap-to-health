@@ -13,15 +13,20 @@
     "verify-firebase": "node verify-firebase.js",
     "setup-firebase": "node setup-firebase-admin-direct.js",
     "setup-openai": "node setup-openai.js",
-    "backup-env": "node backup-env.js"
+    "backup-env": "node backup-env.js",
+    "verify-gpt4o": "node src/scripts/verify-vision-ocr.js",
+    "update-vercel-env": "node src/scripts/update-vercel-env.js",
+    "deploy": "npm run update-vercel-env && vercel --prod"
   },
   "dependencies": {
     "@google-cloud/vision": "^5.1.0",
     "@tailwindcss/forms": "^0.5.10",
+    "clsx": "^2.1.1",
     "dotenv": "^16.5.0",
     "encoding": "^0.1.13",
     "firebase": "^10.7.1",
     "firebase-admin": "^13.2.0",
+    "lucide-react": "^0.503.0",
     "next": "^13.4.7",
     "node-cache": "^5.1.2",
     "openai": "^4.20.0",
@@ -29,6 +34,7 @@
     "react-dom": "^18.2.0",
     "react-hot-toast": "^2.5.2",
     "react-icons": "^5.5.0",
+    "tailwind-merge": "^3.2.0",
     "tesseract.js": "^6.0.1",
     "uuid": "^9.0.0"
   },
